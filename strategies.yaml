@@ -1,0 +1,84 @@
+# =============================================================================
+# Strategy definitions — THE place you edit to change trading logic.
+# The engine code never hardcodes a strategy; it only reads this file.
+#
+# Validate after every edit with:   python strategy_schema.py
+# A malformed file fails loudly with the exact location of the problem.
+#
+# Shape reference
+# ---------------
+# Every condition compares a LEFT operand against either a fixed `value`
+# or another operand under `compare_to` (exactly one of the two).
+#
+#   left operand keys:
+#     indicator : one of  close open high low volume
+#                          ema sma rsi macd supertrend vwap bbands atr
+#     params    : indicator settings, e.g. {period: 14}
+#     source    : (ema/sma only) which series to average —
+#                 close open high low volume. Default: close.
+#                 "volume SMA" = {indicator: sma, source: volume, ...}
+#     output    : (multi-output indicators only)
+#                 macd:       line | signal | histogram   (default line)
+#                 bbands:     upper | middle | lower      (default middle)
+#                 supertrend: line | direction            (default line)
+#
+#   operator: >  <  >=  <=  crosses_above  crosses_below
+#             ("crosses" = was on the other side on the PREVIOUS closed
+#              candle and is on this side on the CURRENT closed candle —
+#              never evaluated on a forming candle)
+#
+# Conditions are grouped with `all:` (AND) or `any:` (OR); groups may nest.
+# =============================================================================
+
+version: 1
+
+strategies:
+  - name: TF-EMA-RSI-15m-v1
+    enabled: true
+    position_type: long          # long | short (short = simulated short-sell)
+    timeframe: 15m               # 15m | 30m | 60m | day  (nothing faster)
+    instruments:                 # "EXCHANGE:TRADINGSYMBOL" as listed on Kite
+      - NSE:RELIANCE
+      - NSE:HDFCBANK
+      - NSE:ICICIBANK
+      - NSE:INFY
+      - NSE:TCS
+
+    # ENTRY: EMA(9) crosses above EMA(21)  AND  RSI(14) > 50
+    #        AND volume > SMA(volume, 20)
+    entry:
+      all:
+        - indicator: ema
+          params: { period: 9 }
+          operator: crosses_above
+          compare_to: { indicator: ema, params: { period: 21 } }
+        - indicator: rsi
+          params: { period: 14 }
+          operator: ">"
+          value: 50
+        - indicator: volume
+          operator: ">"
+          compare_to: { indicator: sma, source: volume, params: { period: 20 } }
+
+    # EXIT: EMA(9) crosses below EMA(21)  OR  RSI(14) < 40
+    # (Stop-loss and target below are checked independently of these rules.)
+    exit:
+      any:
+        - indicator: ema
+          params: { period: 9 }
+          operator: crosses_below
+          compare_to: { indicator: ema, params: { period: 21 } }
+        - indicator: rsi
+          params: { period: 14 }
+          operator: "<"
+          value: 40
+
+    risk:
+      stop_loss_pct: 0.7         # exit if price moves 0.7% against entry
+      target_pct: 1.5            # exit if price moves 1.5% in favour
+
+    sizing:
+      type: fixed_quantity       # only sizing mode in v1; more can be added
+      quantity: 1
+
+    max_cycles_per_day: 2        # max complete entry+exit round-trips per day

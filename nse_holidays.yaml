@@ -1,0 +1,39 @@
+# =============================================================================
+# NSE trading holidays — UPDATE THIS FILE ONCE A YEAR.
+#
+# Source of truth: NSE's official trading-holiday circular, published each
+# December for the following year:
+#   https://www.nseindia.com/resources/exchange-communication-holidays
+#
+# !! The 2026 dates below are a PLACEHOLDER list and MUST be verified against
+# !! the official circular. Festival dates (Holi, Diwali, Eid, ...) move with
+# !! the lunar calendar and exchange decisions.
+#
+# Either direction of error fails safe:
+#   * a date wrongly listed  -> the engine skips that day (missed evaluation,
+#     no bad trades),
+#   * a real holiday missing -> the engine runs, Kite returns no fresh
+#     candles, no signals fire.
+#
+# Format: ISO dates (YYYY-MM-DD) grouped by year. Weekends are handled in
+# code and never need listing here.
+# =============================================================================
+
+holidays:
+  2026:
+    - 2026-01-26   # Republic Day                     (fixed - reliable)
+    - 2026-02-15   # Mahashivratri                    (VERIFY - lunar)
+    - 2026-03-04   # Holi                             (VERIFY - lunar)
+    - 2026-03-26   # Ram Navami                       (VERIFY - lunar)
+    - 2026-03-31   # Mahavir Jayanti / Id-ul-Fitr     (VERIFY - lunar)
+    - 2026-04-03   # Good Friday                      (VERIFY)
+    - 2026-04-14   # Dr. Ambedkar Jayanti             (fixed - reliable)
+    - 2026-05-01   # Maharashtra Day                  (fixed - reliable)
+    - 2026-08-15   # Independence Day                 (fixed - reliable)
+    - 2026-09-14   # Ganesh Chaturthi                 (VERIFY - lunar)
+    - 2026-10-02   # Mahatma Gandhi Jayanti           (fixed - reliable)
+    - 2026-10-20   # Dussehra                         (VERIFY - lunar)
+    - 2026-11-09   # Diwali (Laxmi Pujan)             (VERIFY - lunar; often a
+                   #   muhurat session exists, which this system ignores)
+    - 2026-11-24   # Guru Nanak Jayanti               (VERIFY - lunar)
+    - 2026-12-25   # Christmas                        (fixed - reliable)

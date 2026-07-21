@@ -1,0 +1,24 @@
+# --- Secrets: NEVER commit these -------------------------------------------
+.env
+.streamlit/secrets.toml
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Local artifacts --------------------------------------------------------
+backtest_results/
+*.csv
+!sample_data/*.csv
+
+# --- OS / editor noise ------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

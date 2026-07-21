@@ -1,0 +1,59 @@
+# =============================================================================
+# Paper engine — runs every 15 minutes during NSE market hours.
+#
+# GitHub cron is UTC. IST = UTC + 5:30, so the 09:15-15:30 IST session maps
+# to 03:45-10:00 UTC. Runs are scheduled at :02/:17/:32/:47 — roughly two
+# minutes AFTER each candle closes — because:
+#   * GitHub cron at minute 0 is heavily loaded and often delayed,
+#   * it gives Kite time to finalize the just-closed candle.
+#
+# The engine has its own market-hours/holiday gate and is idempotent, so a
+# late, duplicate, or out-of-hours run is harmless (it logs a skip, exit 0).
+#
+# NOTE: GitHub disables cron schedules after ~60 days without repo activity.
+# Any push (e.g. a strategies.yaml tweak) re-enables them. The README's
+# troubleshooting section covers this.
+# =============================================================================
+
+name: paper-engine
+
+on:
+  schedule:
+    # 09:32-15:17 IST, every 15 minutes, Mon-Fri.
+    - cron: "2,17,32,47 4-9 * * 1-5"
+    # 15:32 IST: the final run, evaluating the 15:15-15:30 candle.
+    - cron: "2 10 * * 1-5"
+  workflow_dispatch: {}   # manual smoke-testing from the Actions tab
+
+# One engine run at a time. A run that fires while another is in progress
+# QUEUES (cancel-in-progress: false) instead of killing a run mid-write;
+# idempotency then makes the queued duplicate a no-op.
+concurrency:
+  group: paper-engine
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10   # a healthy run takes well under 2 minutes
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run paper engine
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python paper_engine.py

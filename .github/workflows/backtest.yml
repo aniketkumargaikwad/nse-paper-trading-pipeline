@@ -1,0 +1,72 @@
+# =============================================================================
+# Batch backtester — MANUAL trigger only (Actions tab -> backtest -> Run
+# workflow). Writes per-combination metrics to Supabase and attaches the CSV
+# to the workflow run as a downloadable artifact.
+#
+# Requires a valid daily Kite token in Supabase (run login.py first that
+# morning) because historical data needs an authenticated session.
+# =============================================================================
+
+name: backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: "Years of history to backtest"
+        required: false
+        default: "2"
+      strategy:
+        description: "Run only this strategy (blank = all enabled)"
+        required: false
+        default: ""
+
+# Never two backtests at once (duplicate batches, doubled API load).
+concurrency:
+  group: backtest
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run backtester
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Inputs go through env vars (not inline ${{ }} in the script) so
+          # nothing user-typed is ever interpolated into shell syntax.
+          YEARS: ${{ inputs.years }}
+          STRATEGY: ${{ inputs.strategy }}
+        run: |
+          ARGS="--years ${YEARS:-2}"
+          if [ -n "${STRATEGY}" ]; then
+            ARGS="${ARGS} --strategy ${STRATEGY}"
+          fi
+          echo "Running: python backtest.py ${ARGS}"
+          python backtest.py ${ARGS}
+
+      - name: Upload results CSV
+        if: always()   # attach whatever was produced, even on partial failure
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-results
+          path: backtest_results/*.csv
+          if-no-files-found: warn
+          retention-days: 30

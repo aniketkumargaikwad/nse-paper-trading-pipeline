@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# Pinned dependencies for the paper-trading research pipeline.
+#
+# Versions are pinned exactly so that GitHub Actions, Streamlit Cloud, and
+# your local machine all run identical code. If you upgrade anything, upgrade
+# deliberately (one package at a time) and re-run the test suite.
+#
+# NOTE: These pins were chosen as the latest stable releases known at build
+# time (early 2026). Verify against PyPI if an install fails.
+# ---------------------------------------------------------------------------
+
+# Kite Connect (Zerodha) official client — market data only in this project.
+kiteconnect==5.0.1
+
+# Supabase Python client — the only persistent state store.
+supabase==2.15.0
+
+# Data wrangling for candles and indicators.
+pandas==2.2.3
+numpy==1.26.4          # kept <2.0 for maximum wheel compatibility on free tiers
+
+# Strategy config parsing.
+PyYAML==6.0.2
+
+# Local .env loading (GitHub Actions injects real env vars instead).
+python-dotenv==1.0.1
+
+# Timezone database — REQUIRED on Windows for zoneinfo("Asia/Kolkata") to work.
+# (Linux/macOS have a system tz database; Windows does not.)
+tzdata==2025.2
+
+# Dashboard (Streamlit Community Cloud reads this same root requirements.txt).
+# Trade-off: including it here slows CI installs by ~30s but keeps ONE file
+# for a beginner to manage instead of two.
+streamlit==1.41.1
+
+# Testing.
+pytest==8.3.4
