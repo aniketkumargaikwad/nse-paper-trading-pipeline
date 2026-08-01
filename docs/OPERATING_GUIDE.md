@@ -171,6 +171,26 @@ gh workflow enable paper-engine
    start with a service key on purpose.
 4. The page loads with friendly "no data yet" messages. That is success.
 
+### 2.8 (Optional) Preview the dashboard with sample data
+
+Want to see the dashboard populated *before* finishing the Kite setup and
+waiting for real trades? Seed some clearly-marked fake data. This needs only
+your two **Supabase** values (Kite keys not required).
+
+```powershell
+.\.venv\Scripts\python.exe seed_demo.py --dry-run   # optional: preview, writes nothing
+.\.venv\Scripts\python.exe seed_demo.py             # insert sample data
+```
+Refresh the dashboard — you'll see a leaderboard, equity/drawdown charts, open
+positions, today's trades, and a green engine-health strip. Everything it
+inserts is named `DEMO-...`, so it never mixes with real data. When you're done:
+
+```powershell
+.\.venv\Scripts\python.exe seed_demo.py --clear     # removes all DEMO- data
+```
+> This is fake data for UI preview only — it is **not** a backtest and says
+> nothing about any strategy's performance.
+
 **You are now fully set up.** Nothing more is automatic-blocking; the only daily
 task is the morning login (Part 3).
 
@@ -412,6 +432,8 @@ If the kill rules pass, change `enabled: false` → `true`, then commit and push
 | Backtest everything (2 yrs) | `.\.venv\Scripts\python.exe backtest.py` |
 | Backtest one strategy | `.\.venv\Scripts\python.exe backtest.py --strategy <name>` |
 | Run one paper-engine tick manually | `.\.venv\Scripts\python.exe paper_engine.py` |
+| Fill the dashboard with sample data | `.\.venv\Scripts\python.exe seed_demo.py` |
+| Remove the sample data | `.\.venv\Scripts\python.exe seed_demo.py --clear` |
 | See the dashboard locally | `.\.venv\Scripts\streamlit.exe run dashboard.py` |
 | Turn the auto-schedule on/off | `gh workflow enable paper-engine` / `gh workflow disable paper-engine` |
 | See recent cloud runs | `gh run list --limit 10` |
