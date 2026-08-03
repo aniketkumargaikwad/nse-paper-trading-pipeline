@@ -19,15 +19,17 @@ project before. Every step says **where to be** and **exactly what to type**.
 ```
   YOUR LAPTOP (once each morning)                 THE CLOUD (runs by itself)
   ┌──────────────────────────────┐    ┌──────────────────────────────────────┐
-  │ python login.py              │    │ GitHub Actions – paper-engine         │
-  │   → Zerodha 2FA in browser   │    │   every 15 min during market hours    │
-  │   → today's token ───────────┼──► │     reads token + strategies + open   │
-  └──────────────────────────────┘    │     positions, fetches candles,       │
-                                       │     writes trades + an audit row      │
-        Supabase (Postgres)  ◄─────────┤                                       │
-        = the ONLY memory              │ GitHub Actions – backtest (manual)    │
-              ▲                        │     writes results table + CSV        │
-              │ read-only anon key     └──────────────────────────────────────┘
+  │ Yahoo Finance (FREE)         │    │ GitHub Actions – paper-engine         │
+  │   no account, no API key,    │◄───┤   every 15 min during market hours    │
+  │   no daily login             │    │     reads strategies + open positions,│
+  └──────────────────────────────┘    │     fetches candles, evaluates rules, │
+   (swap to paid Kite any time        │     writes trades + an audit row      │
+    with DATA_PROVIDER=kite)          │                                       │
+                                       │ GitHub Actions – backtest (manual)    │
+        Supabase (Postgres)  ◄─────────┤     writes results table + CSV        │
+        = the ONLY memory              └──────────────────────────────────────┘
+              ▲
+              │ read-only anon key
   ┌───────────┴──────────────┐
   │ Streamlit dashboard      │   (always-on web page, read-only)
   └──────────────────────────┘
@@ -36,9 +38,10 @@ project before. Every step says **where to be** and **exactly what to type**.
 Four facts that explain everything else:
 1. **Supabase is the only place state lives.** Every cloud run starts blank and
    rebuilds itself from Supabase. If Supabase is empty, the dashboard is empty.
-2. **The engine needs two things to work:** a Supabase connection **and** a
-   fresh Kite token for *today* (Zerodha forces a new login every day — this is
-   a SEBI rule, not a bug).
+2. **The engine needs one thing to work:** a Supabase connection. Market data
+   comes from a **free** source (Yahoo Finance) that needs no account, no API
+   key, and no daily login. *(Only if you later switch to paid Kite Connect
+   does a daily login appear — see §9.)*
 3. **The dashboard needs one thing:** a read-only Supabase key. It shows nothing
    until an engine has written some rows.
 4. **You edit strategies in `strategies.yaml` only.** You never edit Python to
@@ -92,19 +95,34 @@ notepad .env
 Leave `notepad` open — you will paste four values into it during 2.3 and 2.4.
 The `.env` file is **git-ignored**; it never leaves your laptop.
 
-### 2.3 Kite Connect app (browser → paste into `.env`)
+### 2.3 Market data — nothing to do (it's free by default)
 
-1. Go to **https://developers.kite.trade** → sign in with Zerodha → **Create new app** → type **Connect**.
-2. **Redirect URL:** enter `http://127.0.0.1` (the page it opens after login may
-   show an error — that is expected and fine).
-3. Copy the app's **API key** and **API secret** into `.env`:
-   ```
-   KITE_API_KEY=xxxxxxxxxxxxxxxx
-   KITE_API_SECRET=xxxxxxxxxxxxxxxx
-   ```
-> Note: personal Kite Connect API access is free, but the **historical-data
-> feed can be a paid add-on**. This project uses historical candles, so enable
-> it if prompted. Check the current Kite pricing page.
+**Skip this step.** The system ships with `DATA_PROVIDER=yfinance`, a **free**
+Yahoo Finance feed that needs **no account, no API key, and no daily login**.
+
+<details>
+<summary>Why not Zerodha Kite Connect? (click to expand)</summary>
+
+Kite Connect's **free** tiers explicitly exclude the historical-chart-data API
+this project runs on:
+
+| Kite tier | Cost | Historical data? |
+|---|---|---|
+| Connect | **₹500 / 30 days** | ✅ yes |
+| Personal | free | ❌ **no historical data, no live quotes** |
+| Publisher | free | ❌ no API access at all |
+
+So a paid plan is the only Kite option that works here. You can switch to it
+any time (see §9) — the code supports both.
+
+**What the free feed costs you instead:**
+- 15m/30m history reaches back only **~58 days** (60m: ~2 years, daily: 5+
+  years). Deep backtesting therefore belongs on the **60m or day** timeframe.
+- It's an unofficial API — it can break or throttle without notice.
+- Data quality is below a broker feed (occasional missing bars).
+- Prices are split/dividend adjusted, so they won't match the exact rupees
+  traded that day (harmless here: every rule is percentage/indicator based).
+</details>
 
 ### 2.4 Supabase database (browser → paste into `.env`)
 
@@ -137,19 +155,21 @@ failure emails).
 
 1. In a browser open the repo → **Settings** → **Secrets and variables** →
    **Actions**.
-2. Click **New repository secret** and add these **four**, one at a time, names
+2. Click **New repository secret** and add these **two**, one at a time, names
    spelled exactly, values copied from your `.env`:
 
    | Secret name | Value from `.env` |
    |---|---|
-   | `KITE_API_KEY` | your Kite API key |
-   | `KITE_API_SECRET` | your Kite API secret |
    | `SUPABASE_URL` | your Supabase project URL |
    | `SUPABASE_SERVICE_ROLE_KEY` | your Supabase service_role key |
 
-**Check:** the Actions → Secrets page lists all four names.
+   That's all — the free data provider needs no API keys. (Only if you later
+   switch to paid Kite do you add `KITE_API_KEY` / `KITE_API_SECRET`; see §9.)
+
+**Check:** the Actions → Secrets page lists both names.
 
 ### 2.6 Re-enable the scheduled engine (laptop or browser)
+
 
 The auto-schedule was **disabled** to stop the failure emails during setup.
 Turn it back on only *after* 2.5 is done:
@@ -198,26 +218,39 @@ task is the morning login (Part 3).
 
 ## 3. The daily routine (every trading day)
 
-| When | Where | Do this | Time |
-|---|---|---|---|
-| Before 09:15 IST | laptop | `.\.venv\Scripts\python.exe login.py` | ~1 min |
-| After login | laptop | `.\.venv\Scripts\python.exe login.py --check` (should print OK + your name) | 5 sec |
-| Anytime | browser | Glance at the Streamlit dashboard | — |
+**On the free provider (the default): there is none.** No morning login, no
+daily task. GitHub Actions runs the engine every 15 minutes during market hours
+by itself. Just look at the dashboard whenever you're curious.
 
-**What `login.py` does, step by step:**
-1. Opens Zerodha's login page in your browser.
+| When | Where | Do this |
+|---|---|---|
+| Anytime | browser | Glance at the Streamlit dashboard |
+| Weekly-ish | browser | Check the *Recent engine runs* panel is green |
+
+<details>
+<summary>Only if you switched to paid Kite (DATA_PROVIDER=kite)</summary>
+
+Zerodha expires API sessions daily (a SEBI rule), so you must log in each
+trading morning **before 09:15 IST**, on your laptop:
+
+```powershell
+cd "C:\Users\Aniket\Personal projects\Trading tool"
+.\.venv\Scripts\python.exe login.py
+.\.venv\Scripts\python.exe login.py --check    # should print OK + your name
+```
+
+1. It opens Zerodha's login page in your browser.
 2. You log in with your Zerodha ID + password + 2FA. *(You type these into
    Zerodha's own site — never into the script.)*
 3. Zerodha redirects; **the page may fail to load — that's normal.** Copy the
    **whole address bar** (it contains `request_token=...`).
-4. Paste it back into the terminal. Done — the day's token is stored in Supabase.
+4. Paste it back into the terminal.
 
-After that, GitHub Actions runs the engine every 15 minutes during market hours
-on its own. You do nothing else.
+If you forget, engine runs fail with an "expired/missing token" message until
+you log in. Nothing is damaged — there are no real orders.
 
-**If you forget the morning login:** the engine runs will fail with an
-"expired/missing token" message (and you may get a failure email) until you log
-in. Nothing is damaged — there are no real orders. Just run `login.py`.
+*(On the free provider, `login.py` just prints "nothing to do" and exits.)*
+</details>
 
 ---
 
@@ -329,14 +362,26 @@ always made on the **just-closed** candle — never a forming one.
 
 ### 4.4 Backtest (test on real history)
 
-A backtest needs a valid Kite token (run `login.py` first that day). Two ways:
-
 **From your laptop** (fastest for experimenting):
 ```powershell
 .\.venv\Scripts\python.exe backtest.py --years 2
 .\.venv\Scripts\python.exe backtest.py --strategy TF-EMA-RSI-15m-v1 --years 3
 .\.venv\Scripts\python.exe backtest.py --no-db      # only write a CSV, skip the database
 ```
+> `--no-db` on the free provider needs **no accounts at all** — not even
+> Supabase. It's the fastest way to try a strategy idea.
+
+**How much history you actually get (free provider):**
+
+| Timeframe | History | Good for |
+|---|---|---|
+| 15m / 30m | ~58 days | live paper trading; **weak** backtest evidence |
+| 60m | ~2 years | **serious backtesting** |
+| day | 5+ years | **serious backtesting** |
+
+If you ask for more than the provider has, the backtester prints a clear NOTE,
+runs on the shorter window anyway, and the kill rules flag the thin sample. To
+judge a rule-set properly, test it on **60m or day**.
 
 **From the cloud** (no laptop needed): repo → **Actions** → **backtest** →
 **Run workflow** → optionally fill in `years` / `strategy` → **Run**. When it
@@ -357,6 +402,29 @@ as worth running **only if all four pass**:
 
 If a strategy fails these on 2+ years of history, it will almost certainly lose
 in reality (where costs are worse). Don't enable it.
+
+#### ⚠️ The #1 trap: your target must beat the flat ₹30 cost
+
+Every simulated round-trip is charged a flat **₹30**. With `quantity: 1`, a
+1.5% target on a ₹1,400 share earns **₹21 — less than the ₹30 cost.** Such a
+strategy **cannot make money even when every trade wins.**
+
+Real numbers from the shipped demo strategy at `quantity: 1`:
+
+| Stock | Price | 1.5% target | − cost | Net on a WIN |
+|---|---|---|---|---|
+| RELIANCE | ₹1,400 | ₹21.00 | ₹30 | **−₹9.00** |
+| HDFCBANK | ₹1,000 | ₹15.00 | ₹30 | **−₹15.00** |
+| INFY | ₹1,550 | ₹23.25 | ₹30 | **−₹6.75** |
+| TCS | ₹3,100 | ₹46.50 | ₹30 | +₹16.50 |
+
+At `quantity: 10`, RELIANCE's target becomes ₹210 − ₹30 = **+₹180**. 
+
+**Rule of thumb:** make sure
+`quantity × price × target_pct/100` is comfortably larger than ₹30 — aim for at
+least 5×. Either raise `quantity` or pick a larger `target_pct`. This one line
+in `strategies.yaml` decides whether a strategy is mathematically capable of
+profit.
 
 ### 4.6 The safe promotion workflow
 
@@ -427,8 +495,8 @@ If the kill rules pass, change `enabled: false` → `true`, then commit and push
 | Confirm the code is healthy | `.\.venv\Scripts\python.exe -m pytest tests/ -q` |
 | Check Supabase is reachable | `.\.venv\Scripts\python.exe db.py` |
 | Validate strategies after editing | `.\.venv\Scripts\python.exe strategy_schema.py` |
-| Do the morning login | `.\.venv\Scripts\python.exe login.py` |
-| Check today's token is valid | `.\.venv\Scripts\python.exe login.py --check` |
+| Do the morning login (**paid Kite only**) | `.\.venv\Scripts\python.exe login.py` |
+| Check today's token (**paid Kite only**) | `.\.venv\Scripts\python.exe login.py --check` |
 | Backtest everything (2 yrs) | `.\.venv\Scripts\python.exe backtest.py` |
 | Backtest one strategy | `.\.venv\Scripts\python.exe backtest.py --strategy <name>` |
 | Run one paper-engine tick manually | `.\.venv\Scripts\python.exe paper_engine.py` |
@@ -449,9 +517,13 @@ panel (or the `run_audit` table). Every run leaves one row saying `ok`,
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| **Failure emails from GitHub Actions** | The four repository Secrets are missing/blank | Do **Step 2.5**, then `gh workflow enable paper-engine` |
+| **Failure emails from GitHub Actions** | The two repository Secrets are missing/blank | Do **Step 2.5**, then `gh workflow enable paper-engine` |
 | Log says `Missing required environment variable(s)` | Same as above | Same as above |
-| Log says `No Kite access token stored` / `token has expired` | Morning login not done, or you logged into Kite elsewhere | `.\.venv\Scripts\python.exe login.py` |
+| Log says `No Kite access token stored` / `token has expired` | (paid Kite only) morning login not done | `.\.venv\Scripts\python.exe login.py` |
+| Backtest returns 0 trades / "no candles returned" | Asked for more history than the free feed has | Normal — see §4.4; use 60m or day for deep tests |
+| Every backtest trade loses money | Flat ₹30 cost exceeds your target | See the sizing trap in §4.5 — raise `quantity` |
+| `Yahoo Finance failed ... after 4 attempts` | Free endpoint throttled or offline | Nothing — next run retries; if persistent, `pip install -U yfinance` |
+| Free provider can't fetch an F&O symbol | Yahoo has no reliable NSE derivatives feed | Use cash-market symbols, or switch to paid Kite (§9) |
 | Engine says `SKIPPED: market closed` on a trading day | Wrong date in `nse_holidays.yaml`, or genuinely closed | Check/fix that file, push |
 | Runs arrive late or one is missing | GitHub cron delay (normal, up to ~1–2 h) | Nothing — runs are idempotent, the next one catches up |
 | Scheduled runs stopped entirely | GitHub pauses cron after 60 idle days | Push any commit; re-enable in Actions if needed |
@@ -499,4 +571,34 @@ panel (or the `run_audit` table). Every run leaves one row saying `ok`,
 | `db.py` | Database connectivity self-test + all reads/writes. |
 | `tests/` | 133 offline tests (`pytest tests/`). |
 | `.github/workflows/` | The two cloud schedules. |
+| `yfinance_client.py` | The free (default) market-data provider. |
+| `kite_client.py` | The paid Kite provider (used only when `DATA_PROVIDER=kite`). |
+| `data_provider.py` | Picks between them. |
 | `docs/OPERATING_GUIDE.md` | **This file.** |
+
+---
+
+## 9. Upgrading to paid Kite Connect (only when you're ready)
+
+You never have to do this. Do it only if the free feed's limits start costing
+you more than ₹500/month is worth — mainly if you need **deep 15-minute
+history** or **F&O/derivatives** data.
+
+1. Create a **Connect**-type app at https://developers.kite.trade
+   (₹500 / 30 days — the free Personal tier has no historical data).
+   Redirect URL `http://127.0.0.1` is fine.
+2. Add to your laptop's `.env`:
+   ```
+   DATA_PROVIDER=kite
+   KITE_API_KEY=xxxxxxxx
+   KITE_API_SECRET=xxxxxxxx
+   ```
+3. In GitHub: add secrets `KITE_API_KEY` and `KITE_API_SECRET`, **and** a
+   repository *variable* (Settings → Secrets and variables → Actions →
+   **Variables** tab) named `DATA_PROVIDER` with value `kite`.
+4. Start doing the morning `login.py` (see §3) — this becomes mandatory.
+
+**No code changes.** To go back to free, remove the `DATA_PROVIDER` variable.
+
+What you gain: years of 15m history, F&O symbols, official broker-grade data,
+and live quotes. What you take on: ₹500/month and the daily login.

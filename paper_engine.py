@@ -51,6 +51,7 @@ import pandas as pd
 
 import signals
 from config import IST, TIMEFRAME_MINUTES, UTC, Settings, get_settings
+from data_provider import create_data_client, describe_provider
 from db import ClosedTrade, OpenPosition, SupabaseStore
 from kite_client import (
     KiteClientError,
@@ -387,7 +388,10 @@ def main() -> int:
             print("SKIPPED: no enabled strategies")
             return 0
 
-        client = MarketDataClient.from_stored_token(settings, store, now_ist.date())
+        # Provider is chosen by DATA_PROVIDER (free yfinance by default).
+        # On the free path this needs no keys and no morning login.
+        client = create_data_client(settings, store, now_ist.date())
+        print(f"data provider: {describe_provider(settings)}")
         summary = run_once(
             now_utc=started, settings=settings, store=store,
             client=client, strategies=enabled,
@@ -399,6 +403,7 @@ def main() -> int:
             candle_ts=summary.candle_ts,
             reason=None,
             details={
+                "provider": settings.data_provider,
                 "checked": summary.checked,
                 "entries": summary.entries,
                 "exits": summary.exits,

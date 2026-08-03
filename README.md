@@ -7,7 +7,8 @@ equity/F&O markets:
   market hours, and a batch backtester on demand.
 - **Supabase** (free Postgres) stores all state: strategies, positions, the
   trade log, and an audit trail of every run.
-- **Kite Connect** (Zerodha) supplies market data — **read-only**.
+- **Yahoo Finance** (free, via `yfinance`) supplies market data — **read-only**.
+  Swappable for paid **Kite Connect** with one config value.
 - **Streamlit Community Cloud** hosts an always-on dashboard.
 - A **one-minute morning login** on your own machine handles Kite's
   SEBI-mandated daily session, and that's the only manual step.
@@ -65,17 +66,25 @@ equity/F&O markets:
 
 ## What you need before starting
 
+Everything below is **free**. No broker account and no API keys are required.
+
 1. **Python 3.11+** installed locally ([python.org](https://www.python.org/downloads/); on Windows tick *"Add python to PATH"*).
 2. A **GitHub** account.
-3. A **Zerodha** account and a **Kite Connect developer app**
-   ([developers.kite.trade](https://developers.kite.trade)).
-   *Pricing note:* Kite Connect has been free for personal use since 2023,
-   but the **historical-data add-on may be a paid subscription** — check the
-   current pricing page. The backtester and engine both use historical
-   candles, so you need it.
-4. A **Supabase** account (free tier) — [supabase.com](https://supabase.com).
-5. A **Streamlit Community Cloud** account (free) — [streamlit.io/cloud](https://streamlit.io/cloud),
+3. A **Supabase** account (free tier) — [supabase.com](https://supabase.com).
+4. A **Streamlit Community Cloud** account (free) — [streamlit.io/cloud](https://streamlit.io/cloud),
    sign in with GitHub.
+
+**Market data** comes from Yahoo Finance via `yfinance` by default: free, no
+account, no API key, **no daily login**. Its limits are real and you should
+know them — ~58 days of 15m/30m history (60m ≈ 2 years, daily ≈ 5+ years),
+an unofficial API that can break, and no NSE derivatives. Deep backtests
+therefore belong on the 60m/day timeframes.
+
+> **Why not Zerodha Kite Connect by default?** Its free *Personal* tier
+> explicitly excludes the historical-data API this project runs on; only the
+> paid **Connect** plan (₹500/30 days) includes it. You can switch to it any
+> time with one environment variable — see the "Upgrading to paid Kite"
+> section of [docs/OPERATING_GUIDE.md](docs/OPERATING_GUIDE.md).
 
 ---
 

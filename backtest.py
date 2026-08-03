@@ -50,8 +50,9 @@ import pandas as pd
 
 import signals
 from config import IST, UTC, Settings, get_settings
+from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
-from kite_client import KiteClientError, MarketDataClient, TokenExpiredError
+from kite_client import KiteClientError, TokenExpiredError
 from strategy_schema import Strategy, load_strategies
 
 # --- Kill-rule thresholds ---------------------------------------------------
@@ -359,8 +360,25 @@ def run_backtest(
     tokens = client.resolve_instrument_tokens(all_instruments, today_ist)
 
     rows: list[dict[str, Any]] = []
+    requested_days = math.ceil(years * 365.25)
     for strategy in strategies:
         print(f"\n=== {strategy.name} ({strategy.timeframe}, {strategy.position_type}) ===")
+
+        # Warn (but still run) when the provider cannot serve the requested
+        # window — e.g. the free yfinance feed caps 15m history at ~60 days.
+        # Running anyway is deliberate: the kill rules below will flag a thin
+        # sample via min_trades, so nothing is hidden or silently trusted.
+        max_days = getattr(client, "max_history_days", lambda _tf: None)(strategy.timeframe)
+        if max_days is not None and requested_days > max_days:
+            print(
+                f"  NOTE: you asked for ~{requested_days} days but this data "
+                f"provider only serves ~{max_days} days of {strategy.timeframe} "
+                f"candles. Backtesting the shorter window instead — treat the "
+                f"result as WEAK evidence.\n"
+                f"        For deeper history, test the same rules on the 60m "
+                f"(~730 days) or day (years) timeframe."
+            )
+
         per_symbol: dict[str, tuple[ComboMetrics, pd.DataFrame]] = {}
 
         for instrument in strategy.instruments:
@@ -434,7 +452,12 @@ def main(argv: list[str] | None = None) -> int:
 
     started = datetime.now(tz=UTC)
     try:
-        settings = get_settings()
+        # `--no-db` writes only a CSV, so on the free provider it needs no
+        # Supabase account at all — you can try the system with zero signups.
+        settings = get_settings(require_supabase=not args.no_db)
+        if args.no_db and settings.requires_daily_login:
+            # Kite still needs Supabase to read the daily token.
+            settings = get_settings(require_supabase=True)
         strategies = [s for s in load_strategies() if s.enabled]
         if args.strategy:
             strategies = [s for s in strategies if s.name == args.strategy]
@@ -446,11 +469,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         store = None if args.no_db else SupabaseStore.connect(settings)
-        # Historical data needs an authenticated session even for backtests.
-        token_store = store or SupabaseStore.connect(settings)
-        client = MarketDataClient.from_stored_token(
-            settings, token_store, started.astimezone(IST).date()
-        )
+        # Only the Kite provider needs a database connection to read the
+        # daily token, so `--no-db` with the free provider needs no Supabase
+        # setup at all (results go to CSV only).
+        token_store = store
+        if settings.requires_daily_login and token_store is None:
+            token_store = SupabaseStore.connect(settings)
+        client = create_data_client(settings, token_store, started.astimezone(IST).date())
+        print(f"data provider: {describe_provider(settings)}")
 
         batch_id, rows = run_backtest(
             settings=settings, store=store, client=client,

@@ -10,6 +10,10 @@
 # The engine has its own market-hours/holiday gate and is idempotent, so a
 # late, duplicate, or out-of-hours run is harmless (it logs a skip, exit 0).
 #
+# SECRETS NEEDED: just SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. The
+# default market-data provider (yfinance) is free and needs no API key and
+# no daily login.
+#
 # NOTE: GitHub disables cron schedules after ~60 days without repo activity.
 # Any push (e.g. a strategies.yaml tweak) re-enables them. The README's
 # troubleshooting section covers this.
@@ -52,8 +56,13 @@ jobs:
 
       - name: Run paper engine
         env:
-          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
-          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          # REQUIRED (only these two on the free default provider):
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # OPTIONAL: leave unset to use free yfinance data. Set the repo
+          # variable DATA_PROVIDER=kite (and the two KITE_ secrets below)
+          # only if you're paying for Kite Connect.
+          DATA_PROVIDER: ${{ vars.DATA_PROVIDER }}
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
         run: python paper_engine.py

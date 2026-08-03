@@ -77,6 +77,29 @@ DEFAULT_COST_PER_TRADE_INR = 30.0  # flat round-trip brokerage+taxes estimate
 # Path (relative to repo root) of the strategy definitions file.
 STRATEGIES_FILE = "strategies.yaml"
 
+# ---------------------------------------------------------------------------
+# Market-data provider
+# ---------------------------------------------------------------------------
+# Where candles come from. Both providers return the identical canonical
+# DataFrame, so every other module is unaware of which one is in use.
+#
+#   yfinance (default) - FREE, no account, no API key, NO daily login.
+#                        Limits: 15m/30m history only reaches back ~60 days,
+#                        60m ~730 days, daily 5y+. Unofficial API: it can
+#                        break without notice and data quality is below a
+#                        broker feed. Good enough for research; that is the
+#                        honest trade-off for zero cost.
+#   kite               - Zerodha Kite Connect. Requires the PAID "Connect"
+#                        plan (the free Personal tier excludes historical
+#                        data) plus a daily 2FA login via login.py.
+#
+# Switch with DATA_PROVIDER=kite in .env / GitHub Secrets. No code changes.
+DEFAULT_DATA_PROVIDER = "yfinance"
+SUPPORTED_DATA_PROVIDERS: tuple[str, ...] = ("yfinance", "kite")
+
+# Providers that need the daily Kite access token written by login.py.
+PROVIDERS_REQUIRING_DAILY_LOGIN: frozenset[str] = frozenset({"kite"})
+
 
 class ConfigError(RuntimeError):
     """Raised when required configuration is missing or malformed."""
@@ -90,12 +113,20 @@ class Settings:
     stateless and should behave identically given the same environment.
     """
 
-    kite_api_key: str
-    kite_api_secret: str
     supabase_url: str
     supabase_service_role_key: str
+    data_provider: str = DEFAULT_DATA_PROVIDER
+    # Kite credentials are only required when data_provider == 'kite'; they
+    # stay empty strings on the free path so no Kite account is needed.
+    kite_api_key: str = ""
+    kite_api_secret: str = ""
     slippage_pct: float = DEFAULT_SLIPPAGE_PCT
     cost_per_trade_inr: float = DEFAULT_COST_PER_TRADE_INR
+
+    @property
+    def requires_daily_login(self) -> bool:
+        """True when a morning login.py run is needed for this provider."""
+        return self.data_provider in PROVIDERS_REQUIRING_DAILY_LOGIN
 
 
 def _read_float_env(name: str, default: float) -> float:
@@ -116,35 +147,64 @@ def _read_float_env(name: str, default: float) -> float:
     return value
 
 
-def get_settings() -> Settings:
+def get_settings(require_supabase: bool = True) -> Settings:
     """Load and validate all settings from the environment.
+
+    Kite credentials are required ONLY when DATA_PROVIDER=kite, so the free
+    yfinance path needs no broker account at all.
+
+    Args:
+        require_supabase: set False for offline-capable commands that write
+            no state (e.g. `backtest.py --no-db`, which only writes a CSV).
+            That lets someone try the system with ZERO accounts.
 
     Raises:
         ConfigError: listing EVERY missing required variable at once (so the
             user fixes them in one pass instead of one failure at a time).
     """
-    required = {
-        "KITE_API_KEY": os.environ.get("KITE_API_KEY", "").strip(),
-        "KITE_API_SECRET": os.environ.get("KITE_API_SECRET", "").strip(),
-        "SUPABASE_URL": os.environ.get("SUPABASE_URL", "").strip(),
-        "SUPABASE_SERVICE_ROLE_KEY": os.environ.get(
-            "SUPABASE_SERVICE_ROLE_KEY", ""
-        ).strip(),
-    }
+    provider = os.environ.get("DATA_PROVIDER", "").strip().lower() or DEFAULT_DATA_PROVIDER
+    if provider not in SUPPORTED_DATA_PROVIDERS:
+        raise ConfigError(
+            f"DATA_PROVIDER={provider!r} is not supported. "
+            f"Use one of: {', '.join(SUPPORTED_DATA_PROVIDERS)}. "
+            "Leave it unset for the free default ('yfinance')."
+        )
+
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    required: dict[str, str] = {}
+    if require_supabase:
+        required["SUPABASE_URL"] = supabase_url
+        required["SUPABASE_SERVICE_ROLE_KEY"] = supabase_key
+
+    kite_key = os.environ.get("KITE_API_KEY", "").strip()
+    kite_secret = os.environ.get("KITE_API_SECRET", "").strip()
+    if provider == "kite":
+        required["KITE_API_KEY"] = kite_key
+        required["KITE_API_SECRET"] = kite_secret
+
     missing = sorted(name for name, value in required.items() if not value)
     if missing:
+        hint = (
+            " (these are only needed because DATA_PROVIDER=kite; unset it to "
+            "use the free 'yfinance' provider instead)"
+            if provider == "kite" and any(n.startswith("KITE_") for n in missing)
+            else ""
+        )
         raise ConfigError(
             "Missing required environment variable(s): "
             + ", ".join(missing)
+            + hint
             + ". Locally: copy .env.example to .env and fill them in. "
             "In GitHub Actions: add them as repository Secrets."
         )
 
     return Settings(
-        kite_api_key=required["KITE_API_KEY"],
-        kite_api_secret=required["KITE_API_SECRET"],
-        supabase_url=required["SUPABASE_URL"],
-        supabase_service_role_key=required["SUPABASE_SERVICE_ROLE_KEY"],
+        supabase_url=supabase_url,
+        supabase_service_role_key=supabase_key,
+        data_provider=provider,
+        kite_api_key=kite_key,
+        kite_api_secret=kite_secret,
         slippage_pct=_read_float_env("SLIPPAGE_PCT", DEFAULT_SLIPPAGE_PCT),
         cost_per_trade_inr=_read_float_env(
             "COST_PER_TRADE_INR", DEFAULT_COST_PER_TRADE_INR

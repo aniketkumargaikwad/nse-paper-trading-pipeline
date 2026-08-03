@@ -9,7 +9,15 @@
 # time (early 2026). Verify against PyPI if an install fails.
 # ---------------------------------------------------------------------------
 
-# Kite Connect (Zerodha) official client — market data only in this project.
+# --- Market data providers --------------------------------------------------
+# yfinance: the DEFAULT, FREE data source (no account, no API key, no daily
+# login). Not pinned to an exact version on purpose: it is an unofficial
+# Yahoo scraper that must be upgradable quickly when Yahoo changes its API.
+yfinance>=0.2.65
+
+# Kite Connect (Zerodha): OPTIONAL, only used when DATA_PROVIDER=kite.
+# Requires the paid "Connect" plan — the free Personal tier excludes the
+# historical-data API this project runs on.
 kiteconnect==5.0.1
 
 # Supabase Python client — the only persistent state store.

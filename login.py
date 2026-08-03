@@ -133,6 +133,24 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = get_settings()
+    except RuntimeError as exc:
+        print(f"SETUP PROBLEM: {exc}", file=sys.stderr)
+        return 1
+
+    # On the free provider there is no daily session to create — say so
+    # plainly instead of walking the user through a login they don't need.
+    if not settings.requires_daily_login:
+        print(
+            f"Nothing to do: DATA_PROVIDER={settings.data_provider!r} needs no "
+            "daily login.\n"
+            "This step only exists for the paid Kite Connect provider "
+            "(DATA_PROVIDER=kite).\n"
+            "You can skip login.py entirely — the scheduled engine runs on "
+            "its own."
+        )
+        return 0
+
+    try:
         store = SupabaseStore.connect(settings)
     except (RuntimeError, DatabaseError) as exc:
         print(f"SETUP PROBLEM: {exc}", file=sys.stderr)

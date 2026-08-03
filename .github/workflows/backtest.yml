@@ -46,10 +46,13 @@ jobs:
 
       - name: Run backtester
         env:
-          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
-          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          # REQUIRED (only these two on the free default provider):
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # OPTIONAL: free yfinance is used unless DATA_PROVIDER=kite.
+          DATA_PROVIDER: ${{ vars.DATA_PROVIDER }}
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
           # Inputs go through env vars (not inline ${{ }} in the script) so
           # nothing user-typed is ever interpolated into shell syntax.
           YEARS: ${{ inputs.years }}
