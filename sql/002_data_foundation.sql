@@ -1,0 +1,132 @@
+-- ============================================================================
+-- 002_data_foundation.sql — Phase 0: precise candle storage.
+--
+-- HOW TO RUN: Supabase dashboard -> SQL Editor -> New query -> paste -> Run.
+-- Safe to re-run: every statement is idempotent.
+--
+-- Additive only. Nothing here touches the Phase-1 tables (strategies,
+-- positions, trades, run_audit, backtest_results).
+-- ============================================================================
+
+begin;
+
+-- Symbol master, mapping our 'NSE:RELIANCE' notation to Dhan identifiers.
+create table if not exists instruments (
+    id               bigserial primary key,
+    symbol           text not null,
+    exchange         text not null,
+    tradingsymbol    text not null,
+    dhan_security_id text not null,
+    dhan_segment     text not null,
+    name             text,
+    instrument_type  text not null default 'EQUITY',
+    lot_size         integer,
+    is_active        boolean not null default true,
+    refreshed_on     date not null,
+    constraint instruments_symbol_key unique (symbol)
+);
+
+comment on table instruments is
+    'Symbol master: our EXCHANGE:SYMBOL notation mapped to Dhan security IDs.';
+
+-- Named universes (Nifty 50/100, custom). Populated in Phase 1.
+create table if not exists symbol_groups (
+    id          bigserial primary key,
+    name        text not null unique,
+    description text,
+    is_system   boolean not null default false,
+    created_at  timestamptz not null default now()
+);
+
+create table if not exists symbol_group_members (
+    group_id      bigint not null references symbol_groups(id) on delete cascade,
+    instrument_id bigint not null references instruments(id)   on delete cascade,
+    primary key (group_id, instrument_id)
+);
+
+-- The candle store. numeric (not float) so P&L maths cannot drift.
+create table if not exists candles (
+    instrument_id bigint        not null references instruments(id) on delete cascade,
+    timeframe     text          not null check (timeframe in ('5m', 'day')),
+    ts            timestamptz   not null,
+    open          numeric(14,4) not null,
+    high          numeric(14,4) not null,
+    low           numeric(14,4) not null,
+    close         numeric(14,4) not null,
+    volume        bigint        not null,
+    primary key (instrument_id, timeframe, ts)
+);
+
+comment on table candles is
+    'Stored candles. Only the 5m base and adjusted daily are stored; 15/25/30/60m are resampled on read.';
+
+-- What is ACTUALLY cached. The guard against claiming coverage we lack.
+create table if not exists candle_coverage (
+    instrument_id     bigint      not null references instruments(id) on delete cascade,
+    timeframe         text        not null,
+    first_ts          timestamptz not null,
+    last_ts           timestamptz not null,
+    source            text        not null,
+    last_refreshed_at timestamptz not null default now(),
+    primary key (instrument_id, timeframe),
+    constraint candle_coverage_range_ok check (first_ts <= last_ts)
+);
+
+comment on table candle_coverage is
+    'One contiguous cached range per (instrument, timeframe). Never advanced past genuinely fetched data.';
+
+-- Detected problems, surfaced for review - never silently corrected.
+create table if not exists data_quality_flags (
+    id            bigserial primary key,
+    instrument_id bigint not null references instruments(id) on delete cascade,
+    timeframe     text   not null,
+    flag_type     text   not null
+        check (flag_type in ('suspected_split', 'session_gap', 'ohlc_invalid')),
+    ts            timestamptz not null,
+    detail        jsonb  not null,
+    resolved      boolean not null default false,
+    created_at    timestamptz not null default now()
+);
+
+-- Provider credentials with expiry. NEVER exposed to the dashboard.
+create table if not exists provider_tokens (
+    provider     text primary key,
+    access_token text not null,
+    expires_at   timestamptz not null,
+    updated_at   timestamptz not null default now()
+);
+
+create index if not exists candles_instrument_tf_ts_idx
+    on candles (instrument_id, timeframe, ts desc);
+create index if not exists quality_unresolved_idx
+    on data_quality_flags (instrument_id) where not resolved;
+
+-- ============================================================================
+-- Row Level Security
+-- ============================================================================
+alter table instruments          enable row level security;
+alter table symbol_groups        enable row level security;
+alter table symbol_group_members enable row level security;
+alter table candles              enable row level security;
+alter table candle_coverage      enable row level security;
+alter table data_quality_flags   enable row level security;
+alter table provider_tokens      enable row level security;
+
+drop policy if exists "anon read instruments"          on instruments;
+drop policy if exists "anon read symbol_groups"        on symbol_groups;
+drop policy if exists "anon read symbol_group_members" on symbol_group_members;
+drop policy if exists "anon read candles"              on candles;
+drop policy if exists "anon read candle_coverage"      on candle_coverage;
+drop policy if exists "anon read quality_flags"        on data_quality_flags;
+
+create policy "anon read instruments"          on instruments          for select to anon using (true);
+create policy "anon read symbol_groups"        on symbol_groups        for select to anon using (true);
+create policy "anon read symbol_group_members" on symbol_group_members for select to anon using (true);
+create policy "anon read candles"              on candles              for select to anon using (true);
+create policy "anon read candle_coverage"      on candle_coverage      for select to anon using (true);
+create policy "anon read quality_flags"        on data_quality_flags   for select to anon using (true);
+
+-- provider_tokens gets NO anon policy: it holds a live API credential.
+-- With RLS on and no policy, the dashboard's key sees zero rows.
+
+commit;
