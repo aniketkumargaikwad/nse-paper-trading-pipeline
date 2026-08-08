@@ -33,7 +33,7 @@ from typing import Callable, Sequence
 
 import pandas as pd
 
-from config import IST, SUPPORTED_TIMEFRAMES, UTC
+from config import IST, UTC
 from kite_client import (
     KiteClientError,  # shared error type so engines catch ONE exception class
     drop_forming_candle,
@@ -43,6 +43,7 @@ from kite_client import (
 
 # Our timeframe label -> yfinance `interval` string.
 TIMEFRAME_TO_YF_INTERVAL: dict[str, str] = {
+    "5m": "5m",
     "15m": "15m",
     "30m": "30m",
     "60m": "1h",
@@ -59,6 +60,7 @@ TIMEFRAME_TO_YF_INTERVAL: dict[str, str] = {
 # margin. Cost: ~1.5% less history. Benefit: the boundary can never bite,
 # even with IST/UTC clock skew between us and Yahoo's servers.
 YF_MAX_HISTORY_DAYS: dict[str, int] = {
+    "5m": 58,
     "15m": 58,
     "30m": 58,
     "60m": 728,
@@ -219,10 +221,12 @@ class YFinanceMarketDataClient:
         resolve_instrument_tokens (the parameter keeps the Kite provider's
         name so the engines can use either provider unchanged).
         """
-        if timeframe not in SUPPORTED_TIMEFRAMES:
+        if timeframe not in TIMEFRAME_TO_YF_INTERVAL:
             raise KiteClientError(
-                f"Unsupported timeframe {timeframe!r}. "
-                f"Allowed: {', '.join(SUPPORTED_TIMEFRAMES)}"
+                f"The free yfinance provider cannot serve {timeframe!r}. "
+                f"It supports: {', '.join(TIMEFRAME_TO_YF_INTERVAL)}. "
+                "(Yahoo has no 25-minute interval; use the dhan provider, "
+                "which derives it from a stored 5-minute base.)"
             )
         now = now_utc or datetime.now(tz=UTC)
         interval = TIMEFRAME_TO_YF_INTERVAL[timeframe]
@@ -265,4 +269,11 @@ class YFinanceMarketDataClient:
 
     def max_history_days(self, timeframe: str) -> int:
         """How far back this provider can serve the given timeframe."""
+        if timeframe not in YF_MAX_HISTORY_DAYS:
+            raise KiteClientError(
+                f"The free yfinance provider cannot serve {timeframe!r}. "
+                f"It supports: {', '.join(TIMEFRAME_TO_YF_INTERVAL)}. "
+                "(Yahoo has no 25-minute interval; use the dhan provider, "
+                "which derives it from a stored 5-minute base.)"
+            )
         return YF_MAX_HISTORY_DAYS[timeframe]
