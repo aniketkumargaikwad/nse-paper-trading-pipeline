@@ -94,7 +94,7 @@ def test_invalid_document_rejected_before_storage() -> None:
     """A malformed strategy must never reach the database."""
     bad = {
         "name": "bad", "enabled": True, "position_type": "long",
-        "timeframe": "5m",  # faster than 15m is forbidden
+        "timeframe": "1m",  # faster than the 5m base is forbidden
         "instruments": ["NSE:RELIANCE"],
         "entry": {"all": [{"indicator": "close", "operator": ">", "value": 1}]},
         "exit": {"any": [{"indicator": "close", "operator": "<", "value": 1}]},

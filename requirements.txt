@@ -20,6 +20,13 @@ yfinance>=0.2.65
 # historical-data API this project runs on.
 kiteconnect==5.0.1
 
+# TOTP generation for unattended Dhan token renewal (no daily login).
+pyotp==2.9.0
+
+# Direct REST calls to Dhan. Pinned explicitly rather than relying on it
+# arriving transitively via other packages.
+requests==2.32.3
+
 # Supabase Python client — the only persistent state store.
 supabase==2.15.0
 

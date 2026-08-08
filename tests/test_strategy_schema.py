@@ -161,8 +161,8 @@ def test_param_typo_rejected() -> None:
 
 def test_bad_timeframe_rejected() -> None:
     doc = valid_doc()
-    doc["strategies"][0]["timeframe"] = "5m"  # faster than 15m is forbidden
-    expect_error(doc, "unsupported timeframe '5m'")
+    doc["strategies"][0]["timeframe"] = "1m"  # faster than the 5m base is forbidden
+    expect_error(doc, "unsupported timeframe '1m'")
 
 
 def test_bad_instrument_format_rejected() -> None:
