@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -197,3 +198,82 @@ def test_flag_row_keys_match_the_database_columns() -> None:
     row = QualityFlag(flag_type="session_gap",
                       ts=datetime(2026, 8, 3, tzinfo=UTC), detail={}).to_row(1, "5m")
     assert set(row) == {"instrument_id", "timeframe", "flag_type", "ts", "detail"}
+
+
+# --- Fix verification --------------------------------------------------------
+
+
+def test_nan_in_any_column_is_flagged() -> None:
+    """Python's max/min short-circuit on NaN, so every comparison branch
+    would fall through. Postgres will not catch it either: it orders NaN
+    above all real numbers, so `check (close > 0)` accepts it."""
+    for column in ("open", "high", "low", "close", "volume"):
+        df = frame([(100, 105, 99, 104, 10)])
+        df.loc[df.index[0], column] = float("nan")
+        flags = check_ohlc_sanity(df)
+        assert len(flags) == 1, f"NaN in {column} was not flagged"
+        assert "NaN" in flags[0].detail["reason"]
+
+
+def test_infinite_value_is_flagged() -> None:
+    df = frame([(100, 105, 99, 104, 10)])
+    df.loc[df.index[0], "high"] = float("inf")
+    assert len(check_ohlc_sanity(df)) == 1
+
+
+def test_multiple_bad_rows_all_flagged_in_order() -> None:
+    df = frame([
+        (100, 101, 99, 104, 10),   # bad: high < close
+        (100, 105, 99, 104, 10),   # good
+        (100, 105, 101, 104, 10),  # bad: low > open
+    ])
+    flags = check_ohlc_sanity(df)
+    assert len(flags) == 2
+    assert flags[0].ts < flags[1].ts
+
+
+def test_session_gap_timestamp_is_the_session_open_and_stable() -> None:
+    """The UNIQUE(instrument_id, timeframe, flag_type, ts) constraint relies
+    on this timestamp being identical on every re-detection."""
+    df = frame([(100, 101, 99, 100, 1)] * 2)
+    first = detect_session_gaps(df, expected_days=[date(2026, 8, 4)])
+    second = detect_session_gaps(df, expected_days=[date(2026, 8, 4)])
+    assert first[0].ts == second[0].ts
+    # 09:15 IST == 03:45 UTC, same calendar day, inside the session.
+    assert first[0].to_row(1, "5m")["ts"] == "2026-08-04T03:45:00+00:00"
+
+
+def test_naive_flag_timestamp_rejected() -> None:
+    from data_quality import DataQualityError
+
+    flag = QualityFlag(flag_type="session_gap",
+                       ts=datetime(2026, 8, 3, 9, 15), detail={})
+    with pytest.raises(DataQualityError, match="timezone-aware"):
+        flag.to_row(1, "5m")
+
+
+def test_nan_session_does_not_disable_split_detection() -> None:
+    """A single unusable session must not blind the detector on BOTH sides
+    of it; the last good close is carried forward as the anchor."""
+    intraday = closes_frame([
+        (datetime(2026, 8, 3, 15, 25, tzinfo=IST), 1000.0),
+        (datetime(2026, 8, 4, 15, 25, tzinfo=IST), float("nan")),
+        (datetime(2026, 8, 5, 9, 15, tzinfo=IST), 200.0),
+    ])
+    flags = detect_suspected_splits(intraday, pd.DataFrame())
+    assert len(flags) == 1
+    assert flags[0].detail["ratio"] == 5.0
+
+
+def test_large_genuine_move_is_corroborated_despite_small_feed_disagreement() -> None:
+    """Relative tolerance: a 3% disagreement between the daily close and the
+    last intraday close must not false-flag a genuine ratio-10 move."""
+    intraday = closes_frame([
+        (datetime(2026, 8, 3, 15, 25, tzinfo=IST), 1000.0),
+        (datetime(2026, 8, 4, 9, 15, tzinfo=IST), 100.0),
+    ])
+    adjusted_daily = closes_frame([
+        (datetime(2026, 8, 3, tzinfo=IST), 1000.0),
+        (datetime(2026, 8, 4, tzinfo=IST), 103.0),   # 3% apart -> ratio ~9.7
+    ])
+    assert detect_suspected_splits(intraday, adjusted_daily) == []

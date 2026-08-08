@@ -14,18 +14,29 @@ Three checks
                      detectable without a separate corporate-actions source.
 * Session gaps     - an expected trading day with no candles at all.
 
+Detection limits
+----------------
+The 1.5 ratio threshold catches every stock split and any bonus issue of 1:2
+or richer. It deliberately MISSES smaller bonuses (1:4 -> ratio 1.25,
+1:10 -> ratio 1.10), which are real but small price discontinuities. Indian
+equities carry 2-20% circuit limits, so a 50% overnight move is unreachable
+by ordinary trading - that is why the threshold can sit this low without
+drowning in false positives.
+
 Pure module: no I/O, no network, no database, no clock reads.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Sequence
 
+import numpy as np
 import pandas as pd
 
-from config import IST, UTC
+from config import IST, MARKET_OPEN_IST, UTC
 
 # ---------------------------------------------------------------------------
 # Split detection tuning
@@ -38,11 +49,16 @@ SPLIT_RATIO_THRESHOLD = 1.5
 
 # How closely the adjusted daily series must agree with the intraday move for
 # it to count as a genuine price move rather than a split artefact.
+# RELATIVE, not absolute: `ratio` is unbounded above, so a fixed window would
+# demand ever-tighter agreement as the move grows (+/-12.5% at ratio 2 but
+# only +/-2.5% at ratio 10), false-flagging genuine large moves that the two
+# feeds happen to price a few percent apart.
 ADJUSTED_AGREEMENT_TOLERANCE = 0.25
 
 
 class DataQualityError(ValueError):
-    """Raised when a frame cannot be checked (e.g. missing required columns)."""
+    """Raised when a flag cannot be safely serialised (e.g. a naive
+    timestamp, which would be silently read as the machine's local zone)."""
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +76,11 @@ class QualityFlag:
 
     def to_row(self, instrument_id: int, timeframe: str) -> dict[str, Any]:
         """Shape this flag as a data_quality_flags row."""
+        if self.ts.tzinfo is None:
+            raise DataQualityError(
+                "QualityFlag.ts must be timezone-aware; a naive timestamp "
+                "would be silently read as the machine's local zone."
+            )
         return {
             "instrument_id": instrument_id,
             "timeframe": timeframe,
@@ -78,31 +99,56 @@ def check_ohlc_sanity(df: pd.DataFrame) -> list[QualityFlag]:
     """Find structurally impossible candles.
 
     These are the only findings the caller should DROP rather than merely
-    flag: a candle whose high is below its close (or similar) never existed.
+    flag: a candle whose high is below its close never existed.
+
+    Vectorised deliberately: this runs on every fetched page, and a per-row
+    loop measured ~370x slower (hours versus minutes across a full backfill).
     """
     flags: list[QualityFlag] = []
     if df.empty:
         return flags
 
-    for ts, row in df.iterrows():
-        o, h, l, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
-        v = float(row["volume"])
-        reason: str | None = None
-        if h < max(o, c):
-            reason = f"high ({h}) is below max(open, close) ({max(o, c)})"
-        elif l > min(o, c):
-            reason = f"low ({l}) is above min(open, close) ({min(o, c)})"
-        elif min(o, h, l, c) <= 0:
+    o = df["open"].to_numpy(dtype=float)
+    h = df["high"].to_numpy(dtype=float)
+    lo = df["low"].to_numpy(dtype=float)
+    c = df["close"].to_numpy(dtype=float)
+    v = df["volume"].to_numpy(dtype=float)
+
+    hi_oc, lo_oc = np.maximum(o, c), np.minimum(o, c)
+
+    # NaN/inf MUST be tested first and explicitly. Every comparison against
+    # NaN is False, so an unfinite value would otherwise slip through all the
+    # other checks - and Postgres will not stop it either, because it orders
+    # NaN above every real number, so `check (close > 0)` accepts it.
+    bad_nan = ~(np.isfinite(o) & np.isfinite(h) & np.isfinite(lo)
+                & np.isfinite(c) & np.isfinite(v))
+    bad_high = h < hi_oc
+    bad_low = lo > lo_oc
+    bad_price = np.minimum(np.minimum(o, h), np.minimum(lo, c)) <= 0
+    bad_vol = v < 0
+
+    suspect = bad_nan | bad_high | bad_low | bad_price | bad_vol
+    if not suspect.any():
+        return flags
+
+    # Details are materialised only for failing rows, normally a tiny fraction.
+    for i in np.flatnonzero(suspect):
+        if bad_nan[i]:
+            reason = "a price or volume is NaN or infinite"
+        elif bad_high[i]:
+            reason = f"high ({h[i]}) is below max(open, close) ({hi_oc[i]})"
+        elif bad_low[i]:
+            reason = f"low ({lo[i]}) is above min(open, close) ({lo_oc[i]})"
+        elif bad_price[i]:
             reason = "a price is zero or negative"
-        elif v < 0:
-            reason = f"volume is negative ({v})"
-        if reason:
-            flags.append(QualityFlag(
-                flag_type="ohlc_invalid",
-                ts=ts.to_pydatetime(),
-                detail={"reason": reason, "open": o, "high": h, "low": l,
-                        "close": c, "volume": v},
-            ))
+        else:
+            reason = f"volume is negative ({v[i]})"
+        flags.append(QualityFlag(
+            flag_type="ohlc_invalid",
+            ts=df.index[i].to_pydatetime(),
+            detail={"reason": reason, "open": float(o[i]), "high": float(h[i]),
+                    "low": float(lo[i]), "close": float(c[i]), "volume": float(v[i])},
+        ))
     return flags
 
 
@@ -153,7 +199,9 @@ def detect_suspected_splits(
     previous_close: float | None = None
     for day, close in session_last.items():
         close = float(close)
-        if previous_close is not None and previous_close > 0 and close > 0:
+        if not math.isfinite(close) or close <= 0:
+            continue  # unusable session: keep the last good close as anchor
+        if previous_close is not None:
             ratio = max(close / previous_close, previous_close / close)
             if ratio >= SPLIT_RATIO_THRESHOLD:
                 prev_adj = daily_by_date.get(previous_date)
@@ -161,11 +209,13 @@ def detect_suspected_splits(
                 corroborated = False
                 if prev_adj and curr_adj and prev_adj > 0 and curr_adj > 0:
                     adj_ratio = max(curr_adj / prev_adj, prev_adj / curr_adj)
-                    corroborated = abs(adj_ratio - ratio) <= ADJUSTED_AGREEMENT_TOLERANCE
+                    corroborated = (
+                        abs(adj_ratio - ratio) <= ADJUSTED_AGREEMENT_TOLERANCE * ratio
+                    )
                 if not corroborated:
                     flags.append(QualityFlag(
                         flag_type="suspected_split",
-                        ts=datetime.combine(day, datetime.min.time(), tzinfo=IST).astimezone(UTC),
+                        ts=datetime.combine(day, MARKET_OPEN_IST, tzinfo=IST).astimezone(UTC),
                         detail={
                             "ratio": round(ratio, 4),
                             "previous_close": previous_close,
@@ -193,7 +243,7 @@ def detect_session_gaps(
         if day not in present:
             flags.append(QualityFlag(
                 flag_type="session_gap",
-                ts=datetime.combine(day, datetime.min.time(), tzinfo=IST).astimezone(UTC),
+                ts=datetime.combine(day, MARKET_OPEN_IST, tzinfo=IST).astimezone(UTC),
                 detail={"missing_date": day.isoformat()},
             ))
     return flags
