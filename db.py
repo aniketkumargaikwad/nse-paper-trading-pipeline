@@ -31,7 +31,7 @@ from postgrest.exceptions import APIError
 from supabase import Client, create_client
 
 from config import UTC, Settings
-from strategy_schema import Strategy
+from strategy_schema import Strategy, parse_strategy_dict
 
 # Postgres error code for unique-constraint violations. We treat these as
 # "someone (a previous run) already did this" — the core of idempotency.
@@ -226,6 +226,98 @@ class SupabaseStore:
         return resp.data[0]["access_token"] if resp.data else None
 
     # -- strategies snapshot --------------------------------------------------
+
+    # -- strategies as LIVE state (the UI edits these; the engine reads them) --
+
+    def list_strategy_documents(self) -> list[dict[str, Any]]:
+        """Return the raw strategy dicts stored in the database."""
+        try:
+            resp = self._table("strategies").select("*").order("name").execute()
+        except APIError as exc:
+            raise self._wrap(exc, "listing strategies") from exc
+        docs = []
+        for row in resp.data:
+            doc = dict(row.get("definition") or {})
+            # `enabled` lives in its own column so it can be toggled cheaply;
+            # it always wins over any stale copy inside the definition blob.
+            doc["enabled"] = bool(row["enabled"])
+            doc["name"] = row["name"]
+            docs.append(doc)
+        return docs
+
+    def list_strategies(self) -> list[Strategy]:
+        """Load and VALIDATE every stored strategy.
+
+        Validation happens on read (not just on write) so a row edited
+        directly in the Supabase table editor can never feed the engine
+        something malformed.
+        """
+        strategies = []
+        for doc in self.list_strategy_documents():
+            try:
+                strategies.append(parse_strategy_dict(doc, where=f"strategy {doc.get('name')!r}"))
+            except ValueError as exc:
+                raise DatabaseError(
+                    f"Stored strategy {doc.get('name')!r} is invalid: {exc}. "
+                    "Fix it on the Strategies page (or delete it)."
+                ) from exc
+        return strategies
+
+    def save_strategy_document(self, doc: Mapping[str, Any]) -> Strategy:
+        """Create or update one strategy. Validates BEFORE writing.
+
+        Returns the parsed Strategy so callers can show what was saved.
+        """
+        strategy = parse_strategy_dict(dict(doc), where="strategy")
+        row = {
+            "name": strategy.name,
+            "enabled": strategy.enabled,
+            "position_type": strategy.position_type,
+            "timeframe": strategy.timeframe,
+            "definition": json.loads(json.dumps(dict(doc), default=str)),
+            "updated_at": _iso(datetime.now(tz=UTC)),
+        }
+        try:
+            self._table("strategies").upsert(row, on_conflict="name").execute()
+        except APIError as exc:
+            raise self._wrap(exc, f"saving strategy {strategy.name}") from exc
+        return strategy
+
+    def set_strategy_enabled(self, name: str, enabled: bool) -> None:
+        """Flip a strategy live/paused — the 'one-click deploy' action."""
+        try:
+            self._table("strategies").update(
+                {"enabled": enabled, "updated_at": _iso(datetime.now(tz=UTC))}
+            ).eq("name", name).execute()
+        except APIError as exc:
+            raise self._wrap(exc, f"toggling strategy {name}") from exc
+
+    def delete_strategy(self, name: str) -> None:
+        """Remove a strategy definition.
+
+        Its historical trades are intentionally KEPT (they are real results);
+        they simply no longer have a live parent row.
+        """
+        try:
+            self._table("strategies").delete().eq("name", name).execute()
+        except APIError as exc:
+            raise self._wrap(exc, f"deleting strategy {name}") from exc
+
+    def seed_strategies_if_empty(self, documents: Sequence[Mapping[str, Any]]) -> int:
+        """First-run bootstrap: copy strategies.yaml into the database.
+
+        Does nothing once any strategy exists, so it can never overwrite what
+        you have since edited in the UI. Returns how many rows were seeded.
+        """
+        try:
+            resp = self._table("strategies").select("name", count="exact").limit(1).execute()
+        except APIError as exc:
+            raise self._wrap(exc, "checking for existing strategies") from exc
+        if (resp.count or 0) > 0:
+            return 0
+        for doc in documents:
+            self.save_strategy_document(doc)
+        return len(documents)
 
     def sync_strategies(self, strategies: Sequence[Strategy]) -> None:
         """Mirror the validated strategies.yaml into the `strategies` table.

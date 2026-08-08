@@ -1,4 +1,9 @@
-# Paper Trading Research Pipeline (NSE / Kite Connect)
+# Paper Trading Research Pipeline (NSE)
+
+> **New here? Start with [docs/QUICKSTART.md](docs/QUICKSTART.md)** — it takes
+> you from a fresh Supabase project to a live paper-trading strategy, one
+> command at a time.
+
 
 A free-tier, serverless research and **paper-trading** pipeline for Indian
 equity/F&O markets:

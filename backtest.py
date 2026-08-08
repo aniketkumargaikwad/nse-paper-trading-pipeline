@@ -53,7 +53,7 @@ from config import IST, UTC, Settings, get_settings
 from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
 from kite_client import KiteClientError, TokenExpiredError
-from strategy_schema import Strategy, load_strategies
+from strategy_schema import Strategy, load_strategies, load_strategy_documents
 
 # --- Kill-rule thresholds ---------------------------------------------------
 MIN_TRADES = 30
@@ -458,7 +458,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.no_db and settings.requires_daily_login:
             # Kite still needs Supabase to read the daily token.
             settings = get_settings(require_supabase=True)
-        strategies = [s for s in load_strategies() if s.enabled]
+
+        # Prefer strategies stored in the database (what the dashboard edits);
+        # fall back to the YAML file when running fully offline with --no-db.
+        strategies: list[Strategy] = []
+        if not args.no_db:
+            probe = SupabaseStore.connect(settings)
+            probe.seed_strategies_if_empty(load_strategy_documents())
+            strategies = probe.list_strategies()
+        if not strategies:
+            strategies = load_strategies()
+        strategies = [s for s in strategies if s.enabled]
         if args.strategy:
             strategies = [s for s in strategies if s.name == args.strategy]
             if not strategies:

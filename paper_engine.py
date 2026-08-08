@@ -61,7 +61,7 @@ from kite_client import (
     lookback_start_utc,
 )
 from market_calendar import load_holidays, session_gate
-from strategy_schema import Strategy, load_strategies
+from strategy_schema import Strategy, load_strategy_documents
 
 
 @dataclass
@@ -373,11 +373,17 @@ def main() -> int:
 
     try:
         settings = get_settings()
-        all_strategies = load_strategies()
-        enabled = [s for s in all_strategies if s.enabled]
-
         store = SupabaseStore.connect(settings)
-        store.sync_strategies(all_strategies)  # keep the dashboard's mirror fresh
+
+        # The DATABASE is the source of truth for strategies, so enabling or
+        # editing one in the dashboard takes effect on the next run with no
+        # code push. strategies.yaml seeds it on the very first run only and
+        # is never allowed to clobber later UI edits.
+        seeded = store.seed_strategies_if_empty(load_strategy_documents())
+        if seeded:
+            print(f"seeded {seeded} strategy definition(s) from strategies.yaml")
+        all_strategies = store.list_strategies()
+        enabled = [s for s in all_strategies if s.enabled]
 
         if not enabled:
             store.write_run_audit(

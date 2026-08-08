@@ -1,5 +1,10 @@
 # Operating Guide — Master Reference
 
+> Setting up for the first time? Follow **[QUICKSTART.md](QUICKSTART.md)**
+> instead — it's the shortest path to a running system. This file is the
+> complete reference behind it.
+
+
 This is the **single source of truth** for setting up, running, and extending the
 paper-trading pipeline. It is written for someone who has never touched this
 project before. Every step says **where to be** and **exactly what to type**.

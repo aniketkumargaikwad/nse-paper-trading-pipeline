@@ -461,6 +461,79 @@ def parse_strategies(data: Any) -> list[Strategy]:
     return strategies
 
 
+def parse_strategy_dict(raw: Any, where: str = "strategy") -> Strategy:
+    """Validate ONE raw strategy dict (the shape of a strategies.yaml entry).
+
+    Used by the database layer and the UI builder, so anything stored or
+    entered through a form passes exactly the same validation as the file.
+    """
+    return _parse_strategy(raw, where)
+
+
+def strategy_to_raw(strategy: Strategy) -> dict[str, Any]:
+    """Convert a Strategy back into its raw dict form.
+
+    Round-trips through parse_strategy_dict, so the UI can load an existing
+    strategy into an edit form and the app can export back to YAML.
+    """
+
+    def operand_to_raw(op: Operand, *, inline: bool) -> dict[str, Any]:
+        node: dict[str, Any] = {"indicator": op.indicator}
+        if op.params:
+            node["params"] = dict(op.params)
+        if op.source != "close":
+            node["source"] = op.source
+        # Only emit `output` when it differs from the implicit default.
+        if op.output is not None and op.output != DEFAULT_OUTPUT.get(op.indicator):
+            node["output"] = op.output
+        return node
+
+    def condition_to_raw(cond: Condition) -> dict[str, Any]:
+        node = operand_to_raw(cond.left, inline=True)
+        node["operator"] = cond.operator
+        if cond.right is not None:
+            node["compare_to"] = operand_to_raw(cond.right, inline=False)
+        else:
+            node["value"] = cond.value
+        return node
+
+    def group_to_raw(group: ConditionGroup) -> dict[str, Any]:
+        return {
+            group.logic: [
+                group_to_raw(item) if isinstance(item, ConditionGroup) else condition_to_raw(item)
+                for item in group.items
+            ]
+        }
+
+    return {
+        "name": strategy.name,
+        "enabled": strategy.enabled,
+        "position_type": strategy.position_type,
+        "timeframe": strategy.timeframe,
+        "instruments": list(strategy.instruments),
+        "entry": group_to_raw(strategy.entry),
+        "exit": group_to_raw(strategy.exit),
+        "risk": {
+            "stop_loss_pct": strategy.risk.stop_loss_pct,
+            "target_pct": strategy.risk.target_pct,
+        },
+        "sizing": {"type": strategy.sizing.type, "quantity": strategy.sizing.quantity},
+        "max_cycles_per_day": strategy.max_cycles_per_day,
+    }
+
+
+def load_strategy_documents(path: str = "strategies.yaml") -> list[dict[str, Any]]:
+    """Load the raw (but validated) strategy dicts from a YAML file.
+
+    Used to seed the database on first run: the DB stores these raw dicts so
+    they can be re-validated on every read by the same code path.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    parse_strategies(data)  # validate, discard the objects
+    return list(data["strategies"])
+
+
 def load_strategies(path: str = "strategies.yaml") -> list[Strategy]:
     """Load and validate strategies from a YAML file.
 
