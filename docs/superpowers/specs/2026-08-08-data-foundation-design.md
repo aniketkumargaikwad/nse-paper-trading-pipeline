@@ -295,7 +295,9 @@ create table provider_tokens (
     updated_at   timestamptz not null default now()
 );
 
-create index candles_instrument_tf_ts_idx on candles (instrument_id, timeframe, ts desc);
+-- No separate (instrument_id, timeframe, ts desc) index: it would duplicate
+-- the primary key (instrument_id, timeframe, ts). Postgres btrees scan in
+-- both directions, so it added ~375MB at target scale for no query benefit.
 create index quality_unresolved_idx on data_quality_flags (instrument_id) where not resolved;
 ```
 
