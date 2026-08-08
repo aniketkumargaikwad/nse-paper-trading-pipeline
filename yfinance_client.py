@@ -7,10 +7,10 @@ the backtester, and the paper engine cannot tell which source is in use.
 
 WHAT YOU GIVE UP VERSUS A PAID BROKER FEED (know these before trusting it)
 -------------------------------------------------------------------------
-* **Short intraday history.** Yahoo only serves ~60 days of 15m/30m candles
-  and ~730 days of 60m. Daily goes back years. So deep backtests belong on
-  the 60m/day timeframes; a 15m backtest is a small sample and the kill
-  rules will usually (correctly) flag it as thin evidence.
+* **Short intraday history.** Yahoo only serves ~60 days of 5m/15m/30m
+  candles and ~730 days of 60m. Daily goes back years. So deep backtests
+  belong on the 60m/day timeframes; a 5m/15m backtest is a small sample and
+  the kill rules will usually (correctly) flag it as thin evidence.
 * **Unofficial API.** Yahoo can change or throttle this endpoint without
   notice. Failures here are loud, and the engine simply records a skip.
 * **Lower data quality.** Occasional missing/NaN bars and odd volume values,
@@ -53,9 +53,9 @@ TIMEFRAME_TO_YF_INTERVAL: dict[str, str] = {
 # How far back each interval may reach, in days.
 #
 # VERIFIED empirically against the live API on 2026-08-03: Yahoo documents
-# "within the last 60 days" for 15m/30m and 730 for 60m, but the boundary is
-# EXCLUSIVE — a start of exactly -60d/-730d returns ZERO rows, while -59d and
-# -729d work. A silent empty frame looks like "no signals" instead of "no
+# "within the last 60 days" for 5m/15m/30m and 730 for 60m, but the boundary
+# is EXCLUSIVE — a start of exactly -60d/-730d returns ZERO rows, while -59d
+# and -729d work. A silent empty frame looks like "no signals" instead of "no
 # data", which is the worst possible failure, so we keep a 2-day safety
 # margin. Cost: ~1.5% less history. Benefit: the boundary can never bite,
 # even with IST/UTC clock skew between us and Yahoo's servers.

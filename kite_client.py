@@ -41,7 +41,6 @@ from kiteconnect.exceptions import (
 from config import (
     IST,
     MARKET_CLOSE_IST,
-    SUPPORTED_TIMEFRAMES,
     TIMEFRAME_MINUTES,
     TIMEFRAME_TO_KITE_INTERVAL,
     UTC,
@@ -57,6 +56,7 @@ from db import SupabaseStore
 # ASSUMPTION: documented Kite Connect v3 limits; verify if a long backtest
 # fetch starts failing with InputException.
 TIMEFRAME_MAX_DAYS_PER_REQUEST: dict[str, int] = {
+    "5m": 100,
     "15m": 200,
     "30m": 200,
     "60m": 400,
@@ -336,10 +336,12 @@ class MarketDataClient:
         With closed_only=True (the default, and what every engine should
         use), the still-forming candle is removed.
         """
-        if timeframe not in SUPPORTED_TIMEFRAMES:
+        if timeframe not in TIMEFRAME_TO_KITE_INTERVAL:
             raise KiteClientError(
-                f"Unsupported timeframe {timeframe!r}. "
-                f"Allowed: {', '.join(SUPPORTED_TIMEFRAMES)}"
+                f"The kite provider cannot serve {timeframe!r}. "
+                f"It supports: {', '.join(TIMEFRAME_TO_KITE_INTERVAL)}. "
+                "(Kite Connect has no 25-minute interval; use the dhan "
+                "provider, which derives it from a stored 5-minute base.)"
             )
         interval = TIMEFRAME_TO_KITE_INTERVAL[timeframe]
         max_days = TIMEFRAME_MAX_DAYS_PER_REQUEST[timeframe]
