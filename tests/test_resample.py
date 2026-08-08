@@ -102,9 +102,12 @@ def test_empty_input_gives_empty_canonical_frame() -> None:
     assert list(out.columns) == ["open", "high", "low", "close", "volume"]
 
 
-def test_non_multiple_target_rejected() -> None:
+def test_day_rejected_because_it_is_stored_not_derived() -> None:
+    """`day` is 375 min, a whole multiple of 5 - so arithmetic alone would
+    wrongly allow it. It is rejected because Dhan's daily feed is stored
+    directly (corporate-action adjusted, back to inception)."""
     df = five_min_frame([(100, 101, 99, 100, 1)] * 3)
-    with pytest.raises(ResampleError, match="multiple of"):
+    with pytest.raises(ResampleError, match="stored separately"):
         resample_candles(df, "day")
 
 
@@ -136,3 +139,30 @@ def test_output_is_sorted_even_if_input_is_not() -> None:
     shuffled = df.iloc[::-1]
     out = resample_candles(shuffled, "15m")
     assert out.index.is_monotonic_increasing
+
+
+def test_pre_open_candles_bucket_backwards_without_merging() -> None:
+    """Pre-open auction bars sit BEFORE 09:15, so minutes_from_open is
+    negative. Floor division must round toward -inf, giving them their own
+    bucket - not merging them into the 09:15 one. An int()/abs() refactor
+    would silently break this."""
+    df = five_min_frame(
+        [(100, 101, 99, 100, 1)] * 3,
+        start_ist=datetime(2026, 8, 3, 9, 0, tzinfo=IST),
+    )
+    out = resample_candles(df, "15m")
+    assert len(out) == 1
+    assert out.index[0] == datetime(2026, 8, 3, 9, 0, tzinfo=IST).astimezone(UTC)
+
+
+def test_single_candle_frame() -> None:
+    df = five_min_frame([(100, 105, 99, 104, 7)])
+    out = resample_candles(df, "60m")
+    assert len(out) == 1
+    assert out.iloc[0]["volume"] == 7
+
+
+def test_missing_column_raises_resample_error() -> None:
+    df = five_min_frame([(100, 101, 99, 100, 1)] * 3).drop(columns=["volume"])
+    with pytest.raises(ResampleError, match="missing required column"):
+        resample_candles(df, "15m")

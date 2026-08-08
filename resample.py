@@ -56,10 +56,15 @@ def resample_candles(df: pd.DataFrame, target_timeframe: str) -> pd.DataFrame:
 
     Raises:
         ResampleError: for an unknown timeframe, a naive index, or a target
-            that is not a whole multiple of the 5-minute base.
+            that is not derivable from the base (e.g. `day`, which is stored
+            separately).
     """
     if target_timeframe == BASE_TIMEFRAME:
-        return df  # passthrough: nothing to aggregate
+        # Passthrough returns the CALLER'S frame, not a copy: this is on the
+        # hot read path and copying tens of thousands of rows per backtest
+        # buys nothing while every consumer (indicators, signals) is
+        # read-only. Callers that intend to mutate must .copy() first.
+        return df if not df.empty else _empty_frame()
 
     target_minutes = TIMEFRAME_MINUTES.get(target_timeframe)
     if target_minutes is None:
@@ -68,17 +73,13 @@ def resample_candles(df: pd.DataFrame, target_timeframe: str) -> pd.DataFrame:
             f"Known: {', '.join(TIMEFRAME_MINUTES)}"
         )
 
-    base_minutes = TIMEFRAME_MINUTES[BASE_TIMEFRAME]
-    # 'day' (375 min) is numerically a multiple of the 5-minute base, but it
-    # is NOT derived by resampling: Dhan's daily feed is corporate-action
-    # adjusted and reaches back to inception, so it is stored separately
-    # (see config.STORED_TIMEFRAMES / source_timeframe_for). Only genuine
-    # intraday timeframes may be resampled here.
-    if target_minutes % base_minutes != 0 or target_timeframe not in RESAMPLE_TARGETS:
+    if target_timeframe not in RESAMPLE_TARGETS:
         raise ResampleError(
-            f"{target_timeframe} ({target_minutes} min) is not a whole intraday "
-            f"multiple of the {BASE_TIMEFRAME} base ({base_minutes} min) that "
-            "can be derived by resampling. Daily candles are stored separately."
+            f"{target_timeframe} cannot be derived by resampling the "
+            f"{BASE_TIMEFRAME} base. Derivable targets: "
+            f"{', '.join(sorted(RESAMPLE_TARGETS))}. Daily candles are stored "
+            "separately (Dhan's daily feed is corporate-action adjusted and "
+            "reaches back to inception), not resampled from intraday data."
         )
 
     if df.empty:
@@ -86,6 +87,12 @@ def resample_candles(df: pd.DataFrame, target_timeframe: str) -> pd.DataFrame:
     if df.index.tz is None:
         raise ResampleError(
             "resample_candles requires a tz-aware UTC index (got naive timestamps)"
+        )
+
+    missing = [c for c in OHLCV_COLUMNS if c not in df.columns]
+    if missing:
+        raise ResampleError(
+            f"Frame is missing required column(s): {', '.join(missing)}"
         )
 
     frame = df.sort_index()
@@ -107,17 +114,22 @@ def resample_candles(df: pd.DataFrame, target_timeframe: str) -> pd.DataFrame:
     )
 
     # Stamp each bucket with its own session-anchored start time, computed
-    # from the bucket number rather than taken from the first candle - so a
+    # from the bucket NUMBER rather than taken from the first candle - so a
     # bucket whose opening candle is missing is still labelled correctly.
-    starts = []
-    for day, bucket in out.index:
-        offset = SESSION_OPEN_MINUTES + int(bucket) * target_minutes
-        starts.append(
-            pd.Timestamp(
-                year=day.year, month=day.month, day=day.day,
-                hour=offset // 60, minute=offset % 60, tz=IST,
-            ).tz_convert("UTC")
-        )
-
-    out.index = pd.DatetimeIndex(starts, name="ts")
+    #
+    # Vectorised deliberately: building these with pd.Timestamp() per row was
+    # ~92% of this function's runtime, and this sits on the hot read path
+    # between the database and the backtest engine.
+    #
+    # tz_localize is unambiguous here because India observes no DST, so IST
+    # wall times can never be ambiguous or nonexistent.
+    days = pd.to_datetime(out.index.get_level_values(0))
+    buckets = out.index.get_level_values(1).to_numpy()
+    offsets = SESSION_OPEN_MINUTES + buckets * target_minutes
+    out.index = (
+        pd.DatetimeIndex(days + pd.to_timedelta(offsets, unit="m"))
+        .tz_localize(IST)
+        .tz_convert("UTC")
+        .rename("ts")
+    )
     return out[OHLCV_COLUMNS].sort_index()
