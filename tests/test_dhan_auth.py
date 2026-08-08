@@ -181,3 +181,84 @@ def test_token_expiring_exactly_at_the_margin_is_renewed() -> None:
     renewed = StoredToken("renewed", NOW + TOKEN_LIFETIME)
     m = manager(store, renew=lambda: renewed, generate=lambda: pytest.fail("no"))
     assert m.get_access_token() == "renewed"
+
+
+# --- _token_from_response (pure, no network) --------------------------------
+
+
+class FakeResponse:
+    def __init__(self, status_code, payload=None, raise_json=False):
+        self.status_code = status_code
+        self._payload, self._raise = payload, raise_json
+
+    def json(self):
+        if self._raise:
+            raise ValueError("no json")
+        return self._payload
+
+
+@pytest.mark.parametrize("key", ["accessToken", "access_token"])
+def test_token_parsed_from_either_casing(key) -> None:
+    m = manager(FakeTokenStore(None))
+    token = m._token_from_response(FakeResponse(200, {key: "tok"}), "generating a token")
+    assert token.access_token == "tok"
+    assert token.expires_at == NOW + TOKEN_LIFETIME
+
+
+def test_http_error_names_the_status_but_not_the_body() -> None:
+    m = manager(FakeTokenStore(None))
+    with pytest.raises(DhanAuthError, match="HTTP 401") as exc:
+        m._token_from_response(FakeResponse(401, {"secret": "LEAKME"}), "generating a token")
+    assert "LEAKME" not in str(exc.value)
+
+
+def test_non_json_response_is_a_clear_auth_error() -> None:
+    m = manager(FakeTokenStore(None))
+    with pytest.raises(DhanAuthError, match="non-JSON"):
+        m._token_from_response(FakeResponse(200, raise_json=True), "generating a token")
+
+
+def test_missing_token_key_points_at_the_api_shape() -> None:
+    m = manager(FakeTokenStore(None))
+    with pytest.raises(DhanAuthError, match="no access token"):
+        m._token_from_response(FakeResponse(200, {"status": "ok"}), "renewing the token")
+
+
+def test_stored_token_never_appears_in_repr_or_str() -> None:
+    """A live 24h bearer credential must not reach a log line or audit row."""
+    token = StoredToken("eyJhbGciOiJIUzI1NiJ9.LIVE-BEARER", NOW)
+    text = repr(token) + str(token) + f"{token}"
+    assert "LIVE-BEARER" not in text
+    assert "<redacted>" in text
+
+
+def test_network_failure_becomes_a_clean_auth_error() -> None:
+    """A requests exception must never escape: its .request.body holds the
+    plaintext apiSecret and totp."""
+    import requests as _requests
+
+    m = DhanTokenManager(CREDS, FakeTokenStore(None), now_fn=lambda: NOW)
+
+    def boom(*a, **kw):
+        raise _requests.exceptions.ConnectionError("network down")
+
+    monkey = _requests.post
+    _requests.post = boom
+    try:
+        with pytest.raises(DhanAuthError) as exc:
+            m._post("/GenerateToken", "generating a token", json={"apiSecret": "LEAKME"})
+        assert "ConnectionError" in str(exc.value)
+        assert "LEAKME" not in str(exc.value)
+        assert exc.value.__cause__ is None      # original fully severed
+        assert exc.value.__context__ is None
+    finally:
+        _requests.post = monkey
+
+
+def test_totp_secret_with_spaces_is_accepted() -> None:
+    """Dhan's enrolment screen shows the secret grouped in fours."""
+    creds = DhanCredentials.from_env({
+        "DHAN_CLIENT_ID": "c", "DHAN_API_KEY": "k",
+        "DHAN_API_SECRET": "s", "DHAN_TOTP_SECRET": "JBSW Y3DP EHPK 3PXP",
+    })
+    assert creds.totp_secret == "JBSWY3DPEHPK3PXP"

@@ -19,6 +19,7 @@ exception message. Errors name the ENV VAR to check, never its value.
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Protocol
@@ -34,7 +35,8 @@ DHAN_API_BASE = "https://api.dhan.co/v2"
 RENEW_MARGIN = timedelta(minutes=30)
 
 TOKEN_LIFETIME = timedelta(hours=24)
-REQUEST_TIMEOUT_SECONDS = 20
+# (connect, read). A scalar would apply 20s to EACH phase.
+REQUEST_TIMEOUT_SECONDS = (5, 20)
 
 REQUIRED_ENV_VARS = (
     "DHAN_CLIENT_ID", "DHAN_API_KEY", "DHAN_API_SECRET", "DHAN_TOTP_SECRET",
@@ -51,6 +53,13 @@ class StoredToken:
 
     access_token: str
     expires_at: datetime
+
+    def __repr__(self) -> str:
+        # A live 24h bearer credential must never reach a log line, an audit
+        # row, or an f-string. Same treatment as DhanCredentials.
+        return f"StoredToken(access_token=<redacted>, expires_at={self.expires_at!r})"
+
+    __str__ = __repr__
 
 
 @dataclass(frozen=True)
@@ -84,11 +93,15 @@ class DhanCredentials:
                 "repository Secrets. Get them from web.dhan.co -> Profile -> "
                 "DhanHQ Trading APIs."
             )
+        # Dhan displays the TOTP secret grouped in fours; strip internal
+        # spaces so a natural copy-paste works. Base32 contains no spaces,
+        # so this can never corrupt a valid secret.
+        totp_secret = "".join(values["DHAN_TOTP_SECRET"].split())
         return cls(
             client_id=values["DHAN_CLIENT_ID"],
             api_key=values["DHAN_API_KEY"],
             api_secret=values["DHAN_API_SECRET"],
-            totp_secret=values["DHAN_TOTP_SECRET"],
+            totp_secret=totp_secret,
         )
 
 
@@ -121,8 +134,11 @@ class DhanTokenManager:
     def get_access_token(self) -> str:
         """Return a token valid for at least RENEW_MARGIN.
 
-        Renewal is lazy and the result is shared through the store, so
-        concurrent runs do not each mint a token.
+        Renewal is lazy and the result is cached in the shared store, so a
+        token is not minted on every run. This is NOT a distributed lock:
+        two runs starting simultaneously can both mint, and the last write
+        wins. Acceptable for a single-user system; if it ever matters, put
+        both workflows in one GitHub `concurrency` group.
         """
         current = self._store.get_token(self.provider)
         if current and current.expires_at - self._now() > RENEW_MARGIN:
@@ -133,8 +149,15 @@ class DhanTokenManager:
                 token = self._renew_token()
                 self._store.save_token(self.provider, token)
                 return token.access_token
-            except DhanAuthError:
-                pass  # fall through to a full regeneration
+            except DhanAuthError as exc:
+                # Regeneration below will most likely succeed and hide this.
+                # Surface it: persistent renewal failure means the endpoint or
+                # its contract changed and needs a look.
+                warnings.warn(
+                    f"Dhan token renewal failed, regenerating via TOTP: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         try:
             token = self._generate_token()
@@ -150,19 +173,39 @@ class DhanTokenManager:
 
     # -- network calls (patched wholesale in tests) --------------------------
 
+    def _post(self, path: str, doing: str, **kwargs: Any) -> Any:
+        """POST to Dhan, converting transport failures into DhanAuthError.
+
+        A requests exception must never escape this module: its .request
+        attribute is the PreparedRequest, whose .body is the plaintext
+        apiSecret and totp. Only the exception CLASS and the path are
+        reported, and the original is dropped entirely.
+        """
+        detail = None
+        try:
+            return requests.post(
+                f"{DHAN_API_BASE}{path}", timeout=REQUEST_TIMEOUT_SECONDS, **kwargs
+            )
+        except requests.exceptions.RequestException as exc:
+            detail = type(exc).__name__
+        # Raised OUTSIDE the except block deliberately: `raise ... from None`
+        # inside it would still leave the original reachable via
+        # __context__, and with it .request.body containing the secret.
+        raise DhanAuthError(f"Could not reach Dhan while {doing} ({detail} on {path}).")
+
     def _renew_token(self) -> StoredToken:
         """Exchange the current token for a fresh 24h one."""
         current = self._store.get_token(self.provider)
         if current is None:
             raise DhanAuthError("no token to renew")
-        response = requests.post(
-            f"{DHAN_API_BASE}/RenewToken",
+        response = self._post(
+            "/RenewToken",
+            "renewing the token",
             headers={
                 "access-token": current.access_token,
                 "client-id": self._creds.client_id,
                 "Content-Type": "application/json",
             },
-            timeout=REQUEST_TIMEOUT_SECONDS,
         )
         return self._token_from_response(response, "renewing the token")
 
@@ -170,16 +213,22 @@ class DhanTokenManager:
         """Mint a brand-new token using the TOTP second factor."""
         import pyotp
 
-        code = pyotp.TOTP(self._creds.totp_secret).now()
-        response = requests.post(
-            f"{DHAN_API_BASE}/GenerateToken",
+        try:
+            code = pyotp.TOTP(self._creds.totp_secret).now()
+        except Exception:  # binascii.Error and friends - never echo the value
+            raise DhanAuthError(
+                "DHAN_TOTP_SECRET is not valid base32. Copy it exactly as shown "
+                "at web.dhan.co -> Profile -> DhanHQ Trading APIs."
+            ) from None
+        response = self._post(
+            "/GenerateToken",
+            "generating a token",
             json={
                 "clientId": self._creds.client_id,
                 "apiKey": self._creds.api_key,
                 "apiSecret": self._creds.api_secret,
                 "totp": code,
             },
-            timeout=REQUEST_TIMEOUT_SECONDS,
         )
         return self._token_from_response(response, "generating a token")
 
@@ -188,7 +237,8 @@ class DhanTokenManager:
         if response.status_code >= 400:
             raise DhanAuthError(
                 f"Dhan rejected the request while {doing} "
-                f"(HTTP {response.status_code})."
+                f"(HTTP {response.status_code}). If this is a TOTP rejection, "
+                "check the system clock - TOTP tolerates only ~30s of skew."
             )
         try:
             payload = response.json()
