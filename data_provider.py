@@ -15,6 +15,13 @@ which provider is active.
 Selected with DATA_PROVIDER in .env / GitHub Secrets:
     yfinance (default) - free, no keys, no daily login
     kite               - paid Kite Connect plan + daily login.py
+    dhan               - free, 5y intraday history, cached in Supabase
+
+NOTE: `dhan` returns a `CandleStore` (get_candles/ensure_coverage), a
+different interface from the `yfinance`/`kite` MarketDataClient
+(fetch_historical_candles/resolve_instrument_tokens). Existing callers
+(backtest.py, paper_engine.py) are not yet updated for this - see Task 12's
+report for details.
 """
 
 from __future__ import annotations
@@ -41,13 +48,25 @@ def create_data_client(settings: Settings, store: SupabaseStore, today_ist: date
 
         return YFinanceMarketDataClient()
 
+    if provider == "dhan":
+        # Dhan reads through the candle store, so backtests hit Supabase and
+        # work with the market closed. That requires a Supabase connection.
+        from dhan_factory import create_candle_store
+
+        if store is None:
+            raise RuntimeError(
+                "The dhan provider needs a Supabase connection (it caches "
+                "candles there). Remove --no-db, or set DATA_PROVIDER=yfinance."
+            )
+        return create_candle_store(store._client)
+
     if provider == "kite":
         from kite_client import MarketDataClient
 
         return MarketDataClient.from_stored_token(settings, store, today_ist)
 
     raise RuntimeError(
-        f"Unknown DATA_PROVIDER {provider!r}. Supported: yfinance, kite."
+        f"Unknown DATA_PROVIDER {provider!r}. Supported: yfinance, kite, dhan."
     )
 
 
@@ -55,4 +74,6 @@ def describe_provider(settings: Settings) -> str:
     """One-line human summary for logs and audit rows (never includes keys)."""
     if settings.data_provider == "yfinance":
         return "yfinance (free; 15m/30m history limited to ~60 days)"
+    if settings.data_provider == "dhan":
+        return "dhan (free; 5 years of 5-minute history, cached in Supabase)"
     return "kite (Kite Connect; requires the daily login token)"
