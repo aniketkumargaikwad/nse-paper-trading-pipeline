@@ -106,3 +106,68 @@ def test_describe_provider_mentions_dhan_without_leaking_keys() -> None:
     assert "dhan" in text.lower()
     assert "SECRETKEY" not in text
     assert "KITEKEY" not in text
+
+
+def test_adapter_presents_the_market_data_client_interface() -> None:
+    """The engines call this interface; dhan must satisfy it."""
+    from dhan_factory import CandleStoreDataClient
+
+    class FakeStore:
+        def get_candles(self, *a, **kw): ...
+
+    client = CandleStoreDataClient(FakeStore())
+    for method in ("resolve_instrument_tokens", "fetch_historical_candles",
+                   "max_history_days"):
+        assert callable(getattr(client, method)), f"missing {method}"
+    assert client.requires_daily_login is False
+
+
+def test_symbols_are_their_own_handles() -> None:
+    from dhan_factory import CandleStoreDataClient
+    import datetime as _dt
+
+    client = CandleStoreDataClient(object())
+    out = client.resolve_instrument_tokens(
+        ["NSE:RELIANCE", "NSE:TCS", "NSE:RELIANCE"], _dt.date.today()
+    )
+    assert out == {"NSE:RELIANCE": "NSE:RELIANCE", "NSE:TCS": "NSE:TCS"}
+
+
+def test_adapter_drops_the_forming_candle_by_default() -> None:
+    """The hard rule: decisions are made on CLOSED candles only."""
+    import numpy as np
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+
+    from dhan_factory import CandleStoreDataClient
+
+    IST = ZoneInfo("Asia/Kolkata")
+    UTCZ = timezone.utc
+    start = datetime(2026, 8, 3, 9, 15, tzinfo=IST)
+    idx = pd.DatetimeIndex(
+        [(start + timedelta(minutes=15 * i)).astimezone(UTCZ) for i in range(3)],
+        name="ts",
+    )
+    frame = pd.DataFrame(
+        {"open": np.full(3, 100.0), "high": np.full(3, 101.0),
+         "low": np.full(3, 99.0), "close": np.full(3, 100.5),
+         "volume": np.full(3, 10.0)},
+        index=idx,
+    )
+
+    class FakeStore:
+        def get_candles(self, symbol, timeframe, from_utc, to_utc):
+            return frame
+
+    client = CandleStoreDataClient(FakeStore())
+    # 09:50 IST: the 09:45 candle has not closed yet.
+    now = datetime(2026, 8, 3, 9, 50, tzinfo=IST).astimezone(UTCZ)
+    closed = client.fetch_historical_candles(
+        "NSE:RELIANCE", "15m", idx[0], now, closed_only=True, now_utc=now
+    )
+    assert len(closed) == 2
+    raw = client.fetch_historical_candles(
+        "NSE:RELIANCE", "15m", idx[0], now, closed_only=False, now_utc=now
+    )
+    assert len(raw) == 3

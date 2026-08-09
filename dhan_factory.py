@@ -7,9 +7,14 @@ only place that knows how the pieces fit together.
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Sequence
 
+import pandas as pd
+
+from config import UTC
 from instruments import InstrumentError, split_symbol
+from kite_client import drop_forming_candle
 
 
 class SupabaseInstrumentResolver:
@@ -79,3 +84,58 @@ def create_candle_store(client: Any):
         backend=SupabaseCandleBackend(client),
         provider=create_dhan_provider(client),
     )
+
+
+def create_dhan_data_client(client: Any) -> CandleStoreDataClient:
+    """Build the engine-facing client: a CandleStore behind the
+    MarketDataClient interface the engines already speak."""
+    return CandleStoreDataClient(create_candle_store(client))
+
+
+class CandleStoreDataClient:
+    """Presents the MarketDataClient interface on top of a CandleStore.
+
+    The engines (backtest.py, paper_engine.py) were written against the
+    fetch_historical_candles / resolve_instrument_tokens interface. The candle
+    store deliberately has a different, smaller one. Rather than change either
+    - the store stays clean, the engines stay untouched - this adapter sits
+    between them.
+
+    The 'instrument token' for a store-backed client is just the symbol: the
+    store resolves real Dhan security IDs internally, so callers never see them.
+    """
+
+    name = "dhan"
+    requires_daily_login = False
+
+    def __init__(self, store: Any) -> None:
+        self._store = store
+
+    def resolve_instrument_tokens(
+        self, instruments: Sequence[str], today_ist: date
+    ) -> dict[str, str]:
+        """Symbols are their own handles here; no lookup is needed."""
+        return {symbol: symbol for symbol in dict.fromkeys(instruments)}
+
+    def fetch_historical_candles(
+        self,
+        instrument_token: str,
+        timeframe: str,
+        from_utc: datetime,
+        to_utc: datetime,
+        *,
+        closed_only: bool = True,
+        now_utc: datetime | None = None,
+    ) -> pd.DataFrame:
+        """Read from the store, dropping the still-forming candle by default.
+
+        closed_only enforces the platform's hard rule that decisions are made
+        on CLOSED candles only - never the one still forming.
+        """
+        df = self._store.get_candles(instrument_token, timeframe, from_utc, to_utc)
+        if closed_only:
+            df = drop_forming_candle(df, timeframe, now_utc or datetime.now(tz=UTC))
+        return df
+
+    def max_history_days(self, timeframe: str) -> int:
+        return self._store._provider.max_history_days(timeframe)

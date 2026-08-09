@@ -17,11 +17,10 @@ Selected with DATA_PROVIDER in .env / GitHub Secrets:
     kite               - paid Kite Connect plan + daily login.py
     dhan               - free, 5y intraday history, cached in Supabase
 
-NOTE: `dhan` returns a `CandleStore` (get_candles/ensure_coverage), a
-different interface from the `yfinance`/`kite` MarketDataClient
-(fetch_historical_candles/resolve_instrument_tokens). Existing callers
-(backtest.py, paper_engine.py) are not yet updated for this - see Task 12's
-report for details.
+`dhan` is backed by a `CandleStore` (get_candles/ensure_coverage) internally,
+but is presented to callers through an adapter (CandleStoreDataClient in
+dhan_factory.py) so every provider satisfies the same MarketDataClient
+interface above.
 """
 
 from __future__ import annotations
@@ -51,14 +50,14 @@ def create_data_client(settings: Settings, store: SupabaseStore, today_ist: date
     if provider == "dhan":
         # Dhan reads through the candle store, so backtests hit Supabase and
         # work with the market closed. That requires a Supabase connection.
-        from dhan_factory import create_candle_store
+        from dhan_factory import create_dhan_data_client
 
         if store is None:
             raise RuntimeError(
                 "The dhan provider needs a Supabase connection (it caches "
                 "candles there). Remove --no-db, or set DATA_PROVIDER=yfinance."
             )
-        return create_candle_store(store._client)
+        return create_dhan_data_client(store._client)
 
     if provider == "kite":
         from kite_client import MarketDataClient
