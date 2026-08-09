@@ -98,8 +98,9 @@ credentials.) If this fails, stop and fix Python before anything else.
 Copy-Item .env.example .env
 notepad .env
 ```
-Leave `notepad` open — you will paste four values into it during 2.3 and 2.4.
-The `.env` file is **git-ignored**; it never leaves your laptop.
+Leave `notepad` open — you will paste values into it during 2.3 (market data)
+and 2.4 (Supabase). The `.env` file is **git-ignored**; it never leaves your
+laptop.
 
 ### 2.3 Market data — Dhan (free, precise, 5 years of history)
 
