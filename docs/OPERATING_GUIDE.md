@@ -87,9 +87,10 @@ python -m venv .venv
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/ -q
 ```
-Expected: `133 passed`. This proves the code and all libraries are healthy —
-**no internet accounts needed yet.** If this fails, stop and fix Python before
-anything else.
+Expected: `367 passed, 1 skipped`. This proves the code and all libraries are
+healthy — **no internet accounts needed yet.** (The one skip is the Dhan
+fixture test; it un-skips once you run `scripts\verify_dhan_live.py` with Dhan
+credentials.) If this fails, stop and fix Python before anything else.
 
 ### 2.2 Create your local secrets file (laptop)
 
