@@ -14,6 +14,7 @@ from instruments import (  # noqa: E402
     SYMBOL_RE,
     Instrument,
     InstrumentError,
+    deduplicate_by_symbol,
     parse_security_master,
     split_symbol,
 )
@@ -172,6 +173,55 @@ def test_missing_column_names_every_absent_column() -> None:
     message = str(exc.value)
     assert "SEM_EXM_EXCH_ID" in message
     assert "SEM_SERIES" in message
+
+
+# --- symbol collisions -------------------------------------------------------
+
+
+def test_equity_wins_when_an_index_shares_its_ticker() -> None:
+    """Real case: BSE:METAL is both a Mirae ETF and a BSE index. An index
+    must never shadow a tradable ticker."""
+    rows = csv_rows(
+        "BSE,E,544268,EQUITY,0,METAL,1.0,Mirae ETF,,,,5.0000,NA,ES,A,Mirae Asset Mutual Fund",
+        "BSE,I,75,INDEX,0,METAL,1.0,Metal Index,,,,0.0000,NA,IX,X,METAL",
+    )
+    found = parse_security_master(rows, refreshed_on=date(2026, 8, 3))
+    assert len(found) == 1
+    assert found[0].symbol == "BSE:METAL"
+    assert found[0].instrument_type == "EQUITY"
+    assert found[0].dhan_security_id == "544268"
+
+
+def test_lower_security_id_wins_between_same_type_rows() -> None:
+    """Real case: BSE:CAPINS appears twice as an INDEX (ids 99 and 846).
+    The tie-break must be deterministic across runs."""
+    rows = csv_rows(
+        "BSE,I,846,INDEX,0,CAPINS,1.0,Cap Ins,,,,0.0000,NA,IX,X,CAPINS",
+        "BSE,I,99,INDEX,0,CAPINS,1.0,Cap Ins,,,,0.0000,NA,IX,X,CAPINS",
+    )
+    found = parse_security_master(rows, refreshed_on=date(2026, 8, 3))
+    assert len(found) == 1
+    assert found[0].dhan_security_id == "99"
+
+
+def test_dedup_is_order_independent() -> None:
+    """Same input in either order must give the same winner."""
+    a = "BSE,E,544268,EQUITY,0,METAL,1.0,Mirae ETF,,,,5.0000,NA,ES,A,Mirae Asset Mutual Fund"
+    b = "BSE,I,75,INDEX,0,METAL,1.0,Metal Index,,,,0.0000,NA,IX,X,METAL"
+    first = parse_security_master(csv_rows(a, b), refreshed_on=date(2026, 8, 3))
+    second = parse_security_master(csv_rows(b, a), refreshed_on=date(2026, 8, 3))
+    assert first[0].dhan_security_id == second[0].dhan_security_id == "544268"
+
+
+def test_no_duplicate_symbols_survive_parsing() -> None:
+    rows = csv_rows(
+        RELIANCE,
+        "BSE,E,544268,EQUITY,0,METAL,1.0,Mirae ETF,,,,5.0000,NA,ES,A,Mirae Asset Mutual Fund",
+        "BSE,I,75,INDEX,0,METAL,1.0,Metal Index,,,,0.0000,NA,IX,X,METAL",
+    )
+    found = parse_security_master(rows, refreshed_on=date(2026, 8, 3))
+    symbols = [i.symbol for i in found]
+    assert len(symbols) == len(set(symbols))
 
 
 # --- row shaping ------------------------------------------------------------

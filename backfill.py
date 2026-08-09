@@ -96,6 +96,11 @@ def refresh_instruments(client) -> int:
     written = SupabaseCandleBackend(client).upsert_instruments(
         [i.to_row() for i in found]
     )
+    if written < len(found):
+        print(
+            f"  note: collapsed {len(found) - written} duplicate symbol(s) "
+            "(Dhan's master lets an ETF and an index share a ticker)."
+        )
     print(f"Stored {written} instruments.")
     return 0
 

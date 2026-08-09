@@ -32,6 +32,22 @@ guessing, they were confirmed by downloading and inspecting the real CSV:
   scrips (series 'SM'). The SEM_SERIES column must be filtered per exchange
   (see EQUITY_SERIES_BY_EXCHANGE) or bonds and SME scrips leak into the
   instruments table as if they were equities.
+
+* 'EXCHANGE:TRADINGSYMBOL' is NOT a unique key in Dhan's universe, even after
+  all the filtering above. Verified against the live file (2026-08-08, 5,259
+  parsed instruments, exactly 4 collisions): on BSE an ETF and an index can
+  legitimately share a ticker (METAL, ENERGY, INFRA - e.g. BSE:METAL is both
+  the Mirae Asset METAL ETF, id 544268, and the BSE METAL index, id 75), and
+  two distinct index rows can carry the identical name (CAPINS, ids 99 and
+  846). `instruments.symbol` is UNIQUE and Postgres additionally rejects an
+  upsert batch containing the same conflict target twice, so collisions must
+  be resolved deterministically before the table is written. See
+  `deduplicate_by_symbol`: EQUITY always wins over INDEX (this platform
+  trades equities; an index must never shadow a tradable ticker - so
+  BSE:METAL resolves to the ETF, and the BSE METAL index is unreachable under
+  that name, an accepted, documented limitation), and within the same
+  instrument type the lower numeric security id wins, purely so the same
+  input file always produces the same table.
 """
 
 from __future__ import annotations
@@ -99,6 +115,12 @@ SEGMENT_BY_EXCHANGE: dict[tuple[str, str], str] = {
 }
 
 
+# Instrument types in precedence order when two rows claim the same symbol.
+# EQUITY first: this platform trades equities, and an index must never
+# shadow a tradable ticker.
+_TYPE_PRECEDENCE = {"EQUITY": 0, "INDEX": 1}
+
+
 class InstrumentError(ValueError):
     """A symbol or the security master could not be understood."""
 
@@ -131,6 +153,45 @@ class Instrument:
             "is_active": True,
             "refreshed_on": self.refreshed_on.isoformat(),
         }
+
+
+def _collision_rank(instrument: "Instrument") -> tuple[int, int]:
+    """Sort key deciding which row wins a duplicated symbol.
+
+    Lower sorts first and wins. Ties break on the numeric security id so the
+    same input file always yields the same table.
+    """
+    try:
+        security_id = int(instrument.dhan_security_id)
+    except (TypeError, ValueError):
+        security_id = 2**31
+    return (_TYPE_PRECEDENCE.get(instrument.instrument_type, 99), security_id)
+
+
+def deduplicate_by_symbol(instruments: list["Instrument"]) -> list["Instrument"]:
+    """Keep exactly one Instrument per symbol, deterministically.
+
+    Dhan's master genuinely contains symbol collisions: on BSE an ETF and an
+    index can share a ticker (METAL, ENERGY, INFRA), and two index rows can
+    carry the same name (CAPINS, ids 99 and 846). `instruments.symbol` is
+    UNIQUE, and Postgres additionally rejects an upsert batch containing the
+    same conflict-target twice - so the choice must be made here, and made
+    the same way every run.
+    """
+    best: dict[str, Instrument] = {}
+    for instrument in instruments:
+        current = best.get(instrument.symbol)
+        if current is None or _collision_rank(instrument) < _collision_rank(current):
+            best[instrument.symbol] = instrument
+    # Preserve first-seen order for stable, reviewable output.
+    seen: set[str] = set()
+    ordered: list[Instrument] = []
+    for instrument in instruments:
+        if instrument.symbol in seen:
+            continue
+        seen.add(instrument.symbol)
+        ordered.append(best[instrument.symbol])
+    return ordered
 
 
 def split_symbol(symbol: str) -> tuple[str, str]:
@@ -223,4 +284,4 @@ def parse_security_master(
             lot_size=lot_size,
             refreshed_on=refreshed_on,
         ))
-    return out
+    return deduplicate_by_symbol(out)

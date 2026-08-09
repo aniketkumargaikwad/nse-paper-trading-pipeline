@@ -181,19 +181,25 @@ class SupabaseCandleBackend:
         return instrument_id
 
     def upsert_instruments(self, rows: list[dict[str, Any]]) -> int:
-        """Store security-master rows (used by the backfill CLI's refresh).
+        """Store security-master rows. Returns how many were written.
 
-        Chunked like candle writes. Returns how many rows were sent.
+        Duplicate symbols are collapsed first: Postgres rejects an upsert
+        whose batch contains the same conflict target twice ("ON CONFLICT DO
+        UPDATE command cannot affect row a second time"), and that error names
+        nothing useful. Callers apply their own precedence before this point;
+        this is a last-resort guard.
         """
         if not rows:
             return 0
-        for i in range(0, len(rows), WRITE_CHUNK_SIZE):
-            chunk = rows[i:i + WRITE_CHUNK_SIZE]
+        deduped = {row["symbol"]: row for row in rows}
+        unique_rows = list(deduped.values())
+        for i in range(0, len(unique_rows), WRITE_CHUNK_SIZE):
+            chunk = unique_rows[i:i + WRITE_CHUNK_SIZE]
             try:
                 self._table("instruments").upsert(chunk, on_conflict="symbol").execute()
             except APIError as exc:
                 raise self._wrap(exc, "writing instruments") from exc
-        return len(rows)
+        return len(unique_rows)
 
     # -- candles ------------------------------------------------------------
 

@@ -175,6 +175,20 @@ def test_instrument_id_resolves_and_caches() -> None:
     assert len(selects) == 1, "second lookup should hit the memo, not the database"
 
 
+def test_upsert_instruments_collapses_duplicate_symbols() -> None:
+    """Postgres rejects an upsert batch containing the same conflict target
+    twice, with an error that names nothing useful."""
+    client = FakeClient()
+    written = SupabaseCandleBackend(client).upsert_instruments([
+        {"symbol": "NSE:RELIANCE", "dhan_security_id": "2885"},
+        {"symbol": "NSE:RELIANCE", "dhan_security_id": "2885"},
+        {"symbol": "NSE:TCS", "dhan_security_id": "11536"},
+    ])
+    assert written == 2
+    payload = [c for c in client.calls if c["table"] == "instruments"][0]["payload"]
+    assert len({row["symbol"] for row in payload}) == 2
+
+
 def test_unknown_instrument_says_how_to_fix_it() -> None:
     backend = SupabaseCandleBackend(FakeClient({"instruments": []}))
     with pytest.raises(Exception, match="refresh-instruments"):
