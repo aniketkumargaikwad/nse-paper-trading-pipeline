@@ -10,6 +10,28 @@ ASSUMPTION: Dhan's master uses the SEM_* column names below. They are checked
 explicitly at parse time, so a format change fails loudly and immediately
 rather than producing silently wrong security IDs - which would fetch candles
 for the WRONG STOCK, the worst failure this module could have.
+
+VERIFIED FACTS (from the live file, 2026-08-08) - do not re-derive these by
+guessing, they were confirmed by downloading and inspecting the real CSV:
+
+* There are TWO different master files with DIFFERENT schemas. The
+  "-detailed" file (api-scrip-master-detailed.csv) has 33 columns with NO
+  `SEM_` prefix. The COMPACT file (api-scrip-master.csv, see
+  SECURITY_MASTER_URL below) has 16 columns WITH the `SEM_` prefix. This
+  module targets the compact file - do not repoint it at the detailed one.
+
+* Security IDs are unique only WITHIN a segment, not globally. Id '2885' is
+  RELIANCE (NSE, segment 'E' - equity) but is ALSO 'EURINR-Aug2025-102.75-CE'
+  (NSE, segment 'C' - currency derivative). Filtering by security id alone,
+  without also constraining exchange+segment, would resolve a symbol to the
+  wrong instrument and silently fetch someone else's candles into its cache.
+
+* Segment 'E' (equity) is not synonymous with "ordinary tradable stock" - it
+  also carries government securities (series like 'SG', 'GS' - e.g.
+  '757GS2033' is a 2033-maturity government bond, not a stock) and SME-board
+  scrips (series 'SM'). The SEM_SERIES column must be filtered per exchange
+  (see EQUITY_SERIES_BY_EXCHANGE) or bonds and SME scrips leak into the
+  instruments table as if they were equities.
 """
 
 from __future__ import annotations
@@ -21,8 +43,10 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Iterable
 
-# Dhan publishes the detailed security master here.
-SECURITY_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
+# Dhan publishes the COMPACT security master here: 16 columns, SEM_-prefixed.
+# There is also an "-detailed" file at a similar URL with a totally
+# different, un-prefixed 33-column schema - do not point at that one.
+SECURITY_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 
 # 'EXCHANGE:TRADINGSYMBOL' in capitals. & and - appear in real NSE symbols
 # (M&M, BAJAJ-AUTO).
@@ -36,11 +60,34 @@ COLUMN_SEGMENT = "SEM_SEGMENT"
 COLUMN_INSTRUMENT = "SEM_INSTRUMENT_NAME"
 COLUMN_LOT = "SEM_LOT_UNITS"
 COLUMN_NAME = "SM_SYMBOL_NAME"
+COLUMN_SERIES = "SEM_SERIES"
+
+# SEM_CUSTOM_SYMBOL is an optional fallback for COLUMN_NAME - it is not
+# required to be present, so it is deliberately left out of REQUIRED_COLUMNS.
+COLUMN_CUSTOM_SYMBOL = "SEM_CUSTOM_SYMBOL"
 
 REQUIRED_COLUMNS = (
     COLUMN_SECURITY_ID, COLUMN_TRADING_SYMBOL, COLUMN_EXCHANGE,
-    COLUMN_SEGMENT, COLUMN_INSTRUMENT,
+    COLUMN_SEGMENT, COLUMN_INSTRUMENT, COLUMN_SERIES,
 )
+
+# Dhan's SEM_SEGMENT codes we support. Everything else (D=derivatives,
+# C=currency, M=commodity) is skipped: this platform trades cash equity and
+# reads indices, nothing else.
+SEGMENT_EQUITY = "E"
+SEGMENT_INDEX = "I"
+
+# Which series count as ordinary cash equity, PER EXCHANGE. This filter is
+# load-bearing: NSE segment E also carries government securities (series SG,
+# GS), SME scrips (SM) and others - e.g. '757GS2033' is a bond, not a stock.
+# BSE uses entirely different group codes and has NO 'EQ' series at all, so a
+# single shared set would silently exclude every BSE listing.
+EQUITY_SERIES_BY_EXCHANGE: dict[str, frozenset[str]] = {
+    # EQ is the main NSE board; BE is the trade-for-trade surveillance series.
+    "NSE": frozenset({"EQ", "BE"}),
+    # BSE group codes: A and B are the main equity groups.
+    "BSE": frozenset({"A", "B"}),
+}
 
 # Dhan's exchangeSegment values, keyed by (exchange, our instrument type).
 # Anything not listed here is a segment we do not support and is skipped.
@@ -125,8 +172,25 @@ def parse_security_master(
     for row in reader:
         exchange = (row.get(COLUMN_EXCHANGE) or "").strip().upper()
         tradingsymbol = (row.get(COLUMN_TRADING_SYMBOL) or "").strip().upper()
+        segment = (row.get(COLUMN_SEGMENT) or "").strip().upper()
+        instrument_name = (row.get(COLUMN_INSTRUMENT) or "").strip().upper()
+        series = (row.get(COLUMN_SERIES) or "").strip().upper()
         if not exchange or not tradingsymbol:
             continue
+
+        if segment == SEGMENT_EQUITY and instrument_name == "EQUITY":
+            instrument_type = "EQUITY"
+            # Segment E also carries government securities (series SG/GS) and
+            # SME scrips (series SM) - only real equity series belong here.
+            if series not in EQUITY_SERIES_BY_EXCHANGE.get(exchange, frozenset()):
+                continue
+        elif segment == SEGMENT_INDEX and instrument_name == "INDEX":
+            instrument_type = "INDEX"
+            # Real index names contain spaces ('NIFTY MIDCAP 150'); strip
+            # them so the symbol is typeable and matches SYMBOL_RE.
+            tradingsymbol = "".join(tradingsymbol.split())
+        else:
+            continue  # derivatives, currency, commodity - not supported
 
         symbol = f"{exchange}:{tradingsymbol}"
         if keep is not None and symbol not in keep:
@@ -134,11 +198,9 @@ def parse_security_master(
         if not SYMBOL_RE.match(symbol):
             continue  # exotic contract names we do not support
 
-        instrument_name = (row.get(COLUMN_INSTRUMENT) or "").strip().upper()
-        instrument_type = "INDEX" if "INDEX" in instrument_name else "EQUITY"
-        segment = SEGMENT_BY_EXCHANGE.get((exchange, instrument_type))
-        if segment is None:
-            continue  # a segment we do not support (e.g. F&O)
+        dhan_segment = SEGMENT_BY_EXCHANGE.get((exchange, instrument_type))
+        if dhan_segment is None:
+            continue  # an exchange/type combination we do not support
 
         lot_raw = (row.get(COLUMN_LOT) or "").strip()
         try:
@@ -146,13 +208,17 @@ def parse_security_master(
         except ValueError:
             lot_size = None
 
+        name = (row.get(COLUMN_NAME) or "").strip()
+        if not name:
+            name = (row.get(COLUMN_CUSTOM_SYMBOL) or "").strip()
+
         out.append(Instrument(
             symbol=symbol,
             exchange=exchange,
             tradingsymbol=tradingsymbol,
             dhan_security_id=(row.get(COLUMN_SECURITY_ID) or "").strip(),
-            dhan_segment=segment,
-            name=(row.get(COLUMN_NAME) or "").strip() or None,
+            dhan_segment=dhan_segment,
+            name=name or None,
             instrument_type=instrument_type,
             lot_size=lot_size,
             refreshed_on=refreshed_on,

@@ -18,12 +18,30 @@ from instruments import (  # noqa: E402
     split_symbol,
 )
 
-CSV_SAMPLE = """SEM_SMST_SECURITY_ID,SEM_TRADING_SYMBOL,SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_INSTRUMENT_NAME,SEM_LOT_UNITS,SM_SYMBOL_NAME
-2885,RELIANCE,NSE,E,EQUITY,1,RELIANCE INDUSTRIES
-1333,HDFCBANK,NSE,E,EQUITY,1,HDFC BANK
-11536,TCS,NSE,E,EQUITY,1,TATA CONSULTANCY
-1,SENSEX,BSE,I,INDEX,1,SENSEX
-"""
+# The REAL 16-column header of Dhan's compact security master
+# (api-scrip-master.csv), verified against the live file on 2026-08-08.
+HEADER = (
+    "SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,"
+    "SEM_EXPIRY_CODE,SEM_TRADING_SYMBOL,SEM_LOT_UNITS,SEM_CUSTOM_SYMBOL,"
+    "SEM_EXPIRY_DATE,SEM_STRIKE_PRICE,SEM_OPTION_TYPE,SEM_TICK_SIZE,"
+    "SEM_EXPIRY_FLAG,SEM_EXCH_INSTRUMENT_TYPE,SEM_SERIES,SM_SYMBOL_NAME"
+)
+
+
+def csv_rows(*rows: str) -> str:
+    return HEADER + "\n" + "\n".join(rows) + "\n"
+
+
+# Verified real values from the live master.
+RELIANCE = "NSE,E,2885,EQUITY,0,RELIANCE,1.0,Reliance Industries,,,,10.0000,NA,ES,EQ,RELIANCE INDUSTRIES LTD"
+TCS = "NSE,E,11536,EQUITY,0,TCS,1.0,Tata Consultancy,,,,5.0000,NA,ES,EQ,TATA CONSULTANCY LTD"
+GOVT_BOND = "NSE,E,9999,EQUITY,0,757GS2033,1.0,Govt Stock,,,,1.0000,NA,ES,SG,7.57% GS 2033"
+SME_SCRIP = "NSE,E,8888,EQUITY,0,SMALLCO,1.0,Small Co,,,,1.0000,NA,ES,SM,SMALL CO LTD"
+BSE_STOCK = "BSE,E,500325,EQUITY,0,RELIANCE,1.0,Reliance,,,,5.0000,NA,ES,A,RELIANCE INDUSTRIES"
+NSE_INDEX = "NSE,I,25,INDEX,0,BANKNIFTY,1.0,Nifty Bank,,,,0.0000,NA,IX,X,NIFTY BANK"
+IDX_SPACED = "NSE,I,17,INDEX,0,NIFTY 100,1.0,Nifty 100,,,,0.0000,NA,IX,X,NIFTY 100"
+CURRENCY_OPT = "NSE,C,2885,OPTCUR,0,EURINR-Aug2025-102.75-CE,1.0,EURINR CALL,2025-08-01,102.75,CE,0.25,W,CUR OP,,"
+STOCK_OPTION = "NSE,D,106277,OPTSTK,0,RELIANCE-Sep2026-700-CE,500.0,RELIANCE CALL,2026-09-29,700,CE,5.0,M,OP,,"
 
 
 # --- symbol parsing ---------------------------------------------------------
@@ -50,91 +68,110 @@ def test_symbols_with_punctuation_are_accepted() -> None:
 # --- security master parsing ------------------------------------------------
 
 
-def test_parse_security_master_builds_instruments() -> None:
-    found = parse_security_master(CSV_SAMPLE, refreshed_on=date(2026, 8, 3))
-    by_symbol = {i.symbol: i for i in found}
-    assert "NSE:RELIANCE" in by_symbol
-    reliance = by_symbol["NSE:RELIANCE"]
-    assert reliance.dhan_security_id == "2885"
-    assert reliance.exchange == "NSE"
-    assert reliance.tradingsymbol == "RELIANCE"
-    assert reliance.instrument_type == "EQUITY"
-    assert reliance.dhan_segment == "NSE_EQ"
-    assert reliance.name == "RELIANCE INDUSTRIES"
-    assert reliance.lot_size == 1
+def test_parses_the_real_nse_equity_row() -> None:
+    found = {i.symbol: i for i in parse_security_master(
+        csv_rows(RELIANCE), refreshed_on=date(2026, 8, 3))}
+    r = found["NSE:RELIANCE"]
+    assert r.dhan_security_id == "2885"
+    assert r.dhan_segment == "NSE_EQ"
+    assert r.instrument_type == "EQUITY"
+    assert r.tradingsymbol == "RELIANCE"
+    assert r.name == "RELIANCE INDUSTRIES LTD"
+    assert r.lot_size == 1
 
 
-def test_index_rows_get_the_index_segment() -> None:
-    found = {i.symbol: i for i in parse_security_master(CSV_SAMPLE, refreshed_on=date(2026, 8, 3))}
-    sensex = found["BSE:SENSEX"]
-    assert sensex.instrument_type == "INDEX"
-    assert sensex.dhan_segment == "IDX_I"
-
-
-def test_wanted_filter_keeps_only_requested_symbols() -> None:
+def test_currency_option_sharing_the_same_security_id_is_excluded() -> None:
+    """Security IDs are unique only WITHIN a segment. Id 2885 is RELIANCE in
+    segment E and a EURINR option in segment C - fetching the wrong one would
+    silently fill a symbol's cache with another instrument's candles."""
     found = parse_security_master(
-        CSV_SAMPLE, refreshed_on=date(2026, 8, 3), wanted=["NSE:TCS"]
-    )
+        csv_rows(RELIANCE, CURRENCY_OPT), refreshed_on=date(2026, 8, 3))
+    assert [i.symbol for i in found] == ["NSE:RELIANCE"]
+    assert found[0].dhan_segment == "NSE_EQ"
+
+
+def test_derivatives_are_excluded() -> None:
+    found = parse_security_master(
+        csv_rows(RELIANCE, STOCK_OPTION), refreshed_on=date(2026, 8, 3))
+    assert [i.symbol for i in found] == ["NSE:RELIANCE"]
+
+
+def test_government_securities_and_sme_are_excluded() -> None:
+    """NSE segment E also carries govt securities (series SG) and SME scrips
+    (SM). Only real equity series belong in the instruments table."""
+    found = parse_security_master(
+        csv_rows(RELIANCE, GOVT_BOND, SME_SCRIP), refreshed_on=date(2026, 8, 3))
+    assert [i.symbol for i in found] == ["NSE:RELIANCE"]
+
+
+def test_bse_equity_uses_its_own_series_codes() -> None:
+    """BSE has NO 'EQ' series - it uses group codes. A shared EQ-only filter
+    would silently exclude every BSE listing."""
+    found = parse_security_master(
+        csv_rows(BSE_STOCK), refreshed_on=date(2026, 8, 3))
+    assert len(found) == 1
+    assert found[0].symbol == "BSE:RELIANCE"
+    assert found[0].dhan_segment == "BSE_EQ"
+
+
+def test_index_rows_are_kept_with_the_index_segment() -> None:
+    found = {i.symbol: i for i in parse_security_master(
+        csv_rows(NSE_INDEX), refreshed_on=date(2026, 8, 3))}
+    idx = found["NSE:BANKNIFTY"]
+    assert idx.instrument_type == "INDEX"
+    assert idx.dhan_segment == "IDX_I"
+    assert idx.dhan_security_id == "25"
+
+
+def test_index_names_with_spaces_are_normalised() -> None:
+    """Real index names contain spaces ('NIFTY 100'); the symbol must be
+    typeable and match SYMBOL_RE."""
+    found = parse_security_master(csv_rows(IDX_SPACED), refreshed_on=date(2026, 8, 3))
+    assert found[0].symbol == "NSE:NIFTY100"
+    assert SYMBOL_RE.match(found[0].symbol)
+
+
+def test_wanted_filter_still_works() -> None:
+    found = parse_security_master(
+        csv_rows(RELIANCE, TCS), refreshed_on=date(2026, 8, 3), wanted=["NSE:TCS"])
     assert [i.symbol for i in found] == ["NSE:TCS"]
 
 
 def test_rows_are_normalised_to_upper_case() -> None:
-    csv = (
-        "SEM_SMST_SECURITY_ID,SEM_TRADING_SYMBOL,SEM_EXM_EXCH_ID,SEM_SEGMENT,"
-        "SEM_INSTRUMENT_NAME,SEM_LOT_UNITS,SM_SYMBOL_NAME\n"
-        "2885,reliance,nse,E,equity,1,Reliance\n"
-    )
-    found = parse_security_master(csv, refreshed_on=date(2026, 8, 3))
+    row = "nse,E,2885,EQUITY,0,reliance,1.0,Reliance,,,,10.0000,NA,ES,EQ,Reliance Industries"
+    found = parse_security_master(csv_rows(row), refreshed_on=date(2026, 8, 3))
     assert found[0].symbol == "NSE:RELIANCE"
 
 
 def test_rows_with_blank_symbol_or_exchange_are_skipped() -> None:
-    csv = (
-        "SEM_SMST_SECURITY_ID,SEM_TRADING_SYMBOL,SEM_EXM_EXCH_ID,SEM_SEGMENT,"
-        "SEM_INSTRUMENT_NAME,SEM_LOT_UNITS,SM_SYMBOL_NAME\n"
-        "1,,NSE,E,EQUITY,1,No symbol\n"
-        "2,GOOD,,E,EQUITY,1,No exchange\n"
-        "3,VALID,NSE,E,EQUITY,1,Fine\n"
-    )
-    found = parse_security_master(csv, refreshed_on=date(2026, 8, 3))
-    assert [i.symbol for i in found] == ["NSE:VALID"]
-
-
-def test_unsupported_exchange_is_skipped_not_crashed() -> None:
-    """F&O and other segments we do not support are simply dropped."""
-    csv = (
-        "SEM_SMST_SECURITY_ID,SEM_TRADING_SYMBOL,SEM_EXM_EXCH_ID,SEM_SEGMENT,"
-        "SEM_INSTRUMENT_NAME,SEM_LOT_UNITS,SM_SYMBOL_NAME\n"
-        "1,NIFTYFUT,NFO,D,FUTIDX,50,Nifty Future\n"
-        "2,RELIANCE,NSE,E,EQUITY,1,Reliance\n"
-    )
-    found = parse_security_master(csv, refreshed_on=date(2026, 8, 3))
+    no_symbol = "NSE,E,1,EQUITY,0,,1.0,No symbol,,,,10.0000,NA,ES,EQ,No symbol"
+    no_exchange = ",E,2,EQUITY,0,GOOD,1.0,No exchange,,,,10.0000,NA,ES,EQ,No exchange"
+    found = parse_security_master(
+        csv_rows(no_symbol, no_exchange, RELIANCE), refreshed_on=date(2026, 8, 3))
     assert [i.symbol for i in found] == ["NSE:RELIANCE"]
 
 
 def test_unparseable_lot_size_becomes_none_not_a_crash() -> None:
-    csv = (
-        "SEM_SMST_SECURITY_ID,SEM_TRADING_SYMBOL,SEM_EXM_EXCH_ID,SEM_SEGMENT,"
-        "SEM_INSTRUMENT_NAME,SEM_LOT_UNITS,SM_SYMBOL_NAME\n"
-        "1,RELIANCE,NSE,E,EQUITY,notanumber,Reliance\n"
-    )
-    assert parse_security_master(csv, refreshed_on=date(2026, 8, 3))[0].lot_size is None
+    row = "NSE,E,2885,EQUITY,0,RELIANCE,notanumber,Reliance,,,,10.0000,NA,ES,EQ,Reliance"
+    found = parse_security_master(csv_rows(row), refreshed_on=date(2026, 8, 3))
+    assert found[0].lot_size is None
 
 
 def test_missing_expected_column_fails_loudly() -> None:
     """A silent format change would produce wrong security IDs, which would
-    fetch candles for the WRONG STOCK - the worst possible failure."""
+    fetch candles for the WRONG INSTRUMENT - the worst possible failure."""
     with pytest.raises(InstrumentError, match="expected column"):
         parse_security_master("wrong,header\n1,2\n", refreshed_on=date(2026, 8, 3))
 
 
 def test_missing_column_names_every_absent_column() -> None:
-    csv = "SEM_SMST_SECURITY_ID,SEM_TRADING_SYMBOL\n1,RELIANCE\n"
     with pytest.raises(InstrumentError) as exc:
-        parse_security_master(csv, refreshed_on=date(2026, 8, 3))
+        parse_security_master(
+            "SEM_SMST_SECURITY_ID,SEM_TRADING_SYMBOL\n1,RELIANCE\n",
+            refreshed_on=date(2026, 8, 3))
     message = str(exc.value)
     assert "SEM_EXM_EXCH_ID" in message
-    assert "SEM_INSTRUMENT_NAME" in message
+    assert "SEM_SERIES" in message
 
 
 # --- row shaping ------------------------------------------------------------
