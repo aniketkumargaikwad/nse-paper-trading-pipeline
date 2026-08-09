@@ -46,21 +46,31 @@ def main() -> int:
     from_date = to_date - timedelta(days=5)
     response = requests.post(
         f"{DHAN_API_BASE}/charts/intraday",
-        headers={"access-token": token, "client-id": creds.client_id,
-                 "Content-Type": "application/json"},
+        # Per the chart-API docs: no client-id header here (that belongs to
+        # the auth endpoints), and intraday windows are datetime-precise.
+        headers={
+            "access-token": token,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
         json={
             "securityId": "2885",           # RELIANCE
             "exchangeSegment": "NSE_EQ",
             "instrument": "EQUITY",
             "interval": "5",
-            "fromDate": from_date.strftime("%Y-%m-%d"),
-            "toDate": to_date.strftime("%Y-%m-%d"),
+            "oi": False,
+            "fromDate": from_date.strftime("%Y-%m-%d %H:%M:%S"),
+            "toDate": to_date.strftime("%Y-%m-%d %H:%M:%S"),
         },
         timeout=30,
     )
     print("HTTP", response.status_code)
     payload = response.json()
     print("keys:", list(payload)[:20])
+    if response.status_code >= 400:
+        # Most likely DH-902: the Data APIs are a paid subscription.
+        print("  error:", payload)
+        return 1
 
     # Decode the first few timestamps BOTH ways so the correct reading is
     # obvious: the NSE session runs 09:15-15:30 IST.
