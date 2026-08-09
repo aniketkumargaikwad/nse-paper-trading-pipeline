@@ -239,9 +239,9 @@ status and reason.
 
 ## What's next
 
-- **More history / F&O:** upgrade to paid Kite Connect — §9 of
-  [OPERATING_GUIDE.md](OPERATING_GUIDE.md). One environment variable, no code
-  changes.
+- **More history:** the free yfinance feed only reaches back ~58 days on 15m.
+  For 5 years of precise intraday data at zero cost, set up **Dhan** — see
+  §2.3 of [OPERATING_GUIDE.md](OPERATING_GUIDE.md). No daily login required.
 - **Deeper reference:** [OPERATING_GUIDE.md](OPERATING_GUIDE.md) covers the
   full indicator/operator vocabulary and the strategy YAML format.
 

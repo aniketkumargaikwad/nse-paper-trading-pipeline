@@ -53,6 +53,12 @@ jobs:
           DATA_PROVIDER: ${{ vars.DATA_PROVIDER }}
           KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
           KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          # Dhan: only used when DATA_PROVIDER=dhan. Data APIs need no static
+          # IP, so GitHub's dynamic runner IPs are fine.
+          DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+          DHAN_API_KEY: ${{ secrets.DHAN_API_KEY }}
+          DHAN_API_SECRET: ${{ secrets.DHAN_API_SECRET }}
+          DHAN_TOTP_SECRET: ${{ secrets.DHAN_TOTP_SECRET }}
           # Inputs go through env vars (not inline ${{ }} in the script) so
           # nothing user-typed is ever interpolated into shell syntax.
           YEARS: ${{ inputs.years }}
