@@ -239,3 +239,51 @@ def test_request_entirely_outside_provider_history_fetches_nothing() -> None:
         datetime(1990, 1, 1, tzinfo=UTC), datetime(1990, 6, 1, tzinfo=UTC),
     )
     assert provider.calls == []
+
+
+# --- forward coverage extension (explicit opt-in) ----------------------------
+
+
+def test_read_does_not_chase_new_data_by_default() -> None:
+    """A read must not re-request an unmet tail on every call."""
+    store, backend, provider = make_store()
+    store.ensure_coverage("NSE:RELIANCE", "5m", FROM, TO)
+    before = len(provider.calls)
+    store.ensure_coverage("NSE:RELIANCE", "5m", FROM, TO)
+    assert len(provider.calls) == before
+
+
+def test_extend_to_now_does_chase_new_data() -> None:
+    """Refresh must be able to pick up newly-closed sessions - otherwise the
+    dashboard's refresh action and daily operation are impossible."""
+    store, backend, provider = make_store()
+    store.ensure_coverage("NSE:RELIANCE", "5m", FROM, TO)
+    before = len(provider.calls)
+    previous_last_ts = backend.coverage[(1, "5m")].last_ts
+    store.ensure_coverage("NSE:RELIANCE", "5m", FROM, TO, extend_to_now=True)
+    assert len(provider.calls) == before + 1
+    # And it asked for the tail, starting at the last covered candle.
+    assert provider.calls[-1][2] == previous_last_ts
+
+
+def test_extend_to_now_still_chases_the_front_gap() -> None:
+    """Both gaps, not just the tail."""
+    store, backend, provider = make_store()
+    store.ensure_coverage("NSE:RELIANCE", "5m", FROM, TO)
+    provider.calls.clear()
+    earlier = FROM - timedelta(days=2)
+    store.ensure_coverage("NSE:RELIANCE", "5m", earlier, TO, extend_to_now=True)
+    starts = [c[2] for c in provider.calls]
+    assert any(s == earlier for s in starts), "front gap not chased"
+    assert len(provider.calls) == 2, "expected both a front and a back fetch"
+
+
+def test_front_gap_is_always_chased_even_without_extend_to_now() -> None:
+    """A deeper backtest window genuinely needs older candles."""
+    store, backend, provider = make_store()
+    store.ensure_coverage("NSE:RELIANCE", "5m", FROM, TO)
+    provider.calls.clear()
+    earlier = FROM - timedelta(days=2)
+    store.ensure_coverage("NSE:RELIANCE", "5m", earlier, TO)
+    assert len(provider.calls) == 1
+    assert provider.calls[0][2] == earlier

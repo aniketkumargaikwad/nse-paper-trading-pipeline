@@ -20,6 +20,10 @@ Note on provider results: `CandleProvider.fetch` is NOT trimmed to the
 requested window - day-granular sources return whole trading days. Extra
 candles are real data, so they are stored, and coverage may legitimately
 extend past the requested end.
+
+Reads never chase newer data; an explicit `extend_to_now=True` does. This
+keeps `get_candles` cheap and offline-capable while leaving refresh and
+backfill able to catch up to the present.
 """
 
 from __future__ import annotations
@@ -96,19 +100,29 @@ class CandleStore:
         return resample_candles(base, timeframe)
 
     def ensure_coverage(
-        self, symbol: str, timeframe: str, from_utc: datetime, to_utc: datetime
+        self,
+        symbol: str,
+        timeframe: str,
+        from_utc: datetime,
+        to_utc: datetime,
+        *,
+        extend_to_now: bool = False,
     ) -> None:
         """Fetch and store whatever part of [from, to] is not already cached.
 
-        Once coverage exists at all, only its FRONT (older-history) boundary
-        is chased automatically here - a request for a deeper backtest window
-        legitimately needs older candles fetched. The back (more-recent)
-        boundary is deliberately NOT re-chased on every call: understating
-        coverage is safe, whereas re-fetching the same unmet tail on every
-        identical call (e.g. every run of the same backtest) would turn one
-        provider response that fell short into an unbounded stream of
-        needless network calls. Catching coverage up to the present as new
-        sessions occur is a scheduled backfill's job, not a read call's.
+        The FRONT (older-history) gap is always chased: a deeper backtest
+        window genuinely needs older candles that were never fetched.
+
+        The BACK (more-recent) gap is chased only when `extend_to_now` is
+        True. Reads leave it alone deliberately - a provider response that
+        legitimately falls short of `to_utc` (the market is closed, or the
+        last session ended hours ago) would otherwise be re-requested on
+        every single call, turning one shortfall into an unbounded stream of
+        needless network calls. Discovering new sessions is an explicit
+        refresh's job, not a read's.
+
+        Callers that DO want to catch up to the present - the refresh action
+        and the backfill CLI - pass `extend_to_now=True`.
         """
         instrument_id = self._backend.instrument_id(symbol)
         covered = self._backend.read_coverage(instrument_id, timeframe)
@@ -124,9 +138,9 @@ class CandleStore:
             return
 
         gaps = missing_ranges(covered, effective_from, to_utc)
-        if covered is not None:
+        if covered is not None and not extend_to_now:
             # Drop the back-extension gap, if any: see docstring above.
-            gaps = [g for g in gaps if g != (covered.last_ts, to_utc)]
+            gaps = [g for g in gaps if g[0] != covered.last_ts]
 
         for gap_from, gap_to in gaps:
             fetched = self._provider.fetch(symbol, timeframe, gap_from, gap_to)
