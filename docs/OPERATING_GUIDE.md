@@ -102,12 +102,15 @@ Leave `notepad` open — you will paste values into it during 2.3 (market data)
 and 2.4 (Supabase). The `.env` file is **git-ignored**; it never leaves your
 laptop.
 
-### 2.3 Market data — Dhan (free, precise, 5 years of history)
+### 2.3 Market data — Dhan (precise, 5 years of history, paid Data API)
 
 The platform can now source candles from **Dhan**, which gives **5 years of
-5-minute history** at **zero cost** — no API fee, no AMC, no account-opening
-fee — and renews its access token automatically, so there is **no daily
-login**.
+5-minute history** and renews its access token automatically, so there is
+**no daily login**. Account opening and the AMC are free, but reading candles
+requires Dhan's **Data APIs subscription, ~₹499 + GST/month** — trading APIs
+are free, data APIs are not. Subscribe on the **"Data APIs" tab at
+web.dhan.co → Profile → DhanHQ Trading APIs** before running a backfill, or
+every request fails with HTTP 401 / `DH-902`.
 
 This is optional. The default remains `yfinance` (no account at all), but it
 serves only ~58 days of intraday history, which is too little for meaningful
@@ -116,8 +119,10 @@ backtests.
 **One-time setup:**
 
 1. Open a free Dhan account at [dhan.co](https://dhan.co) (₹0 opening, ₹0 AMC).
-   You do not need to fund it to use the data API.
-2. Go to **web.dhan.co → Profile → DhanHQ Trading APIs** and enable API access.
+   You do not need to fund it to place trades, but you **do** need to
+   subscribe to the paid Data APIs (~₹499+GST/month) to pull candles.
+2. Go to **web.dhan.co → Profile → DhanHQ Trading APIs**, subscribe on the
+   **"Data APIs" tab**, and enable API access.
 3. Enable **TOTP** for your account and save the secret it shows you. You will
    also need your account **PIN**.
 4. Put the required values in `.env`. Unattended token generation
@@ -583,6 +588,7 @@ panel (or the `run_audit` table). Every run leaves one row saying `ok`,
 | `ZoneInfo` error on Windows | `tzdata` not installed | Re-run the pip install from Step 2.1 |
 | `is not in the instruments table` | Symbol master not loaded | `backfill.py --refresh-instruments` |
 | `Missing Dhan credential(s)` | `.env` incomplete | Add `DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET` (§2.3) |
+| HTTP 401 / `DH-902` ("User has not subscribed to Data APIs") | Dhan account has no Data APIs subscription | Subscribe (~₹499+GST/month) on the "Data APIs" tab at web.dhan.co → Profile → DhanHQ Trading APIs |
 | `Could not obtain a Dhan access token` | API access not enabled, wrong PIN, or a bad TOTP secret | Re-check web.dhan.co → Profile → DhanHQ Trading APIs; verify `DHAN_PIN`; paste the TOTP secret without spaces |
 | `The dhan provider needs a Supabase connection` | Used `--no-db` with `DATA_PROVIDER=dhan` | Dhan caches candles in Supabase; drop `--no-db` or use yfinance |
 | Backtest is slow the first time | Cache is cold; candles are being fetched | Normal — later runs read from cache |

@@ -133,6 +133,9 @@ class DhanProvider:
         # and never actually sleep.
         self._tokens = token_manager
         self._instruments = instrument_resolver
+        # Not sent as a header: the chart endpoints take no client-id (that
+        # belongs to the auth API). Kept as a constructor parameter because
+        # callers still pass it and may need it for other purposes later.
         self._client_id = client_id
         self._http = http
         self._sleep = sleep_fn
@@ -162,11 +165,19 @@ class DhanProvider:
                 "securityId": security_id,
                 "exchangeSegment": segment,
                 "instrument": instrument_type,
-                "fromDate": window_from.astimezone(IST).strftime("%Y-%m-%d"),
-                "toDate": window_to.astimezone(IST).strftime("%Y-%m-%d"),
+                # Open interest is an F&O concept; we trade cash equity and
+                # never use it, but the API expects the field.
+                "oi": False,
             }
-            if timeframe != "day":
+            if timeframe == "day":
+                body["expiryCode"] = 0
+                body["fromDate"] = window_from.astimezone(IST).strftime("%Y-%m-%d")
+                body["toDate"] = window_to.astimezone(IST).strftime("%Y-%m-%d")
+            else:
                 body["interval"] = TIMEFRAME_TO_DHAN_INTERVAL[timeframe]
+                # Intraday windows are datetime-precise, unlike daily.
+                body["fromDate"] = window_from.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
+                body["toDate"] = window_to.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
 
             payload = self._post(
                 endpoint, body, f"fetching {timeframe} candles for {symbol}"
@@ -197,9 +208,11 @@ class DhanProvider:
         # non-retryable 4xx here, so re-reading between attempts cannot help -
         # it only adds a token-store round-trip.
         headers = {
+            # Per the chart-API docs: no client-id header here
+            # (that belongs to the auth endpoints).
             "access-token": self._tokens.get_access_token(),
-            "client-id": self._client_id,
             "Content-Type": "application/json",
+            "Accept": "application/json",
         }
 
         last_error: str | None = None
@@ -237,10 +250,33 @@ class DhanProvider:
                     raise ProviderError(f"Dhan returned non-JSON while {doing}")
                 # 4xx other than rate limiting will not improve on retry.
                 if status < 500 and status != 429:
+                    hint = ""
+                    try:
+                        detail = response.json()
+                    except ValueError:
+                        detail = None
+                    if isinstance(detail, dict):
+                        code = detail.get("errorCode") or ""
+                        text = detail.get("errorMessage") or ""
+                        if text:
+                            hint = f" Dhan says: {text}"
+                        if code == "DH-902" or "Data API" in text:
+                            hint += (
+                                " Data APIs are a paid Dhan subscription "
+                                "(~Rs.499+GST/month) - subscribe on the 'Data "
+                                "APIs' tab at web.dhan.co -> Profile -> DhanHQ "
+                                "Trading APIs."
+                            )
+                    if not hint:
+                        # No JSON detail from Dhan to relay - fall back to the
+                        # generic explanation so the reader isn't left blank.
+                        hint = (
+                            " This is a bad parameter or an auth problem, "
+                            "not a network issue."
+                        )
                     raise ProviderError(
-                        f"Dhan rejected the request while {doing} (HTTP {status}). "
-                        "This is a bad parameter or an auth problem, not a "
-                        "network issue."
+                        f"Dhan rejected the request while {doing} (HTTP {status})."
+                        + hint
                     )
                 last_error = f"HTTP {status}"
                 if status == 429:

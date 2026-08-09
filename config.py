@@ -127,8 +127,11 @@ def source_timeframe_for(timeframe: str) -> str:
 #   kite               - Zerodha Kite Connect. Requires the PAID "Connect"
 #                        plan (the free Personal tier excludes historical
 #                        data) plus a daily 2FA login via login.py.
-#   dhan               - Dhan HQ Trading APIs. FREE (no API fee, no AMC),
-#                        gives 5 years of 5-minute intraday history plus a
+#   dhan               - Dhan HQ Trading APIs. Account and AMC are free, but
+#                        the Data APIs subscription costs ~Rs.499+GST/month
+#                        (subscribe on the "Data APIs" tab at web.dhan.co ->
+#                        Profile -> DhanHQ Trading APIs). Gives 5 years of
+#                        5-minute intraday history plus a
 #                        corporate-action-adjusted daily feed back to
 #                        inception. No daily login: its 24h access token is
 #                        renewed unattended via TOTP (see dhan_auth.py, a

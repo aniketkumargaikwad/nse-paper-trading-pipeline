@@ -84,6 +84,15 @@ def test_parse_payload_ragged_arrays_fail_loudly() -> None:
         parse_candle_payload(payload)
 
 
+def test_payload_with_extra_keys_is_accepted() -> None:
+    """Dhan also returns open_interest; extra keys must not break parsing."""
+    payload = sample_payload()
+    payload["open_interest"] = [0, 0, 0]
+    df = parse_candle_payload(payload)
+    assert len(df) == 3
+    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+
+
 # --- request windowing ------------------------------------------------------
 
 
@@ -174,12 +183,15 @@ def test_daily_uses_the_historical_endpoint_and_sends_no_interval() -> None:
     assert "interval" not in http.calls[0]["json"]
 
 
-def test_token_is_sent_but_never_the_client_secret() -> None:
+def test_headers_match_the_documented_chart_contract() -> None:
     http = FakeHttp([FakeResponse(sample_payload())])
     make_provider(http).fetch("NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 2))
     headers = http.calls[0]["headers"]
     assert headers["access-token"] == "tok"
-    assert headers["client-id"] == "CID"
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Accept"] == "application/json"
+    # The chart endpoints take no client-id; that belongs to the auth API.
+    assert "client-id" not in headers
 
 
 def test_server_error_retries_then_fails() -> None:
@@ -202,6 +214,16 @@ def test_rate_limit_is_retried() -> None:
     df = make_provider(http).fetch("NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 4))
     assert len(df) == 3
     assert len(http.calls) == 2
+
+
+def test_unsubscribed_error_explains_the_paid_subscription() -> None:
+    """DH-902 means the account lacks the paid Data API entitlement - the
+    message must say so rather than blaming a bad parameter."""
+    http = FakeHttp([FakeResponse(
+        {"errorType": "Invalid_Access", "errorCode": "DH-902",
+         "errorMessage": "User has not subscribed to Data APIs"}, 401)])
+    with pytest.raises(ProviderError, match="Data APIs"):
+        make_provider(http).fetch("NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 2))
 
 
 def test_derived_timeframe_is_refused() -> None:
@@ -271,12 +293,27 @@ def test_transport_error_never_carries_the_prepared_request() -> None:
     assert "LEAKME" not in str(excinfo.value)
 
 
-def test_request_dates_are_ist_calendar_dates() -> None:
-    """A dropped .astimezone(IST) would silently shift request windows a day."""
+def test_intraday_dates_are_ist_datetimes() -> None:
+    """Intraday windows are datetime-precise; a dropped .astimezone(IST)
+    would silently shift the requested window."""
     http = FakeHttp([FakeResponse(sample_payload())])
     make_provider(http).fetch("NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 2))
-    assert http.calls[0]["json"]["fromDate"] == "2026-08-01"
-    assert http.calls[0]["json"]["toDate"] == "2026-08-02"
+    body = http.calls[0]["json"]
+    assert body["fromDate"] == "2026-08-01 05:30:00"   # 00:00 UTC -> 05:30 IST
+    assert body["toDate"] == "2026-08-02 05:30:00"
+    assert body["oi"] is False
+    assert "expiryCode" not in body
+
+
+def test_daily_dates_are_date_only_with_expiry_code() -> None:
+    http = FakeHttp([FakeResponse(sample_payload())])
+    make_provider(http).fetch("NSE:RELIANCE", "day", utc(2026, 8, 1), utc(2026, 8, 2))
+    body = http.calls[0]["json"]
+    assert body["fromDate"] == "2026-08-01"
+    assert body["toDate"] == "2026-08-02"
+    assert body["expiryCode"] == 0
+    assert body["oi"] is False
+    assert "interval" not in body
 
 
 def test_overlapping_windows_are_deduplicated() -> None:
