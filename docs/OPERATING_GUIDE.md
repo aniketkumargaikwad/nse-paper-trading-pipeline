@@ -117,15 +117,20 @@ backtests.
 1. Open a free Dhan account at [dhan.co](https://dhan.co) (₹0 opening, ₹0 AMC).
    You do not need to fund it to use the data API.
 2. Go to **web.dhan.co → Profile → DhanHQ Trading APIs** and enable API access.
-3. Enable **TOTP** for your account and save the secret it shows you.
-4. Put all five values in `.env`:
+3. Enable **TOTP** for your account and save the secret it shows you. You will
+   also need your account **PIN**.
+4. Put the required values in `.env`. Unattended token generation
+   (`https://dhanhq.co/docs/v2/authentication/`) authenticates with the
+   client ID, PIN, and TOTP — **not** an API key/secret:
    ```
    DATA_PROVIDER=dhan
    DHAN_CLIENT_ID=...
-   DHAN_API_KEY=...
-   DHAN_API_SECRET=...
+   DHAN_PIN=...
    DHAN_TOTP_SECRET=...
    ```
+   `DHAN_API_KEY` / `DHAN_API_SECRET` are **optional** and unused by this
+   automated flow — they belong to Dhan's browser-redirect OAuth flow, which
+   cannot run unattended.
 5. Load the symbol master, then warm the cache:
    ```powershell
    .\.venv\Scripts\python.exe backfill.py --refresh-instruments
@@ -145,10 +150,11 @@ exchange holidays.
 > live response. If it is wrong, every candle is shifted by 5h30m and results
 > are silently wrong. `verify_dhan_live.py` settles it in seconds.
 
-> **On the TOTP secret.** It is a second factor: keep it in `.env`
-> (git-ignored) or GitHub Secrets, never in the repo. Note that Dhan requires a
-> **whitelisted static IP** for order placement and this project never
-> whitelists one — so even a leaked token cannot trade your account.
+> **On the PIN and TOTP secret.** Both are second-factor credentials: keep
+> them in `.env` (git-ignored) or GitHub Secrets, never in the repo. Note
+> that Dhan requires a **whitelisted static IP** for order placement and this
+> project never whitelists one — so even a leaked token cannot trade your
+> account.
 
 <details>
 <summary>Other providers (yfinance, Kite)</summary>
@@ -575,8 +581,8 @@ panel (or the `run_audit` table). Every run leaves one row saying `ok`,
 | `Instrument 'NSE:XYZ' not found` | Typo in `strategies.yaml`, or expired F&O contract | Fix the symbol to match Kite exactly |
 | `ZoneInfo` error on Windows | `tzdata` not installed | Re-run the pip install from Step 2.1 |
 | `is not in the instruments table` | Symbol master not loaded | `backfill.py --refresh-instruments` |
-| `Missing Dhan credential(s)` | `.env` incomplete | Add the four `DHAN_*` values (§2.3) |
-| `Could not obtain a Dhan access token` | API access not enabled, or a bad TOTP secret | Re-check web.dhan.co → Profile → DhanHQ Trading APIs; paste the TOTP secret without spaces |
+| `Missing Dhan credential(s)` | `.env` incomplete | Add `DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET` (§2.3) |
+| `Could not obtain a Dhan access token` | API access not enabled, wrong PIN, or a bad TOTP secret | Re-check web.dhan.co → Profile → DhanHQ Trading APIs; verify `DHAN_PIN`; paste the TOTP secret without spaces |
 | `The dhan provider needs a Supabase connection` | Used `--no-db` with `DATA_PROVIDER=dhan` | Dhan caches candles in Supabase; drop `--no-db` or use yfinance |
 | Backtest is slow the first time | Cache is cold; candles are being fetched | Normal — later runs read from cache |
 | Candles look shifted by 5h30m | Dhan timestamp interpretation is wrong | Run `scripts\verify_dhan_live.py`; it detects and explains this |

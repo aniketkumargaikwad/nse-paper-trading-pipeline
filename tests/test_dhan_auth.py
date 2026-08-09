@@ -23,7 +23,8 @@ UTC = timezone.utc
 NOW = datetime(2026, 8, 3, 6, 0, tzinfo=UTC)
 
 CREDS = DhanCredentials(
-    client_id="CID", api_key="KEY", api_secret="SECRET", totp_secret="JBSWY3DPEHPK3PXP"
+    client_id="CID", api_key="KEY", api_secret="SECRET", pin="1234",
+    totp_secret="JBSWY3DPEHPK3PXP",
 )
 
 
@@ -119,6 +120,7 @@ def test_credentials_never_appear_in_repr_or_str() -> None:
     text = repr(CREDS) + str(CREDS)
     assert "SECRET" not in text
     assert "JBSWY3DPEHPK3PXP" not in text
+    assert "1234" not in text
     assert "CID" in text          # the non-secret client id may show
 
 
@@ -143,32 +145,33 @@ def test_failure_message_never_contains_secret_values() -> None:
 
 def test_missing_credentials_rejected_with_named_variables() -> None:
     with pytest.raises(DhanAuthError, match="DHAN_CLIENT_ID"):
-        DhanCredentials.from_env({"DHAN_API_KEY": "k"})
+        DhanCredentials.from_env({"DHAN_PIN": "1234"})
 
 
 def test_missing_credentials_names_every_absent_variable_at_once() -> None:
     with pytest.raises(DhanAuthError) as exc:
         DhanCredentials.from_env({})
     message = str(exc.value)
-    for name in ("DHAN_CLIENT_ID", "DHAN_API_KEY", "DHAN_API_SECRET", "DHAN_TOTP_SECRET"):
+    for name in ("DHAN_CLIENT_ID", "DHAN_PIN", "DHAN_TOTP_SECRET"):
         assert name in message
 
 
 def test_whitespace_only_credential_treated_as_missing() -> None:
-    with pytest.raises(DhanAuthError, match="DHAN_API_KEY"):
+    with pytest.raises(DhanAuthError, match="DHAN_PIN"):
         DhanCredentials.from_env({
-            "DHAN_CLIENT_ID": "c", "DHAN_API_KEY": "   ",
-            "DHAN_API_SECRET": "s", "DHAN_TOTP_SECRET": "t",
+            "DHAN_CLIENT_ID": "c", "DHAN_PIN": "   ",
+            "DHAN_TOTP_SECRET": "t",
         })
 
 
 def test_credentials_load_from_a_complete_mapping() -> None:
     creds = DhanCredentials.from_env({
-        "DHAN_CLIENT_ID": " c ", "DHAN_API_KEY": "k",
-        "DHAN_API_SECRET": "s", "DHAN_TOTP_SECRET": "t",
+        "DHAN_CLIENT_ID": " c ", "DHAN_PIN": "1234",
+        "DHAN_TOTP_SECRET": "t",
     })
     assert creds.client_id == "c"     # trimmed
-    assert creds.api_key == "k"
+    assert creds.pin == "1234"
+    assert creds.api_key == ""        # optional, defaults empty when absent
 
 
 # --- renewal boundary -------------------------------------------------------
@@ -233,8 +236,8 @@ def test_stored_token_never_appears_in_repr_or_str() -> None:
 
 
 def test_network_failure_becomes_a_clean_auth_error() -> None:
-    """A requests exception must never escape: its .request.body holds the
-    plaintext apiSecret and totp."""
+    """A requests exception must never escape: its .request.url holds the
+    plaintext pin and totp for the generation endpoint."""
     import requests as _requests
 
     m = DhanTokenManager(CREDS, FakeTokenStore(None), now_fn=lambda: NOW)
@@ -242,23 +245,120 @@ def test_network_failure_becomes_a_clean_auth_error() -> None:
     def boom(*a, **kw):
         raise _requests.exceptions.ConnectionError("network down")
 
-    monkey = _requests.post
-    _requests.post = boom
+    monkey = _requests.request
+    _requests.request = boom
     try:
         with pytest.raises(DhanAuthError) as exc:
-            m._post("/GenerateToken", "generating a token", json={"apiSecret": "LEAKME"})
+            m._request("POST", "https://auth.dhan.co/app/generateAccessToken",
+                       "/app/generateAccessToken", "generating a token",
+                       params={"pin": "LEAKME"})
         assert "ConnectionError" in str(exc.value)
         assert "LEAKME" not in str(exc.value)
         assert exc.value.__cause__ is None      # original fully severed
         assert exc.value.__context__ is None
     finally:
-        _requests.post = monkey
+        _requests.request = monkey
 
 
 def test_totp_secret_with_spaces_is_accepted() -> None:
     """Dhan's enrolment screen shows the secret grouped in fours."""
     creds = DhanCredentials.from_env({
-        "DHAN_CLIENT_ID": "c", "DHAN_API_KEY": "k",
-        "DHAN_API_SECRET": "s", "DHAN_TOTP_SECRET": "JBSW Y3DP EHPK 3PXP",
+        "DHAN_CLIENT_ID": "c", "DHAN_PIN": "1234",
+        "DHAN_TOTP_SECRET": "JBSW Y3DP EHPK 3PXP",
     })
     assert creds.totp_secret == "JBSWY3DPEHPK3PXP"
+
+
+# --- documented contract (PIN + TOTP, separate auth host) -------------------
+
+
+def test_pin_never_appears_in_an_error_message() -> None:
+    """The PIN travels in the query string, so it must never be echoed."""
+    import requests as _requests
+
+    m = DhanTokenManager(CREDS, FakeTokenStore(None), now_fn=lambda: NOW)
+
+    def boom(*a, **kw):
+        raise _requests.exceptions.ConnectionError("down")
+
+    original = _requests.request
+    _requests.request = boom
+    try:
+        with pytest.raises(DhanAuthError) as exc:
+            m._request("POST", "https://auth.dhan.co/x?pin=1234",
+                       "/app/generateAccessToken", "generating a token",
+                       params={"pin": "1234"})
+        message = str(exc.value)
+        assert "1234" not in message
+        assert "?" not in message          # no query string leaked
+    finally:
+        _requests.request = original
+
+
+def test_expiry_parsed_from_iso_string() -> None:
+    m = DhanTokenManager(CREDS, FakeTokenStore(None), now_fn=lambda: NOW)
+    token = m._token_from_response(
+        FakeResponse(200, {"accessToken": "tok",
+                           "expiryTime": "2026-08-04T06:00:00+00:00"}),
+        "generating a token",
+    )
+    assert token.expires_at == datetime(2026, 8, 4, 6, 0, tzinfo=UTC)
+
+
+def test_expiry_falls_back_when_unparseable() -> None:
+    """A bad expiry must never break authentication."""
+    m = DhanTokenManager(CREDS, FakeTokenStore(None), now_fn=lambda: NOW)
+    for bad in (None, "not-a-date", {}):
+        token = m._token_from_response(
+            FakeResponse(200, {"accessToken": "tok", "expiryTime": bad}),
+            "generating a token",
+        )
+        assert token.expires_at == NOW + TOKEN_LIFETIME
+
+
+def test_generate_uses_the_auth_host_with_query_params() -> None:
+    """Contract check against the documented endpoint."""
+    captured = {}
+
+    import requests as _requests
+
+    def fake_request(method, url, **kwargs):
+        captured.update({"method": method, "url": url, "params": kwargs.get("params")})
+        return FakeResponse(200, {"accessToken": "tok"})
+
+    original = _requests.request
+    _requests.request = fake_request
+    try:
+        m = DhanTokenManager(CREDS, FakeTokenStore(None), now_fn=lambda: NOW)
+        m._generate_token()
+    finally:
+        _requests.request = original
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://auth.dhan.co/app/generateAccessToken"
+    assert set(captured["params"]) == {"dhanClientId", "pin", "totp"}
+    assert captured["params"]["dhanClientId"] == "CID"
+
+
+def test_renew_uses_get_with_the_documented_headers() -> None:
+    captured = {}
+
+    import requests as _requests
+
+    def fake_request(method, url, **kwargs):
+        captured.update({"method": method, "url": url, "headers": kwargs.get("headers")})
+        return FakeResponse(200, {"accessToken": "renewed"})
+
+    original = _requests.request
+    _requests.request = fake_request
+    try:
+        store = FakeTokenStore(StoredToken("old", NOW + timedelta(hours=1)))
+        m = DhanTokenManager(CREDS, store, now_fn=lambda: NOW)
+        m._renew_token()
+    finally:
+        _requests.request = original
+
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/v2/RenewToken")
+    assert captured["headers"]["access-token"] == "old"
+    assert captured["headers"]["dhanClientId"] == "CID"

@@ -30,6 +30,12 @@ from config import UTC
 
 DHAN_API_BASE = "https://api.dhan.co/v2"
 
+# Token generation lives on a different host from the data APIs.
+DHAN_AUTH_BASE = "https://auth.dhan.co"
+
+GENERATE_TOKEN_PATH = "/app/generateAccessToken"
+RENEW_TOKEN_PATH = "/v2/RenewToken"
+
 # Renew when less than this remains, so a long backfill cannot have its token
 # expire underneath it mid-run.
 RENEW_MARGIN = timedelta(minutes=30)
@@ -38,9 +44,8 @@ TOKEN_LIFETIME = timedelta(hours=24)
 # (connect, read). A scalar would apply 20s to EACH phase.
 REQUEST_TIMEOUT_SECONDS = (5, 20)
 
-REQUIRED_ENV_VARS = (
-    "DHAN_CLIENT_ID", "DHAN_API_KEY", "DHAN_API_SECRET", "DHAN_TOTP_SECRET",
-)
+REQUIRED_ENV_VARS = ("DHAN_CLIENT_ID", "DHAN_PIN", "DHAN_TOTP_SECRET")
+OPTIONAL_ENV_VARS = ("DHAN_API_KEY", "DHAN_API_SECRET")
 
 
 class DhanAuthError(RuntimeError):
@@ -73,6 +78,7 @@ class DhanCredentials:
     client_id: str
     api_key: str
     api_secret: str
+    pin: str
     totp_secret: str
 
     def __repr__(self) -> str:
@@ -89,18 +95,23 @@ class DhanCredentials:
         if missing:
             raise DhanAuthError(
                 "Missing Dhan credential(s): " + ", ".join(missing)
-                + ". Locally: add them to .env. In GitHub Actions: add them as "
-                "repository Secrets. Get them from web.dhan.co -> Profile -> "
-                "DhanHQ Trading APIs."
+                + ". DHAN_PIN is the Dhan account PIN used to log in at "
+                "web.dhan.co. Locally: add them to .env. In GitHub Actions: "
+                "add them as repository Secrets. Get the client id and TOTP "
+                "secret from web.dhan.co -> Profile -> DhanHQ Trading APIs."
             )
+        optional = {
+            name: (source.get(name) or "").strip() for name in OPTIONAL_ENV_VARS
+        }
         # Dhan displays the TOTP secret grouped in fours; strip internal
         # spaces so a natural copy-paste works. Base32 contains no spaces,
         # so this can never corrupt a valid secret.
         totp_secret = "".join(values["DHAN_TOTP_SECRET"].split())
         return cls(
             client_id=values["DHAN_CLIENT_ID"],
-            api_key=values["DHAN_API_KEY"],
-            api_secret=values["DHAN_API_SECRET"],
+            api_key=optional["DHAN_API_KEY"],
+            api_secret=optional["DHAN_API_SECRET"],
+            pin=values["DHAN_PIN"],
             totp_secret=totp_secret,
         )
 
@@ -173,44 +184,54 @@ class DhanTokenManager:
 
     # -- network calls (patched wholesale in tests) --------------------------
 
-    def _post(self, path: str, doing: str, **kwargs: Any) -> Any:
-        """POST to Dhan, converting transport failures into DhanAuthError.
+    def _request(self, method: str, url: str, path: str, doing: str, **kwargs: Any) -> Any:
+        """Call Dhan, converting transport failures into DhanAuthError.
 
-        A requests exception must never escape this module: its .request
-        attribute is the PreparedRequest, whose .body is the plaintext
-        apiSecret and totp. Only the exception CLASS and the path are
-        reported, and the original is dropped entirely.
+        Reports only `path`, never `url`: the generation URL carries the PIN
+        as a query parameter. A requests exception must not escape either -
+        its .request attribute is the PreparedRequest, whose .url would hold
+        that same PIN.
         """
         detail = None
         try:
-            return requests.post(
-                f"{DHAN_API_BASE}{path}", timeout=REQUEST_TIMEOUT_SECONDS, **kwargs
+            return requests.request(
+                method, url, timeout=REQUEST_TIMEOUT_SECONDS, **kwargs
             )
         except requests.exceptions.RequestException as exc:
             detail = type(exc).__name__
         # Raised OUTSIDE the except block deliberately: `raise ... from None`
-        # inside it would still leave the original reachable via
-        # __context__, and with it .request.body containing the secret.
+        # inside it would still leave the original reachable via __context__,
+        # and with it the PIN-bearing URL.
         raise DhanAuthError(f"Could not reach Dhan while {doing} ({detail} on {path}).")
 
     def _renew_token(self) -> StoredToken:
-        """Exchange the current token for a fresh 24h one."""
+        """Exchange the current token for a fresh 24h one.
+
+        Only ACTIVE tokens can be renewed; an expired one errors, which is
+        why get_access_token falls back to full generation.
+        """
         current = self._store.get_token(self.provider)
         if current is None:
             raise DhanAuthError("no token to renew")
-        response = self._post(
-            "/RenewToken",
+        response = self._request(
+            "GET",
+            DHAN_API_BASE + "/RenewToken",
+            RENEW_TOKEN_PATH,
             "renewing the token",
             headers={
                 "access-token": current.access_token,
-                "client-id": self._creds.client_id,
-                "Content-Type": "application/json",
+                "dhanClientId": self._creds.client_id,
             },
         )
         return self._token_from_response(response, "renewing the token")
 
     def _generate_token(self) -> StoredToken:
-        """Mint a brand-new token using the TOTP second factor."""
+        """Mint a brand-new token using the PIN and TOTP second factor.
+
+        Dhan takes these as QUERY-STRING parameters, so they are passed via
+        `params=` rather than interpolated into the URL - and the URL is never
+        logged or included in an error, because it would carry the PIN.
+        """
         import pyotp
 
         try:
@@ -220,13 +241,15 @@ class DhanTokenManager:
                 "DHAN_TOTP_SECRET is not valid base32. Copy it exactly as shown "
                 "at web.dhan.co -> Profile -> DhanHQ Trading APIs."
             ) from None
-        response = self._post(
-            "/GenerateToken",
+
+        response = self._request(
+            "POST",
+            DHAN_AUTH_BASE + GENERATE_TOKEN_PATH,
+            GENERATE_TOKEN_PATH,
             "generating a token",
-            json={
-                "clientId": self._creds.client_id,
-                "apiKey": self._creds.api_key,
-                "apiSecret": self._creds.api_secret,
+            params={
+                "dhanClientId": self._creds.client_id,
+                "pin": self._creds.pin,
                 "totp": code,
             },
         )
@@ -237,15 +260,18 @@ class DhanTokenManager:
         if response.status_code >= 400:
             raise DhanAuthError(
                 f"Dhan rejected the request while {doing} "
-                f"(HTTP {response.status_code}). If this is a TOTP rejection, "
-                "check the system clock - TOTP tolerates only ~30s of skew."
+                f"(HTTP {response.status_code}). Check DHAN_CLIENT_ID and "
+                "DHAN_PIN, and the system clock - TOTP tolerates only ~30s "
+                "of skew."
             )
+        decoded = False
         try:
             payload = response.json()
-        except ValueError as exc:
-            raise DhanAuthError(
-                f"Dhan returned a non-JSON response while {doing}"
-            ) from exc
+            decoded = True
+        except ValueError:
+            pass
+        if not decoded:
+            raise DhanAuthError(f"Dhan returned a non-JSON response while {doing}")
 
         token = payload.get("accessToken") or payload.get("access_token")
         if not token:
@@ -253,4 +279,30 @@ class DhanTokenManager:
                 f"Dhan response contained no access token while {doing}. "
                 "The API shape may have changed; check the DhanHQ v2 auth docs."
             )
-        return StoredToken(access_token=token, expires_at=self._now() + TOKEN_LIFETIME)
+        return StoredToken(
+            access_token=token,
+            expires_at=self._parse_expiry(payload.get("expiryTime")),
+        )
+
+    def _parse_expiry(self, raw: Any) -> datetime:
+        """Read the server's expiry, falling back to now + 24h.
+
+        The exact format is not documented, so try ISO-8601 and epoch
+        seconds, and never let a parse failure break authentication - a
+        slightly-early renewal is harmless, a crash is not.
+        """
+        fallback = self._now() + TOKEN_LIFETIME
+        if raw is None:
+            return fallback
+        if isinstance(raw, (int, float)):
+            try:
+                return datetime.fromtimestamp(float(raw), tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return fallback
+        if isinstance(raw, str):
+            try:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                return fallback
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        return fallback
