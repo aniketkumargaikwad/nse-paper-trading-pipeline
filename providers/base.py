@@ -88,7 +88,15 @@ class CandleProvider(Protocol):
     def fetch(
         self, symbol: str, timeframe: str, from_utc: datetime, to_utc: datetime
     ) -> pd.DataFrame:
-        """Return canonical candles for [from_utc, to_utc]."""
+        """Return canonical candles covering [from_utc, to_utc].
+
+        NOT trimmed to the window. Day-granular sources (Dhan sends
+        fromDate/toDate as dates) return whole trading days, so the result may
+        begin before from_utc and end after to_utc - by up to one session at
+        each end. Extra candles are real data, never gaps: callers may store
+        them and may treat the last returned timestamp as genuinely covered.
+        Reconciling against the exact requested range is the caller's job.
+        """
         ...
 
     def max_history_days(self, timeframe: str) -> int:

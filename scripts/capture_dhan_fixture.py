@@ -71,7 +71,10 @@ def main() -> int:
 
     out = Path("tests/fixtures/dhan_intraday_5m.json")
     out.parent.mkdir(parents=True, exist_ok=True)
-    trimmed = {k: (v[:10] if isinstance(v, list) else v) for k, v in payload.items()}
+    # Keep a FULL trading session (75 five-minute candles), not a handful:
+    # ten candles from the open (09:15-10:00 IST) land at 14:45-15:30 IST
+    # under a 5h30m misread, which still passes the session-window check.
+    trimmed = {k: (v[:200] if isinstance(v, list) else v) for k, v in payload.items()}
     out.write_text(json.dumps(trimmed, indent=2), encoding="utf-8")
     print("wrote", out)
     return 0

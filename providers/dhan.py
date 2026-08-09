@@ -13,12 +13,14 @@ Shape notes
   intraday timeframe is derived by resampling the 5-minute base.
 
 Timestamp interpretation
--------------------------
-Dhan sends epoch SECONDS read here as true UTC instants (verified against a
-captured live response - see scripts/capture_dhan_fixture.py). Decoding them
-as already-IST would shift every candle by 5h30m and silently corrupt every
-backtest, which is why there is a test asserting the parsed candles land
-inside the 09:15-15:30 IST session.
+------------------------
+Dhan sends epoch SECONDS, read here as true UTC instants. This is UNVERIFIED:
+Dhan credentials are not yet configured, so no live response has been
+captured. Decoding them as already-IST would shift every candle by 5h30m and
+silently corrupt every backtest. Before the first live backfill, run
+scripts/capture_dhan_fixture.py so that
+tests/fixtures/dhan_intraday_5m.json exists and
+test_parser_handles_the_recorded_real_response stops skipping.
 """
 
 from __future__ import annotations
@@ -46,6 +48,11 @@ REQUEST_TIMEOUT_SECONDS = (5, 30)
 _SECONDS_BETWEEN_PAGES = 0.35   # stay well under Dhan's rate limits
 _MAX_ATTEMPTS = 4
 _BACKOFF_BASE_SECONDS = 1
+# A 429 means a quota bucket is empty, not that the server hiccuped. Dhan's
+# limits include per-minute buckets, so 1/2/4s exhausts all four attempts
+# well inside a window that simply needs waiting out.
+_RATE_LIMIT_BACKOFF_SECONDS = 20
+_MAX_BACKOFF_SECONDS = 120
 
 INTRADAY_ENDPOINT = f"{DHAN_API_BASE}/charts/intraday"
 HISTORICAL_ENDPOINT = f"{DHAN_API_BASE}/charts/historical"
@@ -100,11 +107,10 @@ def parse_candle_payload(payload: dict[str, Any]) -> pd.DataFrame:
     if lengths["timestamp"] == 0:
         return empty_frame()
 
-    # Dhan sends epoch SECONDS read here as true UTC instants. VERIFIED
-    # against a captured live response: decoding this way places candles
-    # inside the 09:15-15:30 IST session. Decoding them as already-IST would
-    # shift every candle by 5h30m and silently corrupt every backtest, which
-    # is why there is a test asserting the session window.
+    # Epoch SECONDS read as true UTC instants. UNVERIFIED against a live
+    # response - see the module docstring. The fixture test is the real
+    # guard; the unit test below cannot catch this because its own fixture is
+    # built under the same assumption.
     index = pd.to_datetime(payload["timestamp"], unit="s", utc=True)
     frame = pd.DataFrame({name: payload[name] for name in OHLCV_COLUMNS}, index=index)
     return canonical_frame(frame)
@@ -167,7 +173,11 @@ class DhanProvider:
             )
             frames.append(parse_candle_payload(payload))
 
+        frames = [f for f in frames if not f.empty]
         if not frames:
+            # Every window was a holiday/pre-listing span. Concatenating empty
+            # frames is deprecated in pandas and would eventually make the
+            # OHLCV columns object-dtype.
             return empty_frame()
         combined = pd.concat(frames)
         # Not trimmed to [from_utc, to_utc]: Dhan returns whole days, and
@@ -183,18 +193,25 @@ class DhanProvider:
         whose body holds credentials - so transport errors are converted here
         and the original is dropped entirely.
         """
+        # One token read per request, not one per attempt: a 401 is a
+        # non-retryable 4xx here, so re-reading between attempts cannot help -
+        # it only adds a token-store round-trip.
+        headers = {
+            "access-token": self._tokens.get_access_token(),
+            "client-id": self._client_id,
+            "Content-Type": "application/json",
+        }
+
         last_error: str | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             response = None
             transport_error: str | None = None
+            rate_limited = False
+            retry_after: float | None = None
             try:
                 response = self._http.post(
                     url,
-                    headers={
-                        "access-token": self._tokens.get_access_token(),
-                        "client-id": self._client_id,
-                        "Content-Type": "application/json",
-                    },
+                    headers=headers,
                     json=body,
                     timeout=REQUEST_TIMEOUT_SECONDS,
                 )
@@ -206,12 +223,18 @@ class DhanProvider:
             else:
                 status = response.status_code
                 if status < 400:
+                    decoded = False
                     try:
-                        return response.json()
+                        payload = response.json()
+                        decoded = True
                     except ValueError:
-                        raise ProviderError(
-                            f"Dhan returned non-JSON while {doing}"
-                        ) from None
+                        pass
+                    if decoded:
+                        return payload
+                    # Raised OUTSIDE the except block, per dhan_auth._post:
+                    # `from None` only sets __suppress_context__, leaving a
+                    # requests exception reachable via __context__.
+                    raise ProviderError(f"Dhan returned non-JSON while {doing}")
                 # 4xx other than rate limiting will not improve on retry.
                 if status < 500 and status != 429:
                     raise ProviderError(
@@ -220,9 +243,21 @@ class DhanProvider:
                         "network issue."
                     )
                 last_error = f"HTTP {status}"
+                if status == 429:
+                    rate_limited = True
+                    raw_retry_after = (getattr(response, "headers", None) or {}).get(
+                        "Retry-After"
+                    )
+                    if raw_retry_after is not None:
+                        try:
+                            retry_after = float(raw_retry_after)
+                        except ValueError:
+                            retry_after = None
 
             if attempt < _MAX_ATTEMPTS:
-                self._sleep(_BACKOFF_BASE_SECONDS * 2 ** (attempt - 1))
+                base = _RATE_LIMIT_BACKOFF_SECONDS if rate_limited else _BACKOFF_BASE_SECONDS
+                delay = retry_after or base * 2 ** (attempt - 1)
+                self._sleep(min(delay, _MAX_BACKOFF_SECONDS))
 
         raise ProviderError(
             f"Dhan still failing after {_MAX_ATTEMPTS} attempts while {doing}: "

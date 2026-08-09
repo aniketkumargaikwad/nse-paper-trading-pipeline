@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -115,6 +116,7 @@ class FakeResponse:
     def __init__(self, payload, status_code=200):
         self._payload = payload
         self.status_code = status_code
+        self.headers = {}
 
     def json(self):
         return self._payload
@@ -197,7 +199,7 @@ def test_client_error_is_not_retried() -> None:
 
 def test_rate_limit_is_retried() -> None:
     http = FakeHttp([FakeResponse({}, 429), FakeResponse(sample_payload())])
-    df = make_provider(http).fetch("NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 2))
+    df = make_provider(http).fetch("NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 4))
     assert len(df) == 3
     assert len(http.calls) == 2
 
@@ -239,7 +241,76 @@ def test_parser_handles_the_recorded_real_response() -> None:
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert str(df.index.tz) == "UTC"
     assert df.index.is_monotonic_increasing
-    # Every candle must fall inside the NSE session in IST.
+    # Every candle inside the NSE session, AND the first candle exactly at
+    # the open. The second assertion is what actually catches a 5h30m shift:
+    # a shifted fixture starts at 14:45 IST, not 09:15, at any trim length.
     ist = df.index.tz_convert(IST)
+    assert (ist[0].hour, ist[0].minute) == (9, 15)
     assert ((ist.hour * 60 + ist.minute) >= 9 * 60 + 15).all()
     assert ((ist.hour * 60 + ist.minute) <= 15 * 60 + 30).all()
+
+
+# --- security / edge cases --------------------------------------------------
+
+
+def test_transport_error_never_carries_the_prepared_request() -> None:
+    """A requests exception holds the PreparedRequest, whose body has the token."""
+    import requests
+
+    class BoomHttp:
+        def post(self, *a, **k):
+            prepared = requests.Request(
+                "POST", "https://api.dhan.co/v2/x", json={"apiSecret": "LEAKME"}
+            ).prepare()
+            raise requests.exceptions.ConnectionError("boom", request=prepared)
+
+    with pytest.raises(ProviderError) as excinfo:
+        make_provider(BoomHttp()).fetch("NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 2))
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__context__ is None
+    assert "LEAKME" not in str(excinfo.value)
+
+
+def test_request_dates_are_ist_calendar_dates() -> None:
+    """A dropped .astimezone(IST) would silently shift request windows a day."""
+    http = FakeHttp([FakeResponse(sample_payload())])
+    make_provider(http).fetch("NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 2))
+    assert http.calls[0]["json"]["fromDate"] == "2026-08-01"
+    assert http.calls[0]["json"]["toDate"] == "2026-08-02"
+
+
+def test_overlapping_windows_are_deduplicated() -> None:
+    """Seam days are requested twice; the same candle must appear once."""
+    http = FakeHttp([FakeResponse(sample_payload()), FakeResponse(sample_payload())])
+    df = make_provider(http).fetch(
+        "NSE:RELIANCE", "5m", utc(2026, 1, 1), utc(2026, 1, 1) + timedelta(days=180)
+    )
+    assert len(df) == 3
+    assert df.index.is_monotonic_increasing
+
+
+def test_all_empty_windows_give_a_canonical_empty_frame() -> None:
+    empty = {"open": [], "high": [], "low": [], "close": [],
+             "volume": [], "timestamp": []}
+    http = FakeHttp([FakeResponse(empty)] * 3)
+    df = make_provider(http).fetch("NSE:RELIANCE", "5m", utc(2026, 1, 1), utc(2026, 7, 1))
+    assert df.empty
+    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+    assert str(df.index.tz) == "UTC"
+
+
+def test_non_json_success_is_not_retried() -> None:
+    class BadJson(FakeResponse):
+        def json(self):
+            raise ValueError("not json")
+
+    http = FakeHttp([BadJson(None)])
+    with pytest.raises(ProviderError, match="non-JSON"):
+        make_provider(http).fetch("NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 2))
+    assert len(http.calls) == 1
+
+
+def test_only_the_two_chart_endpoints_are_reachable() -> None:
+    """Stronger than a blacklist: pin the exact endpoint set."""
+    source = (Path(__file__).resolve().parent.parent / "providers" / "dhan.py").read_text()
+    assert set(re.findall(r"/charts/\w+", source)) == {"/charts/intraday", "/charts/historical"}
