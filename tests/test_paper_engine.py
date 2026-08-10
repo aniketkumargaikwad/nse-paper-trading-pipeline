@@ -178,7 +178,7 @@ def frame(rows: list[tuple]) -> pd.DataFrame:
 
 def strategy(*, entry_above=105.0, exit_below=90.0, sl_pct=1.0, tgt_pct=2.0,
              max_cycles=5, position_type="long",
-             sizing=None):
+             sizing=None, risk=None):
     doc = {
         "version": 2,
         "strategies": [{
@@ -186,7 +186,7 @@ def strategy(*, entry_above=105.0, exit_below=90.0, sl_pct=1.0, tgt_pct=2.0,
             "timeframe": "15m", "instruments": ["NSE:RELIANCE"],
             "entry": {"all": [{"indicator": "close", "operator": ">", "value": entry_above}]},
             "exit": {"any": [{"indicator": "close", "operator": "<", "value": exit_below}]},
-            "risk": {
+            "risk": risk or {
                 "stop_loss": {"type": "percent", "value": sl_pct},
                 "target": {"type": "percent", "value": tgt_pct},
             },
@@ -421,3 +421,87 @@ def test_short_position_stop_and_target_sides() -> None:
     assert t.intended_exit_price == 98.0
     assert t.exit_price == pytest.approx(98.0 * 1.0005)  # buy-back pays slippage
     assert t.gross_pnl == pytest.approx(100.0 - t.exit_price, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# ATR stops in the paper engine. The batch backtester and this engine must
+# compute levels identically — a divergence would mean a strategy showed one
+# backtest and behaved differently once deployed.
+# ---------------------------------------------------------------------------
+
+ATR_RISK = {
+    "stop_loss": {"type": "atr", "period": 2, "multiplier": 1.5},
+    "target": {"type": "percent", "value": 2.0},
+}
+
+
+def test_atr_stop_levels_match_the_backtester_exactly():
+    """Same strategy, same candles, same level — asserted, not assumed."""
+    import pandas as pd
+
+    from risk_levels import build_atr_series, stop_and_target
+    from paper_engine import _stop_target_levels
+
+    strat = strategy(risk=dict(ATR_RISK))
+    closed = pd.DataFrame(
+        {
+            "open": [100.0, 102.0, 101.0, 103.0],
+            "high": [103.0, 105.0, 104.0, 106.0],
+            "low": [99.0, 100.0, 99.5, 101.0],
+            "close": [102.0, 101.0, 103.0, 105.0],
+            "volume": [1000.0] * 4,
+        },
+        index=pd.date_range("2026-07-16 04:00", periods=4, freq="15min", tz="UTC"),
+    )
+    entry_price = 105.0
+
+    from_engine = _stop_target_levels(strat, closed, entry_price)
+    from_shared = stop_and_target(
+        strat, entry_price,
+        signal_idx=len(closed) - 1,
+        atr_series=build_atr_series(closed, strat),
+    )
+    assert from_engine == from_shared
+    stop, target = from_engine
+    assert stop < entry_price < target      # long: stop below, target above
+
+
+def test_an_atr_period_beyond_available_history_does_not_abort_the_whole_run():
+    """run_once promises a failure on one combination is recorded, not fatal.
+
+    An ATR period outrunning the available history used to escape the
+    per-combination handler and take down every other strategy in the run.
+    """
+    import pandas as pd
+
+    from risk_levels import RiskLevelError
+
+    strat = strategy(
+        risk={
+            "stop_loss": {"type": "atr", "period": 500, "multiplier": 1.5},
+            "target": {"type": "percent", "value": 2.0},
+        }
+    )
+    closed = pd.DataFrame(
+        {
+            "open": [100.0, 102.0], "high": [103.0, 105.0],
+            "low": [99.0, 100.0], "close": [102.0, 101.0],
+            "volume": [1000.0, 1000.0],
+        },
+        index=pd.date_range("2026-07-16 04:00", periods=2, freq="15min", tz="UTC"),
+    )
+    with pytest.raises(RiskLevelError) as exc:
+        __import__("paper_engine")._stop_target_levels(strat, closed, 105.0)
+    msg = str(exc.value)
+    assert "500" in msg and "pe-test" in msg
+
+    # And run_once catches it: the summary records the skip rather than raising.
+    import inspect
+
+    import paper_engine
+
+    source = inspect.getsource(paper_engine.run_once)
+    assert "RiskLevelError" in source, (
+        "run_once must catch RiskLevelError, or one bad ATR period aborts "
+        "every other strategy in the run"
+    )

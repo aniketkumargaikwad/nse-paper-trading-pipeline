@@ -57,7 +57,7 @@ import signals
 # could show a profitable backtest and a different live behaviour. Both the
 # hard-error-on-insufficient-history rule and the ATR-at-the-signal-candle
 # rule live in ONE place (backtest._level_from_spec) for exactly that reason.
-from backtest import BacktestError, _level_from_spec
+from risk_levels import RiskLevelError, build_atr_series, stop_and_target
 from config import IST, TIMEFRAME_MINUTES, UTC, Settings, get_settings
 from data_provider import create_data_client, describe_provider
 from db import ClosedTrade, OpenPosition, SupabaseStore
@@ -137,37 +137,17 @@ def _stop_target_levels(
     `closed` is the SAME closed-candle frame `signals.entry_signal` just
     evaluated, so its last row is the entry SIGNAL candle — the one whose
     close fired the entry, one candle before the fill this engine is about
-    to record. Reusing backtest._level_from_spec with signal_idx = the last
-    row keeps this identical to the batch backtester's ATR-at-the-signal-
-    candle rule instead of quietly re-deriving it here.
+    to record. Delegating to risk_levels keeps this identical to the batch
+    backtester's ATR-at-the-signal-candle rule instead of quietly re-deriving
+    it here — if the two diverged, a strategy could show one backtest and
+    behave differently once deployed.
     """
-    is_long = strategy.position_type == "long"
-    signal_idx = len(closed) - 1
-
-    atr_periods = {
-        spec.period
-        for spec in (strategy.risk.stop_loss, strategy.risk.target)
-        if spec.type == "atr"
-    }
-    atr_series: dict[int, np.ndarray] = {}
-    for period in atr_periods:
-        if len(closed) <= period:
-            raise BacktestError(
-                f"strategy {strategy.name!r} uses an ATR({period}) stop but only "
-                f"{len(closed)} candles are available; at least {period + 1} are "
-                "needed. Backfill more history, or use a shorter ATR period."
-            )
-        atr_series[period] = indicators.atr(closed, period).to_numpy()
-
-    sl_price = _level_from_spec(
-        strategy.risk.stop_loss, entry_price, signal_idx, atr_series,
-        favourable=False, is_long=is_long,
+    return stop_and_target(
+        strategy,
+        entry_price,
+        signal_idx=len(closed) - 1,
+        atr_series=build_atr_series(closed, strategy),
     )
-    tgt_price = _level_from_spec(
-        strategy.risk.target, entry_price, signal_idx, atr_series,
-        favourable=True, is_long=is_long,
-    )
-    return sl_price, tgt_price
 
 
 def _build_trade(
@@ -403,6 +383,13 @@ def run_once(
                 # else in this run can work without a session either.
                 if isinstance(exc, TokenExpiredError):
                     raise
+                summary.skipped.append(f"{strategy.name}/{instrument}: {exc}")
+            except RiskLevelError as exc:
+                # One strategy's ATR period outrunning its available history
+                # must not take down every other combination in the run — this
+                # loop's whole contract is that a failure on one is recorded,
+                # not fatal. Thin early-session data or a strategy edited to a
+                # longer period would otherwise abort healthy strategies too.
                 summary.skipped.append(f"{strategy.name}/{instrument}: {exc}")
     return summary
 

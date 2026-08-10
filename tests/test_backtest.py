@@ -19,13 +19,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backtest import (  # noqa: E402
     MIN_TRADES,
-    BacktestError,
     SimTrade,
     compute_metrics,
     evaluate_kill_rules,
     simulate,
     simulate_with_skips,
 )
+from risk_levels import RiskLevelError  # noqa: E402
 from strategy_schema import migrate_document, parse_strategies, parse_strategy_dict  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -475,7 +475,7 @@ def test_insufficient_history_for_the_atr_period_is_a_hard_error():
         "stop_loss": {"type": "atr", "period": 500, "multiplier": 1.5},
         "target": {"type": "percent", "value": 1.5},
     })
-    with pytest.raises(BacktestError) as exc:
+    with pytest.raises(RiskLevelError) as exc:
         simulate(frame_with_one_round_trip(entry_open=1000.0),
                  strategy, slippage_pct=0.0, cost_per_trade_inr=0.0)
     msg = str(exc.value)
