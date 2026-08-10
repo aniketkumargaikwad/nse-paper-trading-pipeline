@@ -53,7 +53,7 @@ from config import IST, UTC, Settings, get_settings
 from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
 from kite_client import KiteClientError, TokenExpiredError
-from strategy_schema import Strategy, load_strategies, load_strategy_documents
+from strategy_schema import Strategy, load_strategies, load_strategy_documents, resolve_quantity
 
 # --- Kill-rule thresholds ---------------------------------------------------
 MIN_TRADES = 30
@@ -88,6 +88,26 @@ class SimTrade:
     net_pnl: float
 
 
+@dataclass(frozen=True)
+class SkippedEntry:
+    """An entry signal that could not become a trade.
+
+    Recorded rather than dropped: a signal that never became a position is a
+    real fact about the strategy, and a silently-dropped one would make the
+    strategy look more selective than it is.
+    """
+
+    signal_ts: pd.Timestamp
+    price: float
+    reason: str          # 'notional_below_price'
+
+
+@dataclass(frozen=True)
+class SimResult:
+    trades: list[SimTrade]
+    skipped: list[SkippedEntry]
+
+
 def _make_trade(
     *,
     entry_signal_ts, entry_fill_ts, exit_signal_ts, exit_fill_ts,
@@ -113,20 +133,22 @@ def _make_trade(
     )
 
 
-def simulate(
+def simulate_with_skips(
     df: pd.DataFrame,
     strategy: Strategy,
     *,
     slippage_pct: float,
     cost_per_trade_inr: float,
-) -> list[SimTrade]:
+) -> SimResult:
     """Replay one instrument's candle history under the fill-realism model.
 
     The DataFrame must be the canonical closed-candle frame (UTC index,
-    ohlcv columns, sorted). Returns completed trades in time order.
+    ohlcv columns, sorted). Returns completed trades plus any entry signals
+    that could not be sized into a trade (see SkippedEntry), both in time
+    order.
     """
     if df.empty or len(df) < 2:
-        return []
+        return SimResult(trades=[], skipped=[])
 
     entry_sig = signals.entry_series(df, strategy)
     exit_sig = signals.exit_series(df, strategy)
@@ -139,7 +161,6 @@ def simulate(
 
     slip = slippage_pct / 100.0
     is_long = strategy.position_type == "long"
-    qty = strategy.sizing.quantity
 
     # Adverse slippage: buying pays more, selling receives less. For a long,
     # entry is a buy and exit a sell; for a short it is the reverse.
@@ -153,14 +174,20 @@ def simulate(
     exit_fill = sell_fill if is_long else buy_fill
 
     trades: list[SimTrade] = []
+    skipped: list[SkippedEntry] = []
     in_pos = False
     pending_entry_from: int | None = None  # index of the signal candle
     pending_exit_from: int | None = None
     entries_by_day: dict = {}  # IST date -> count, for max_cycles_per_day
 
-    # Open-position state
+    # Open-position state. Quantity is derived from THIS trade's own entry
+    # fill price (floor(notional / price) differs on every symbol — that is
+    # the whole point of notional sizing) and held here, not in a module- or
+    # loop-level variable, so close_position always uses the right trade's
+    # own quantity rather than whatever a later entry happened to compute.
     e_signal_ts = e_fill_ts = None
     e_intended = e_price = sl_price = tgt_price = 0.0
+    qty = 0
 
     def close_position(i: int, intended: float, reason: str) -> None:
         nonlocal in_pos, pending_exit_from
@@ -189,6 +216,20 @@ def simulate(
                 e_fill_ts = index[i]
                 e_intended = opens[i]
                 e_price = entry_fill(opens[i])
+                qty = resolve_quantity(strategy.sizing, e_price)
+                if qty < 1:
+                    # A quantity-0 trade would post a P&L of exactly 0 and
+                    # land in the results as a flat trade that never
+                    # happened — record the skip instead of the trade.
+                    skipped.append(
+                        SkippedEntry(
+                            signal_ts=index[pending_entry_from],
+                            price=float(opens[i]),
+                            reason="notional_below_price",
+                        )
+                    )
+                    pending_entry_from = None
+                    continue
                 if is_long:
                     sl_price = e_price * (1 - strategy.risk.stop_loss_pct / 100)
                     tgt_price = e_price * (1 + strategy.risk.target_pct / 100)
@@ -241,7 +282,22 @@ def simulate(
         # close_position stamps exit_fill at index[last]; that is the candle
         # close time conceptually — acceptable for the single final trade.
 
-    return trades
+    return SimResult(trades=trades, skipped=skipped)
+
+
+def simulate(
+    df: pd.DataFrame,
+    strategy: Strategy,
+    *,
+    slippage_pct: float,
+    cost_per_trade_inr: float,
+) -> list[SimTrade]:
+    """Completed trades only. See simulate_with_skips for skipped entries."""
+    return simulate_with_skips(
+        df, strategy,
+        slippage_pct=slippage_pct,
+        cost_per_trade_inr=cost_per_trade_inr,
+    ).trades
 
 
 # ---------------------------------------------------------------------------
@@ -393,18 +449,23 @@ def run_backtest(
             if df.empty:
                 print(f"  WARN  {instrument}: no candles returned, skipping", file=sys.stderr)
                 continue
-            trades = simulate(
+            result = simulate_with_skips(
                 df, strategy,
                 slippage_pct=settings.slippage_pct,
                 cost_per_trade_inr=settings.cost_per_trade_inr,
             )
-            metrics = compute_metrics(trades)
+            metrics = compute_metrics(result.trades)
             per_symbol[instrument] = (metrics, df)
             print(
                 f"  {instrument:<16} trades={metrics.total_trades:>4} "
                 f"net=₹{metrics.net_pnl:>10.2f} win%={metrics.win_rate_pct:>5.1f} "
                 f"dd%={metrics.max_drawdown_pct:>5.1f}"
             )
+            if result.skipped:
+                print(
+                    f"    {len(result.skipped)} entry signal(s) skipped: "
+                    f"notional_per_trade is below the share price"
+                )
 
         profitable = sum(1 for m, _ in per_symbol.values() if m.net_pnl > 0)
         for instrument, (metrics, df) in per_symbol.items():

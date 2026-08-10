@@ -23,8 +23,9 @@ from backtest import (  # noqa: E402
     compute_metrics,
     evaluate_kill_rules,
     simulate,
+    simulate_with_skips,
 )
-from strategy_schema import migrate_document, parse_strategies  # noqa: E402
+from strategy_schema import migrate_document, parse_strategies, parse_strategy_dict  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 UTC = ZoneInfo("UTC")
@@ -322,6 +323,68 @@ def test_cycle_cap_resets_next_day() -> None:
     assert len(trades) == 2
     fill_days = {t.entry_fill_ts.astimezone(IST).date() for t in trades}
     assert len(fill_days) == 2
+
+
+# ---------------------------------------------------------------------------
+# Sizing — notional quantity per symbol, with skips recorded
+# ---------------------------------------------------------------------------
+
+
+def strategy_with(**overrides):
+    """A minimal v2 strategy with one field group replaced."""
+    doc = {
+        "name": "t", "enabled": True, "position_type": "long", "timeframe": "15m",
+        "instruments": ["NSE:TEST"],
+        "entry": {"all": [{"indicator": "close", "operator": ">", "value": 0}]},
+        "exit": {"any": [{"indicator": "close", "operator": "<", "value": 0}]},
+        "risk": {"stop_loss": {"type": "percent", "value": 0.7},
+                 "target": {"type": "percent", "value": 1.5}},
+        "sizing": {"type": "fixed_quantity", "quantity": 1},
+    }
+    doc.update(overrides)
+    return parse_strategy_dict(doc)
+
+
+def frame_with_one_round_trip(entry_open: float) -> pd.DataFrame:
+    """One signal candle, then a fill candle whose high crosses the 1.5%
+    target intra-candle (and whose low stays clear of the 0.7% stop) — a
+    single, unambiguous round trip regardless of the entry price scale."""
+    return make_df([
+        (entry_open * 0.9, entry_open * 0.91, entry_open * 0.89, entry_open * 0.9),
+        (entry_open, entry_open * 1.02, entry_open * 0.995, entry_open * 1.01),
+    ])
+
+
+def test_notional_sizing_derives_quantity_from_the_entry_price():
+    """100000 notional at a ~1000 entry fill buys 99 shares, not 1."""
+    strategy = strategy_with(sizing={"type": "notional", "notional_per_trade": 100000})
+    trades = simulate(frame_with_one_round_trip(entry_open=1000.0),
+                      strategy, slippage_pct=0.0, cost_per_trade_inr=30.0)
+    assert trades[0].quantity == 100
+
+
+def test_a_share_dearer_than_the_notional_produces_no_trade():
+    strategy = strategy_with(sizing={"type": "notional", "notional_per_trade": 500})
+    trades = simulate(frame_with_one_round_trip(entry_open=1000.0),
+                      strategy, slippage_pct=0.0, cost_per_trade_inr=30.0)
+    assert trades == []
+
+
+def test_a_skipped_entry_is_reported_not_silently_dropped():
+    strategy = strategy_with(sizing={"type": "notional", "notional_per_trade": 500})
+    result = simulate_with_skips(frame_with_one_round_trip(entry_open=1000.0),
+                                 strategy, slippage_pct=0.0, cost_per_trade_inr=30.0)
+    assert result.trades == []
+    assert len(result.skipped) == 1
+    assert result.skipped[0].reason == "notional_below_price"
+    assert result.skipped[0].price == 1000.0
+
+
+def test_fixed_quantity_is_unaffected():
+    strategy = strategy_with(sizing={"type": "fixed_quantity", "quantity": 7})
+    trades = simulate(frame_with_one_round_trip(entry_open=1000.0),
+                      strategy, slippage_pct=0.0, cost_per_trade_inr=30.0)
+    assert trades[0].quantity == 7
 
 
 # ---------------------------------------------------------------------------

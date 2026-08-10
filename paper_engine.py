@@ -61,7 +61,7 @@ from kite_client import (
     lookback_start_utc,
 )
 from market_calendar import load_holidays, session_gate
-from strategy_schema import Strategy, load_strategy_documents
+from strategy_schema import Strategy, load_strategy_documents, resolve_quantity
 
 
 @dataclass
@@ -276,6 +276,20 @@ def _process_combo(
         return
 
     entry_price = _entry_fill_price(next_open, strategy.position_type, settings.slippage_pct)
+
+    # Quantity is derived from THIS trade's own entry fill price — see
+    # resolve_quantity's docstring. Zero is a real, expected outcome (a
+    # dear share against a modest notional) and must never open a
+    # zero-quantity position: that would sit in `positions` looking like a
+    # live trade the strategy actually took, when nothing was ever bought.
+    qty = resolve_quantity(strategy.sizing, entry_price)
+    if qty < 1:
+        summary.skipped.append(
+            f"{combo}: entry signal ignored — notional_per_trade resolves "
+            f"to 0 shares at the entry fill price (₹{entry_price:.2f})"
+        )
+        return
+
     if strategy.position_type == "long":
         sl_price = entry_price * (1 - strategy.risk.stop_loss_pct / 100)
         tgt_price = entry_price * (1 + strategy.risk.target_pct / 100)
@@ -287,7 +301,7 @@ def _process_combo(
         strategy_name=strategy.name,
         instrument=instrument,
         position_type=strategy.position_type,
-        quantity=strategy.sizing.quantity,
+        quantity=qty,
         entry_signal_candle_ts=last_ts.to_pydatetime(),
         entry_fill_ts=next_open_ts,
         intended_entry_price=next_open,

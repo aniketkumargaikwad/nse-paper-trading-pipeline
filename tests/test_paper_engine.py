@@ -177,7 +177,8 @@ def frame(rows: list[tuple]) -> pd.DataFrame:
 
 
 def strategy(*, entry_above=105.0, exit_below=90.0, sl_pct=1.0, tgt_pct=2.0,
-             max_cycles=5, position_type="long"):
+             max_cycles=5, position_type="long",
+             sizing=None):
     doc = {
         "version": 2,
         "strategies": [{
@@ -189,7 +190,7 @@ def strategy(*, entry_above=105.0, exit_below=90.0, sl_pct=1.0, tgt_pct=2.0,
                 "stop_loss": {"type": "percent", "value": sl_pct},
                 "target": {"type": "percent", "value": tgt_pct},
             },
-            "sizing": {"type": "fixed_quantity", "quantity": 1},
+            "sizing": sizing or {"type": "fixed_quantity", "quantity": 1},
             "max_cycles_per_day": max_cycles,
         }],
     }
@@ -267,6 +268,48 @@ def test_entry_skipped_when_no_forming_candle() -> None:
     assert summary.entries == 0
     assert store.positions == {}
     assert any("final candle" in note for note in summary.skipped)
+
+
+def test_entry_derives_quantity_from_notional_sizing() -> None:
+    # Forming open is 108 -> floor(100000 / (108 * 1.0005)) shares, not the
+    # sizing.quantity field (which does not exist under notional sizing).
+    rows = [
+        (100, 101, 99, 100),   # 09:15
+        (100, 101, 99, 100),   # 09:30
+        (100, 101, 99, 100),   # 09:45
+        (100, 107, 99, 106),   # 10:00 closed candle: close 106 > 105 -> ENTRY
+        (108, 108.5, 107.5, 108),  # forming candle, open 108
+    ]
+    store = FakeStore()
+    strat = strategy(sizing={"type": "notional", "notional_per_trade": 100000})
+    summary = run(store, {"NSE:RELIANCE": frame(rows)}, strat)
+    assert summary.entries == 1
+    pos = store.positions[("pe-test", "NSE:RELIANCE")]
+    from decimal import Decimal
+    expected_price = 108.0 * 1.0005
+    assert pos.quantity == int(Decimal(str(100000)) // Decimal(str(expected_price)))
+    assert pos.quantity > 1
+
+
+def test_entry_skipped_when_notional_below_share_price() -> None:
+    # A Rs 500 notional cannot buy a ~Rs 108 share is false — invert it: use
+    # a notional smaller than the forming open so quantity resolves to 0.
+    rows = [
+        (100, 101, 99, 100),   # 09:15
+        (100, 101, 99, 100),   # 09:30
+        (100, 101, 99, 100),   # 09:45
+        (100, 107, 99, 106),   # 10:00 closed candle: close 106 > 105 -> ENTRY
+        (108, 108.5, 107.5, 108),  # forming candle, open 108
+    ]
+    store = FakeStore()
+    strat = strategy(sizing={"type": "notional", "notional_per_trade": 50})
+    summary = run(store, {"NSE:RELIANCE": frame(rows)}, strat)
+    assert summary.entries == 0
+    assert store.positions == {}
+    assert any(
+        "notional_per_trade" in note and "0 shares" in note
+        for note in summary.skipped
+    )
 
 
 def test_max_cycles_per_day_blocks_entry() -> None:
