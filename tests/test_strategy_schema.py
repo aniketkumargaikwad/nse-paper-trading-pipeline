@@ -95,8 +95,10 @@ def test_shipped_strategies_file_is_valid() -> None:
     assert s.position_type == "long"
     assert s.timeframe == "15m"
     assert len(s.instruments) == 5
-    assert s.risk.stop_loss_pct == 0.7
-    assert s.risk.target_pct == 1.5
+    assert s.risk.stop_loss.type == "percent"
+    assert s.risk.stop_loss.value == 0.7
+    assert s.risk.target.type == "percent"
+    assert s.risk.target.value == 1.5
     assert s.max_cycles_per_day == 2
 
     # Entry: EMA cross AND RSI AND volume filter.

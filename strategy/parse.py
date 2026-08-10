@@ -116,27 +116,6 @@ class RiskConfig:
     target: StopSpec
     trailing_stop: StopSpec | None = None
 
-    # Convenience for percent-only callers (the engine before Task 17 and the
-    # CLI summary). Raises rather than guessing when the stop is ATR-based:
-    # silently reporting 0.0% for an ATR stop would misdescribe the strategy.
-    @property
-    def stop_loss_pct(self) -> float:
-        if self.stop_loss.type != "percent":
-            raise ValueError(
-                f"stop_loss is {self.stop_loss.type!r}, not a percent — "
-                "read risk.stop_loss directly"
-            )
-        return float(self.stop_loss.value)
-
-    @property
-    def target_pct(self) -> float:
-        if self.target.type != "percent":
-            raise ValueError(
-                f"target is {self.target.type!r}, not a percent — "
-                "read risk.target directly"
-            )
-        return float(self.target.value)
-
 
 @dataclass(frozen=True)
 class SizingConfig:

@@ -54,12 +54,6 @@ def test_percent_stop_parses():
     assert s.risk.trailing_stop is None
 
 
-def test_percent_properties_stay_available_for_the_engine():
-    s = parse_strategy_dict(valid_v2())
-    assert s.risk.stop_loss_pct == 0.7
-    assert s.risk.target_pct == 1.5
-
-
 def test_atr_stop_parses():
     doc = valid_v2()
     doc["risk"]["stop_loss"] = {"type": "atr", "period": 14, "multiplier": 1.5}
@@ -112,42 +106,10 @@ def test_percent_out_of_range_is_rejected():
     assert "between 0 and 50" in str(exc.value)
 
 
-# ---------------------------------------------------------------------------
-# The compatibility properties. These are the one mechanism keeping the engine
-# working until the backtest engine reads StopSpec directly, and an earlier
-# review caught that nothing exercised their raising branch.
-# ---------------------------------------------------------------------------
-
-
 def atr_stop_doc() -> dict:
     doc = valid_v2()
     doc["risk"]["stop_loss"] = {"type": "atr", "period": 14, "multiplier": 1.5}
     return doc
-
-
-def test_stop_loss_pct_raises_on_an_atr_stop_rather_than_guessing():
-    """Returning 0.0 here would misdescribe the strategy in every summary."""
-    s = parse_strategy_dict(atr_stop_doc())
-    with pytest.raises(ValueError) as exc:
-        _ = s.risk.stop_loss_pct
-    assert "atr" in str(exc.value)
-
-
-def test_target_pct_raises_on_an_atr_target():
-    doc = valid_v2()
-    doc["risk"]["target"] = {"type": "atr", "period": 14, "multiplier": 3}
-    s = parse_strategy_dict(doc)
-    with pytest.raises(ValueError) as exc:
-        _ = s.risk.target_pct
-    assert "atr" in str(exc.value)
-
-
-def test_the_two_properties_are_independent():
-    """An ATR stop with a percent target: only the stop side may raise."""
-    s = parse_strategy_dict(atr_stop_doc())
-    with pytest.raises(ValueError):
-        _ = s.risk.stop_loss_pct
-    assert s.risk.target_pct == 1.5
 
 
 def test_describe_renders_both_forms():

@@ -46,14 +46,22 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
+import indicators
 import signals
 from config import IST, UTC, Settings, get_settings
 from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
 from kite_client import KiteClientError, TokenExpiredError
-from strategy_schema import Strategy, load_strategies, load_strategy_documents, resolve_quantity
+from strategy_schema import (
+    Strategy,
+    StopSpec,
+    load_strategies,
+    load_strategy_documents,
+    resolve_quantity,
+)
 
 # --- Kill-rule thresholds ---------------------------------------------------
 MIN_TRADES = 30
@@ -61,6 +69,17 @@ MAX_DRAWDOWN_PCT = 20.0
 MIN_PROFITABLE_SYMBOLS = 3  # capped at the strategy's instrument count
 
 CSV_OUTPUT_DIR = Path("backtest_results")
+
+
+class BacktestError(RuntimeError):
+    """Raised when a strategy cannot be honestly simulated as configured.
+
+    Reserved for problems the caller must fix before the result means
+    anything — e.g. an ATR stop whose period exceeds the available history.
+    A strategy that silently produced zero trades because its indicator
+    never warmed up would look identical to one whose edge does not exist,
+    which is worse than a loud failure.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +152,36 @@ def _make_trade(
     )
 
 
+def _level_from_spec(
+    spec: StopSpec,
+    entry_price: float,
+    signal_idx: int,
+    atr_series: dict[int, np.ndarray],
+    *,
+    favourable: bool,
+    is_long: bool,
+) -> float:
+    """Absolute price for a stop or target.
+
+    `favourable` marks a target (moves in the position's favour); a stop moves
+    against it. ATR is read at the SIGNAL candle — the last closed candle before
+    the fill — so the level never depends on data the fill could not have seen.
+    """
+    if spec.type == "percent":
+        distance = entry_price * spec.value / 100.0
+    else:
+        atr_value = float(atr_series[spec.period][signal_idx])
+        if not atr_value > 0 or atr_value != atr_value:  # zero or NaN
+            raise BacktestError(
+                f"ATR({spec.period}) is not available at the entry candle; "
+                "the series is still warming up. Backfill more history."
+            )
+        distance = atr_value * spec.multiplier
+
+    moves_up = favourable if is_long else not favourable
+    return entry_price + distance if moves_up else entry_price - distance
+
+
 def simulate_with_skips(
     df: pd.DataFrame,
     strategy: Strategy,
@@ -161,6 +210,28 @@ def simulate_with_skips(
 
     slip = slippage_pct / 100.0
     is_long = strategy.position_type == "long"
+
+    # Precompute every ATR series this strategy's risk config needs, ONCE,
+    # rather than recomputing it per candle inside the loop below. A period
+    # that exceeds the available history is a hard error here rather than a
+    # silently-NaN stop: a strategy that produced no trades because its
+    # indicator never warmed up looks identical to one whose edge does not
+    # exist, and that ambiguity is exactly what this guard prevents.
+    atr_periods = {
+        spec.period
+        for spec in (strategy.risk.stop_loss, strategy.risk.target,
+                     strategy.risk.trailing_stop)
+        if spec is not None and spec.type == "atr"
+    }
+    atr_series: dict[int, np.ndarray] = {}
+    for period in atr_periods:
+        if len(df) <= period:
+            raise BacktestError(
+                f"strategy {strategy.name!r} uses an ATR({period}) stop but only "
+                f"{len(df)} candles are available; at least {period + 1} are "
+                "needed. Backfill more history, or use a shorter ATR period."
+            )
+        atr_series[period] = indicators.atr(df, period).to_numpy()
 
     # Adverse slippage: buying pays more, selling receives less. For a long,
     # entry is a buy and exit a sell; for a short it is the reverse.
@@ -237,12 +308,14 @@ def simulate_with_skips(
                         )
                     )
                 else:
-                    if is_long:
-                        sl_price = e_price * (1 - strategy.risk.stop_loss_pct / 100)
-                        tgt_price = e_price * (1 + strategy.risk.target_pct / 100)
-                    else:
-                        sl_price = e_price * (1 + strategy.risk.stop_loss_pct / 100)
-                        tgt_price = e_price * (1 - strategy.risk.target_pct / 100)
+                    sl_price = _level_from_spec(
+                        strategy.risk.stop_loss, e_price, pending_entry_from,
+                        atr_series, favourable=False, is_long=is_long,
+                    )
+                    tgt_price = _level_from_spec(
+                        strategy.risk.target, e_price, pending_entry_from,
+                        atr_series, favourable=True, is_long=is_long,
+                    )
                     in_pos = True
                     entries_by_day[fill_day] = entries_by_day.get(fill_day, 0) + 1
             pending_entry_from = None

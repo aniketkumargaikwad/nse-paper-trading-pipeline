@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backtest import (  # noqa: E402
     MIN_TRADES,
+    BacktestError,
     SimTrade,
     compute_metrics,
     evaluate_kill_rules,
@@ -390,6 +391,96 @@ def test_fixed_quantity_is_unaffected():
     trades = simulate(frame_with_one_round_trip(entry_open=1000.0),
                       strategy, slippage_pct=0.0, cost_per_trade_inr=30.0)
     assert trades[0].quantity == 7
+
+
+# ---------------------------------------------------------------------------
+# ATR stops — the level must be read from the SIGNAL candle (the last CLOSED
+# candle before the fill), never the fill candle itself, and insufficient
+# warm-up history must be a loud error rather than a quiet zero-trade result.
+# ---------------------------------------------------------------------------
+
+
+def frame_with_known_atr(entry_open: float, atr_at_signal: float) -> pd.DataFrame:
+    """4 candles engineered so indicators.atr(df, 2) reads EXACTLY
+    `atr_at_signal` at candle 1 — the entry SIGNAL candle — and candle 3
+    trades down through the resulting long stop.
+
+    Candle 0's close is exactly 0, so the default `close > 0` entry rule
+    from strategy_with() does not fire there; candle 1's close is the first
+    positive one, so entry signals THERE instead (one candle later than the
+    naive case). That one-candle delay is what makes a *valid* ATR(2) reading
+    available at the signal candle at all — ATR(2) needs two candles of true
+    range before pandas' min_periods stops masking it as NaN.
+
+    Candles 0 and 1 both carry a true range of exactly `atr_at_signal`
+    (candle 0 from its own high-low span; candle 1 from the same span, with
+    its previous close pinned at 0 so the |high - prev_close| term never
+    dominates). A period-2 Wilder average of two identical values is that
+    same value, so ATR at candle 1 is exactly `atr_at_signal` — no need to
+    hand-derive the EWM recursion for an arbitrary run.
+
+    Candle 2 is the fill candle (open = entry_open); candle 3's low crosses
+    back down through `entry_open - 1.5 * atr_at_signal` without gapping
+    past it, so the stop fills AT the level rather than at candle 3's open.
+    """
+    half = atr_at_signal / 2.0
+    stop = entry_open - 1.5 * atr_at_signal
+    return make_df([
+        (0.0, half, -half, 0.0),                             # candle 0: TR = atr_at_signal
+        (0.0, half, -half, 1.0),                              # candle 1: signal, TR = atr_at_signal
+        (entry_open, entry_open + 1, entry_open - 1, entry_open),  # candle 2: fill, no hit
+        (stop + 5, stop + 10, stop - 5, stop - 3),            # candle 3: low crosses the stop
+    ])
+
+
+def frame_with_known_atr_short(entry_open: float, atr_at_signal: float) -> pd.DataFrame:
+    """Mirror of frame_with_known_atr for a short: the stop sits ABOVE the
+    entry, so candle 3's high crosses back up through it instead."""
+    half = atr_at_signal / 2.0
+    stop = entry_open + 1.5 * atr_at_signal
+    return make_df([
+        (0.0, half, -half, 0.0),
+        (0.0, half, -half, 1.0),
+        (entry_open, entry_open + 1, entry_open - 1, entry_open),
+        (stop - 5, stop + 10, stop - 10, stop - 3),           # candle 3: high crosses the stop
+    ])
+
+
+def test_atr_stop_is_set_from_the_candle_before_the_fill():
+    """1.5 x ATR below the entry fill, using the last CLOSED candle's ATR."""
+    strategy = strategy_with(risk={
+        "stop_loss": {"type": "atr", "period": 2, "multiplier": 1.5},
+        "target": {"type": "percent", "value": 1.5},
+    })
+    df = frame_with_known_atr(entry_open=1000.0, atr_at_signal=10.0)
+    trades = simulate(df, strategy, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    # stop = 1000 - 1.5*10 = 985
+    assert trades[0].exit_reason == "stop_loss"
+    assert trades[0].intended_exit_price == pytest.approx(985.0)
+
+
+def test_atr_stop_for_a_short_is_above_the_entry():
+    strategy = strategy_with(
+        position_type="short",
+        risk={"stop_loss": {"type": "atr", "period": 2, "multiplier": 1.5},
+              "target": {"type": "percent", "value": 1.5}},
+    )
+    df = frame_with_known_atr_short(entry_open=1000.0, atr_at_signal=10.0)
+    trades = simulate(df, strategy, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert trades[0].intended_exit_price == pytest.approx(1015.0)
+
+
+def test_insufficient_history_for_the_atr_period_is_a_hard_error():
+    strategy = strategy_with(risk={
+        "stop_loss": {"type": "atr", "period": 500, "multiplier": 1.5},
+        "target": {"type": "percent", "value": 1.5},
+    })
+    with pytest.raises(BacktestError) as exc:
+        simulate(frame_with_one_round_trip(entry_open=1000.0),
+                 strategy, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    msg = str(exc.value)
+    assert "500" in msg          # candles needed
+    assert "atr" in msg.lower()
 
 
 # ---------------------------------------------------------------------------

@@ -47,9 +47,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Sequence
 
+import numpy as np
 import pandas as pd
 
+import indicators
 import signals
+# Reused rather than reimplemented: the batch backtester (backtest.py) and this
+# engine must compute a stop/target level identically, or the same strategy
+# could show a profitable backtest and a different live behaviour. Both the
+# hard-error-on-insufficient-history rule and the ATR-at-the-signal-candle
+# rule live in ONE place (backtest._level_from_spec) for exactly that reason.
+from backtest import BacktestError, _level_from_spec
 from config import IST, TIMEFRAME_MINUTES, UTC, Settings, get_settings
 from data_provider import create_data_client, describe_provider
 from db import ClosedTrade, OpenPosition, SupabaseStore
@@ -119,6 +127,47 @@ def _check_stop_target(position: OpenPosition, candle: pd.Series) -> tuple[float
         if low <= tgt:
             return tgt, "target"
     return None
+
+
+def _stop_target_levels(
+    strategy: Strategy, closed: pd.DataFrame, entry_price: float,
+) -> tuple[float, float]:
+    """(stop_loss_price, target_price) for a brand-new entry.
+
+    `closed` is the SAME closed-candle frame `signals.entry_signal` just
+    evaluated, so its last row is the entry SIGNAL candle — the one whose
+    close fired the entry, one candle before the fill this engine is about
+    to record. Reusing backtest._level_from_spec with signal_idx = the last
+    row keeps this identical to the batch backtester's ATR-at-the-signal-
+    candle rule instead of quietly re-deriving it here.
+    """
+    is_long = strategy.position_type == "long"
+    signal_idx = len(closed) - 1
+
+    atr_periods = {
+        spec.period
+        for spec in (strategy.risk.stop_loss, strategy.risk.target)
+        if spec.type == "atr"
+    }
+    atr_series: dict[int, np.ndarray] = {}
+    for period in atr_periods:
+        if len(closed) <= period:
+            raise BacktestError(
+                f"strategy {strategy.name!r} uses an ATR({period}) stop but only "
+                f"{len(closed)} candles are available; at least {period + 1} are "
+                "needed. Backfill more history, or use a shorter ATR period."
+            )
+        atr_series[period] = indicators.atr(closed, period).to_numpy()
+
+    sl_price = _level_from_spec(
+        strategy.risk.stop_loss, entry_price, signal_idx, atr_series,
+        favourable=False, is_long=is_long,
+    )
+    tgt_price = _level_from_spec(
+        strategy.risk.target, entry_price, signal_idx, atr_series,
+        favourable=True, is_long=is_long,
+    )
+    return sl_price, tgt_price
 
 
 def _build_trade(
@@ -292,12 +341,7 @@ def _process_combo(
         )
         return
 
-    if strategy.position_type == "long":
-        sl_price = entry_price * (1 - strategy.risk.stop_loss_pct / 100)
-        tgt_price = entry_price * (1 + strategy.risk.target_pct / 100)
-    else:
-        sl_price = entry_price * (1 + strategy.risk.stop_loss_pct / 100)
-        tgt_price = entry_price * (1 - strategy.risk.target_pct / 100)
+    sl_price, tgt_price = _stop_target_levels(strategy, closed, entry_price)
 
     created = store.open_position(
         strategy_name=strategy.name,

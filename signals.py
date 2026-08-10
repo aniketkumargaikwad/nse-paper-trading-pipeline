@@ -178,8 +178,21 @@ def min_candles_required(strategy: Strategy) -> int:
     exactly 21 candles produces a subtly wrong number, which is worse than
     an obviously missing one. +10 covers the cross operators' shift(1) and
     general slack. Over-fetching is cheap; silently-wrong indicators are not.
+
+    ATR-based stop/target periods (strategy.risk) count too, even though
+    they never appear in entry/exit conditions: the paper engine computes
+    those ATR series from this SAME fetched frame (see
+    paper_engine._stop_target_levels), so an entry rule with a short
+    lookback must not starve a much longer ATR stop period of history —
+    that would turn a perfectly good strategy into a hard error every run
+    for a reason that isn't obvious from the strategy definition itself.
     """
     lookbacks = [_operand_lookback(op) for op in _walk_operands(strategy)]
+    lookbacks += [
+        spec.period + 1
+        for spec in (strategy.risk.stop_loss, strategy.risk.target)
+        if spec.type == "atr"
+    ]
     return 5 * max(lookbacks) + 10
 
 
