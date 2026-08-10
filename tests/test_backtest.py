@@ -356,7 +356,12 @@ def frame_with_one_round_trip(entry_open: float) -> pd.DataFrame:
 
 
 def test_notional_sizing_derives_quantity_from_the_entry_price():
-    """100000 notional at a ~1000 entry fill buys 99 shares, not 1."""
+    """A 100000 notional at a 1000 entry fill buys 100 shares, not 1.
+
+    Sizing in rupees rather than shares is what makes cost drag comparable
+    across a universe — at a fixed share count it is 20x heavier on a cheap
+    stock than an expensive one.
+    """
     strategy = strategy_with(sizing={"type": "notional", "notional_per_trade": 100000})
     trades = simulate(frame_with_one_round_trip(entry_open=1000.0),
                       strategy, slippage_pct=0.0, cost_per_trade_inr=30.0)
