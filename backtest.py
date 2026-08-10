@@ -221,6 +221,14 @@ def simulate_with_skips(
                     # A quantity-0 trade would post a P&L of exactly 0 and
                     # land in the results as a flat trade that never
                     # happened — record the skip instead of the trade.
+                    #
+                    # Deliberately NOT `continue`: the block at the bottom of
+                    # this loop queues a fresh entry from THIS candle's close,
+                    # and it runs on the signal alone, not on in_pos. Skipping
+                    # it would drop a signal that fired on the skip candle
+                    # entirely — no trade AND no SkippedEntry — which is the
+                    # very invisibility this skip record exists to prevent.
+                    # The stop/target block below is a no-op while flat.
                     skipped.append(
                         SkippedEntry(
                             signal_ts=index[pending_entry_from],
@@ -228,16 +236,15 @@ def simulate_with_skips(
                             reason="notional_below_price",
                         )
                     )
-                    pending_entry_from = None
-                    continue
-                if is_long:
-                    sl_price = e_price * (1 - strategy.risk.stop_loss_pct / 100)
-                    tgt_price = e_price * (1 + strategy.risk.target_pct / 100)
                 else:
-                    sl_price = e_price * (1 + strategy.risk.stop_loss_pct / 100)
-                    tgt_price = e_price * (1 - strategy.risk.target_pct / 100)
-                in_pos = True
-                entries_by_day[fill_day] = entries_by_day.get(fill_day, 0) + 1
+                    if is_long:
+                        sl_price = e_price * (1 - strategy.risk.stop_loss_pct / 100)
+                        tgt_price = e_price * (1 + strategy.risk.target_pct / 100)
+                    else:
+                        sl_price = e_price * (1 + strategy.risk.stop_loss_pct / 100)
+                        tgt_price = e_price * (1 - strategy.risk.target_pct / 100)
+                    in_pos = True
+                    entries_by_day[fill_day] = entries_by_day.get(fill_day, 0) + 1
             pending_entry_from = None
 
         # ---- During the candle: stop-loss / target on high-low range.

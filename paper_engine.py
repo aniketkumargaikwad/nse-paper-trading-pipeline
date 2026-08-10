@@ -285,8 +285,10 @@ def _process_combo(
     qty = resolve_quantity(strategy.sizing, entry_price)
     if qty < 1:
         summary.skipped.append(
-            f"{combo}: entry signal ignored — notional_per_trade resolves "
-            f"to 0 shares at the entry fill price (₹{entry_price:.2f})"
+            f"{combo}: entry signal ignored — notional_per_trade "
+            f"₹{strategy.sizing.notional_per_trade:,.0f} buys 0 shares at the "
+            f"entry fill price ₹{entry_price:,.2f}. Raise notional_per_trade "
+            f"to at least the share price to trade this symbol."
         )
         return
 

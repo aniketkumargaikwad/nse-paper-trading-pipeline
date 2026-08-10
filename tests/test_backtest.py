@@ -477,3 +477,79 @@ def test_symbol_requirement_capped_by_instrument_count() -> None:
     assert passed
     assert flags["symbol_robustness"]["required_profitable_symbols"] == 1
 
+
+
+# ---------------------------------------------------------------------------
+# Regression: a signal firing on the same candle a notional skip happened must
+# still be seen. An earlier version `continue`d past the bottom-of-loop block
+# that queues a fresh entry from this candle's close, so such a signal
+# vanished entirely — no trade AND no SkippedEntry — which is precisely the
+# invisibility the skip record exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+def notional_strategy(*, notional: float, entry_above: float, exit_below: float):
+    doc = {
+        "version": 2,
+        "strategies": [
+            {
+                "name": "notional-test", "enabled": True, "position_type": "long",
+                "timeframe": "15m", "instruments": ["NSE:RELIANCE"],
+                "entry": {"all": [{"indicator": "close", "operator": ">", "value": entry_above}]},
+                "exit": {"any": [{"indicator": "close", "operator": "<", "value": exit_below}]},
+                "risk": {
+                    "stop_loss": {"type": "percent", "value": 5.0},
+                    "target": {"type": "percent", "value": 10.0},
+                },
+                "sizing": {"type": "notional", "notional_per_trade": notional},
+                "max_cycles_per_day": 10,
+            }
+        ],
+    }
+    return parse_strategies(doc)[0]
+
+
+def test_a_signal_on_the_skip_candle_is_not_lost():
+    """The share is too dear at the first fill, then cheap enough at the next.
+
+    The second signal fires at the close of the very candle whose fill was
+    skipped. It must still reach a trade — dropping it would under-count
+    trades in exactly the case the skip record was built to make visible.
+    """
+    # candle 0 close 1000 -> signal. candle 1 open 1000: too dear for a 500
+    # notional -> skip; its close 600 signals again. candle 2 open 50: fillable.
+    df = make_df([
+        (1000, 1000, 1000, 1000),
+        (1000, 1000, 600, 600),
+        (50, 50, 50, 50),
+        (50, 50, 50, 50),
+    ])
+    strat = notional_strategy(notional=500, entry_above=500, exit_below=10)
+    result = simulate_with_skips(df, strat, slippage_pct=0.0, cost_per_trade_inr=0.0)
+
+    assert len(result.skipped) == 1, "the dear-share fill should be recorded"
+    assert result.trades, "the signal on the skip candle must still reach a trade"
+    assert result.trades[0].quantity == 10       # 500 notional / 50
+
+
+def test_each_trade_carries_its_own_quantity():
+    """Two round trips at different entry prices in one run.
+
+    Quantity is per-trade state; a module-level variable would leave both
+    trades reporting the last value computed.
+    """
+    # Entry at 1000 (qty 100), exit, then entry at 2000 (qty 50).
+    df = make_df([
+        (1000, 1000, 1000, 1000),   # signal
+        (1000, 1000, 1000, 1000),   # fill @1000
+        (1000, 1000, 1000, 5),      # exit signal
+        (1000, 1000, 1000, 1000),   # exit fill; re-signal at close
+        (2000, 2000, 2000, 2000),   # fill @2000
+        (2000, 2000, 2000, 5),      # exit signal
+        (2000, 2000, 2000, 2000),   # exit fill
+    ])
+    strat = notional_strategy(notional=100000, entry_above=500, exit_below=10)
+    trades = simulate(df, strat, slippage_pct=0.0, cost_per_trade_inr=0.0)
+
+    assert len(trades) == 2
+    assert [t.quantity for t in trades] == [100, 50]
