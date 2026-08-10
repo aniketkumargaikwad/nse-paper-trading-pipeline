@@ -544,3 +544,38 @@ def test_instruments_round_trips_through_strategy_to_raw():
     assert raw["instruments"] == ["NSE:RELIANCE"]
     assert "universe" not in raw
     assert parse_strategy_dict(raw) == original
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "nifty100",      # lowercase
+        "NIFTY 100",     # space
+        "NIFTY-100",     # punctuation
+        "N",             # too short (min 2)
+        "N" * 41,        # too long (max 40)
+        "",              # empty
+        123,             # not a string
+        None,
+        ["NIFTY100"],
+        True,
+    ],
+)
+def test_malformed_universe_names_are_rejected(bad_name):
+    """The shape rule is the only guard on a name arriving from a paste box,
+    so its boundaries are worth pinning rather than trusting one combined case.
+    """
+    doc = valid_v2()
+    del doc["instruments"]
+    doc["universe"] = bad_name
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "universe" in str(exc.value)
+
+
+@pytest.mark.parametrize("good_name", ["NIFTY50", "NIFTY_MIDCAP_100", "MY_WATCHLIST", "AB"])
+def test_well_formed_universe_names_are_accepted(good_name):
+    doc = valid_v2()
+    del doc["instruments"]
+    doc["universe"] = good_name
+    assert parse_strategy_dict(doc).universe == good_name
