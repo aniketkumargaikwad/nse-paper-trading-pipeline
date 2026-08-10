@@ -8,6 +8,7 @@ that stops naming the offending key is a real regression.
 from __future__ import annotations
 
 import sys
+from datetime import time
 from pathlib import Path
 
 import pytest
@@ -356,3 +357,101 @@ def test_resolve_quantity_handles_a_price_of_zero_without_raising():
     sizing = parse_strategy_dict(valid_v2()).sizing
     assert resolve_quantity(sizing, price=0.0) == 0
     assert resolve_quantity(sizing, price=-5.0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Session: entry window and intraday square-off.
+# ---------------------------------------------------------------------------
+
+
+def test_session_is_optional_and_defaults_to_empty():
+    s = parse_strategy_dict(valid_v2())
+    assert s.session.no_entry_before is None
+    assert s.session.no_entry_after is None
+    assert s.session.square_off is None
+
+
+def test_session_times_parse():
+    doc = valid_v2()
+    doc["session"] = {"no_entry_before": "09:30", "no_entry_after": "14:30",
+                      "square_off": "15:15"}
+    s = parse_strategy_dict(doc)
+    assert s.session.no_entry_before == time(9, 30)
+    assert s.session.square_off == time(15, 15)
+
+
+def test_session_rejects_a_non_time_string():
+    doc = valid_v2()
+    doc["session"] = {"square_off": "quarter past three"}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    msg = str(exc.value)
+    assert "session.square_off" in msg
+    assert "HH:MM" in msg
+
+
+def test_session_rejects_a_time_outside_the_nse_session():
+    doc = valid_v2()
+    doc["session"] = {"square_off": "17:00"}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "09:15" in str(exc.value) and "15:30" in str(exc.value)
+
+
+def test_entry_window_must_not_be_inverted():
+    doc = valid_v2()
+    doc["session"] = {"no_entry_before": "14:30", "no_entry_after": "09:30"}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "no_entry_before" in str(exc.value)
+
+
+def test_square_off_must_not_precede_the_entry_window():
+    doc = valid_v2()
+    doc["session"] = {"no_entry_before": "14:00", "square_off": "13:00"}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "square_off" in str(exc.value)
+
+
+def test_session_rejects_an_unknown_key_alongside_the_allowed_ones():
+    """Mirrors _parse_stop_spec / _parse_sizing: a typo like `squareoff` is
+
+    reported by name, alongside the allowed keys, in the same message that
+    _require_keys already produces for `optional=set(SESSION_KEYS)`.
+    """
+    doc = valid_v2()
+    doc["session"] = {"squareoff": "15:15"}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    msg = str(exc.value)
+    assert "squareoff" in msg
+    assert "square_off" in msg
+    assert "no_entry_before" in msg and "no_entry_after" in msg
+
+
+def test_session_round_trips_through_strategy_to_raw_when_present():
+    doc = valid_v2()
+    doc["session"] = {"no_entry_before": "09:30", "no_entry_after": "14:30",
+                      "square_off": "15:15"}
+    original = parse_strategy_dict(doc)
+    assert parse_strategy_dict(strategy_to_raw(original)) == original
+
+
+def test_session_is_omitted_not_emitted_empty_when_absent():
+    raw = strategy_to_raw(parse_strategy_dict(valid_v2()))
+    assert "session" not in raw
+
+
+# ---------------------------------------------------------------------------
+# Public surface. strategy_schema.py is a backwards-compatible re-export shim
+# over the strategy/ package (Tasks 1-2); anything added to one __all__ and
+# not the other is a broken import for whichever caller uses the other name.
+# ---------------------------------------------------------------------------
+
+
+def test_strategy_package_and_shim_export_the_same_names():
+    import strategy
+    import strategy_schema
+
+    assert set(strategy.__all__) == set(strategy_schema.__all__)

@@ -92,3 +92,12 @@ MAX_STOP_PERCENT = 50.0
 # period in this parser is validated only as > 0, and bounding this one alone
 # would be inconsistent.
 MAX_ATR_MULTIPLIER = 20.0
+
+# NSE cash session, IST. Session keys are validated against these bounds: a
+# square_off of 17:00 would silently never trigger, leaving an "intraday"
+# strategy holding overnight — exactly the failure the key exists to prevent.
+SESSION_OPEN_HHMM = "09:15"
+SESSION_CLOSE_HHMM = "15:30"
+SESSION_KEYS: frozenset[str] = frozenset(
+    {"no_entry_before", "no_entry_after", "square_off"}
+)

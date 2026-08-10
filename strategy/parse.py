@@ -18,6 +18,7 @@ caller, which has database access (see db.SupabaseStore.save_strategy_document).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import time
 from decimal import Decimal
 from typing import Any, Union
 
@@ -34,6 +35,9 @@ from strategy.vocabulary import (
     MAX_STOP_PERCENT,
     POSITION_TYPES,
     PRICE_SOURCES,
+    SESSION_CLOSE_HHMM,
+    SESSION_KEYS,
+    SESSION_OPEN_HHMM,
     SIZING_TYPE_KEYS,
     SIZING_TYPES,
     SOURCE_ALLOWED_FOR,
@@ -142,6 +146,23 @@ class SizingConfig:
 
 
 @dataclass(frozen=True)
+class SessionConfig:
+    """Intraday timing rules. All times are IST; every field is optional.
+
+    `no_entry_before` / `no_entry_after` bound the FILL candle, not the signal
+    candle — the fill is when the position actually opens.
+
+    `square_off` closes any open position at the open of the first candle
+    starting at or after it, and blocks entry fills from that time. A strategy
+    with square_off set never holds overnight.
+    """
+
+    no_entry_before: time | None = None
+    no_entry_after: time | None = None
+    square_off: time | None = None
+
+
+@dataclass(frozen=True)
 class Strategy:
     name: str
     enabled: bool
@@ -152,6 +173,7 @@ class Strategy:
     exit: ConditionGroup
     risk: RiskConfig
     sizing: SizingConfig
+    session: SessionConfig
     max_cycles_per_day: int
 
 
@@ -465,6 +487,63 @@ def _parse_sizing(node: Any, where: str) -> SizingConfig:
     return SizingConfig(type="fixed_quantity", quantity=qty)
 
 
+_SESSION_OPEN = time.fromisoformat(SESSION_OPEN_HHMM)
+_SESSION_CLOSE = time.fromisoformat(SESSION_CLOSE_HHMM)
+
+
+def _parse_time(raw: Any, where: str) -> time:
+    if not isinstance(raw, str):
+        _fail(
+            where,
+            f"expected a quoted HH:MM time like \"15:15\", got {raw!r}. "
+            "Quote it in YAML — an unquoted 15:15 is not a string.",
+        )
+    try:
+        parsed = time.fromisoformat(raw)
+    except ValueError:
+        _fail(where, f"expected HH:MM in 24-hour IST, got {raw!r}")
+    if parsed.second or parsed.microsecond:
+        _fail(where, f"expected HH:MM with no seconds, got {raw!r}")
+    if not _SESSION_OPEN <= parsed <= _SESSION_CLOSE:
+        _fail(
+            where,
+            f"{raw} is outside the NSE session "
+            f"({SESSION_OPEN_HHMM}-{SESSION_CLOSE_HHMM} IST); it would never trigger",
+        )
+    return parsed
+
+
+def _parse_session(node: Any, where: str) -> SessionConfig:
+    node = _require_mapping(node, where)
+    _require_keys(node, where, required=set(), optional=set(SESSION_KEYS))
+
+    times = {
+        key: _parse_time(node[key], f"{where}.{key}")
+        for key in SESSION_KEYS
+        if key in node
+    }
+    before, after = times.get("no_entry_before"), times.get("no_entry_after")
+    square_off = times.get("square_off")
+
+    if before and after and before >= after:
+        _fail(
+            where,
+            f"no_entry_before ({before:%H:%M}) must be earlier than "
+            f"no_entry_after ({after:%H:%M}); as written no entry could ever fill",
+        )
+    earliest_entry = before or _SESSION_OPEN
+    if square_off and square_off <= earliest_entry:
+        _fail(
+            f"{where}.square_off",
+            f"square_off ({square_off:%H:%M}) is at or before the earliest "
+            f"possible entry ({earliest_entry:%H:%M}); every position would be "
+            "closed on the candle it opened",
+        )
+    return SessionConfig(
+        no_entry_before=before, no_entry_after=after, square_off=square_off
+    )
+
+
 def _parse_strategy(node: Any, where: str) -> Strategy:
     node = _require_mapping(node, where)
     _require_keys(
@@ -473,7 +552,7 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
             "name", "enabled", "position_type", "timeframe",
             "instruments", "entry", "exit", "risk", "sizing",
         },
-        optional={"max_cycles_per_day"},
+        optional={"max_cycles_per_day", "session"},
     )
 
     name = node["name"]
@@ -521,6 +600,12 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
 
     sizing = _parse_sizing(node["sizing"], f"{where}.sizing")
 
+    session = (
+        _parse_session(node["session"], f"{where}.session")
+        if "session" in node
+        else SessionConfig()
+    )
+
     return Strategy(
         name=name,
         enabled=enabled,
@@ -531,6 +616,7 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
         exit=_parse_condition_group(node["exit"], f"{where}.exit"),
         risk=_parse_risk(node["risk"], f"{where}.risk"),
         sizing=sizing,
+        session=session,
         max_cycles_per_day=max_cycles,
     )
 
@@ -623,6 +709,16 @@ def strategy_to_raw(strategy: Strategy) -> dict[str, Any]:
     if strategy.risk.trailing_stop is not None:
         risk["trailing_stop"] = stop_spec_to_raw(strategy.risk.trailing_stop)
 
+    session_raw = {
+        key: f"{value:%H:%M}"
+        for key, value in (
+            ("no_entry_before", strategy.session.no_entry_before),
+            ("no_entry_after", strategy.session.no_entry_after),
+            ("square_off", strategy.session.square_off),
+        )
+        if value is not None
+    }
+
     return {
         "name": strategy.name,
         "enabled": strategy.enabled,
@@ -637,6 +733,7 @@ def strategy_to_raw(strategy: Strategy) -> dict[str, Any]:
             if strategy.sizing.type == "notional"
             else {"type": "fixed_quantity", "quantity": strategy.sizing.quantity}
         ),
+        **({"session": session_raw} if session_raw else {}),
         "max_cycles_per_day": strategy.max_cycles_per_day,
     }
 
