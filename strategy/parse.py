@@ -25,6 +25,7 @@ from typing import Any, Union
 import yaml
 
 from config import SUPPORTED_TIMEFRAMES
+from strategy.migrate import CURRENT_VERSION, migrate_document
 from strategy.vocabulary import (
     ALL_OPERATORS,
     DEFAULT_OUTPUT,
@@ -673,8 +674,13 @@ def parse_strategies(data: Any) -> list[Strategy]:
     root = _require_mapping(data, "(top level)")
     _require_keys(root, "(top level)", required={"version", "strategies"}, optional=set())
 
-    if root["version"] != 1:
-        _fail("version", f"unsupported version {root['version']!r}; this code understands version 1")
+    if root["version"] != CURRENT_VERSION:
+        _fail(
+            "version",
+            f"unsupported version {root['version']!r}; this code understands "
+            f"version {CURRENT_VERSION}. A version 1 file must be migrated "
+            "first — see strategy.migrate.migrate_document().",
+        )
 
     raw_strategies = root["strategies"]
     if not isinstance(raw_strategies, list) or not raw_strategies:
@@ -792,6 +798,11 @@ def load_strategy_documents(path: str = "strategies.yaml") -> list[dict[str, Any
     """
     with open(path, "r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
+    # Migrate before validating: a v1 file on disk must still load, and the
+    # DB should be seeded with v2 documents so every later read (which also
+    # migrates, harmlessly, via the version==CURRENT_VERSION passthrough)
+    # sees the current shape.
+    data = migrate_document(data)
     parse_strategies(data)  # validate, discard the objects
     return list(data["strategies"])
 
@@ -813,4 +824,5 @@ def load_strategies(path: str = "strategies.yaml") -> list[Strategy]:
             "Common causes: inconsistent indentation, a missing ':', or an "
             "unquoted '>' operator (write operator: \">\")."
         ) from exc
+    data = migrate_document(data)
     return parse_strategies(data)

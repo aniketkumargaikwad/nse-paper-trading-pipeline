@@ -7,6 +7,7 @@ Import from here rather than from the submodules::
 
 from __future__ import annotations
 
+from strategy.migrate import CURRENT_VERSION, MigrationError, migrate_document
 from strategy.parse import (
     Condition,
     ConditionGroup,
@@ -45,10 +46,12 @@ __all__ = [
     "Condition",
     "ConditionGroup",
     "CROSS_OPERATORS",
+    "CURRENT_VERSION",
     "DEFAULT_OUTPUT",
     "INDICATOR_OUTPUTS",
     "INDICATOR_PARAMS",
     "INSTRUMENT_RE",
+    "MigrationError",
     "Operand",
     "POSITION_TYPES",
     "PRICE_SOURCES",
@@ -63,6 +66,7 @@ __all__ = [
     "UNIVERSE_RE",
     "load_strategies",
     "load_strategy_documents",
+    "migrate_document",
     "parse_strategies",
     "parse_strategy_dict",
     "resolve_quantity",

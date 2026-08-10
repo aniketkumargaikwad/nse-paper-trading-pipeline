@@ -56,7 +56,7 @@ def threshold_strategy(
     """Entry: close > entry_above. Exit: close < exit_below. Wide SL/target
     by default so rule-based tests aren't disturbed by them."""
     doc = {
-        "version": 1,
+        "version": 2,
         "strategies": [
             {
                 "name": "bt-test", "enabled": True, "position_type": position_type,

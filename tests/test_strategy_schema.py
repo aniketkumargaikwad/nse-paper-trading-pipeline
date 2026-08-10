@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def valid_doc() -> dict:
     """Smallest document that passes validation; tests break one thing each."""
     return {
-        "version": 1,
+        "version": 2,
         "strategies": [
             {
                 "name": "test-strat",

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 
+from strategy.migrate import CURRENT_VERSION, MigrationError, migrate_document
 from strategy.parse import (
     Condition,
     ConditionGroup,
@@ -46,13 +47,13 @@ from strategy.vocabulary import (
 )
 
 __all__ = [
-    "ALL_OPERATORS", "COMPARISON_OPERATORS", "CROSS_OPERATORS",
+    "ALL_OPERATORS", "COMPARISON_OPERATORS", "CROSS_OPERATORS", "CURRENT_VERSION",
     "Condition", "ConditionGroup", "DEFAULT_OUTPUT", "INDICATOR_OUTPUTS",
-    "INDICATOR_PARAMS", "INSTRUMENT_RE", "Operand", "POSITION_TYPES",
+    "INDICATOR_PARAMS", "INSTRUMENT_RE", "MigrationError", "Operand", "POSITION_TYPES",
     "PRICE_SOURCES", "RiskConfig", "SIZING_TYPES", "SOURCE_ALLOWED_FOR",
     "SessionConfig", "SizingConfig", "StopSpec", "Strategy", "StrategyConfigError",
     "UNIVERSE_RE", "load_strategies",
-    "load_strategy_documents", "parse_strategies", "parse_strategy_dict",
+    "load_strategy_documents", "migrate_document", "parse_strategies", "parse_strategy_dict",
     "resolve_quantity", "strategy_to_raw",
 ]
 

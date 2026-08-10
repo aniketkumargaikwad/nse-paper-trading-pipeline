@@ -179,7 +179,7 @@ def frame(rows: list[tuple]) -> pd.DataFrame:
 def strategy(*, entry_above=105.0, exit_below=90.0, sl_pct=1.0, tgt_pct=2.0,
              max_cycles=5, position_type="long"):
     doc = {
-        "version": 1,
+        "version": 2,
         "strategies": [{
             "name": "pe-test", "enabled": True, "position_type": position_type,
             "timeframe": "15m", "instruments": ["NSE:RELIANCE"],

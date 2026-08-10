@@ -47,7 +47,7 @@ def make_df(closes, volumes=None) -> pd.DataFrame:
 def strategy_with(entry: dict, exit_: dict | None = None):
     """Build a validated Strategy around given entry/exit condition groups."""
     doc = {
-        "version": 1,
+        "version": 2,
         "strategies": [
             {
                 "name": "sig-test",
