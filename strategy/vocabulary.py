@@ -55,7 +55,18 @@ CROSS_OPERATORS: frozenset[str] = frozenset({"crosses_above", "crosses_below"})
 ALL_OPERATORS: frozenset[str] = COMPARISON_OPERATORS | CROSS_OPERATORS
 
 POSITION_TYPES: frozenset[str] = frozenset({"long", "short"})
-SIZING_TYPES: frozenset[str] = frozenset({"fixed_quantity"})
+
+# 'notional' is the recommended mode: a rupee amount per trade, so cost drag is
+# identical on a Rs 200 stock and a Rs 4,000 one and results stay comparable
+# across a universe. 'fixed_quantity' is retained for v1 strategies and is
+# documented as discouraged — at a fixed share count, ranking a universe partly
+# ranks it by share price.
+SIZING_TYPES: frozenset[str] = frozenset({"notional", "fixed_quantity"})
+
+SIZING_TYPE_KEYS: dict[str, frozenset[str]] = {
+    "notional": frozenset({"notional_per_trade"}),
+    "fixed_quantity": frozenset({"quantity"}),
+}
 
 # "EXCHANGE:TRADINGSYMBOL", e.g. NSE:RELIANCE or NSE:M&M or NFO:NIFTY24AUGFUT.
 INSTRUMENT_RE = re.compile(r"^[A-Z]+:[A-Z0-9&\-]+$")

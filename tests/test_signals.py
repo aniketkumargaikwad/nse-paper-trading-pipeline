@@ -62,6 +62,7 @@ def strategy_with(entry: dict, exit_: dict | None = None):
                     "stop_loss": {"type": "percent", "value": 0.7},
                     "target": {"type": "percent", "value": 1.5},
                 },
+                "sizing": {"type": "fixed_quantity", "quantity": 1},
             }
         ],
     }

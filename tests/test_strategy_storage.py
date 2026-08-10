@@ -105,6 +105,7 @@ def test_invalid_document_rejected_before_storage() -> None:
             "stop_loss": {"type": "percent", "value": 1.0},
             "target": {"type": "percent", "value": 2.0},
         },
+        "sizing": {"type": "fixed_quantity", "quantity": 1},
     }
     with pytest.raises(StrategyConfigError, match="unsupported timeframe"):
         parse_strategy_dict(bad)

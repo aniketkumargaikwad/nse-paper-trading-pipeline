@@ -65,6 +65,7 @@ def valid_doc() -> dict:
                     "stop_loss": {"type": "percent", "value": 0.7},
                     "target": {"type": "percent", "value": 1.5},
                 },
+                "sizing": {"type": "fixed_quantity", "quantity": 1},
             }
         ],
     }
@@ -115,9 +116,18 @@ def test_shipped_strategies_file_is_valid() -> None:
 def test_valid_minimal_doc_parses() -> None:
     strategies = parse_strategies(valid_doc())
     assert strategies[0].name == "test-strat"
-    # Defaults applied when optional keys are omitted.
     assert strategies[0].sizing.quantity == 1
+    # max_cycles_per_day is still optional and still defaults.
     assert strategies[0].max_cycles_per_day == 1
+
+
+def test_missing_sizing_is_rejected() -> None:
+    """`sizing` used to default to {fixed_quantity: 1}; it is now required —
+    a default here would be a silent opinion about acceptable cost drag
+    (see strategy/parse.py:_parse_sizing)."""
+    doc = valid_doc()
+    del doc["strategies"][0]["sizing"]
+    expect_error(doc, "sizing")
 
 
 # ---------------------------------------------------------------------------

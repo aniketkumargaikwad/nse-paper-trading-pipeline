@@ -33,6 +33,7 @@ from strategy.vocabulary import (
     MAX_STOP_PERCENT,
     POSITION_TYPES,
     PRICE_SOURCES,
+    SIZING_TYPE_KEYS,
     SIZING_TYPES,
     SOURCE_ALLOWED_FOR,
     STOP_TYPE_KEYS,
@@ -132,8 +133,11 @@ class RiskConfig:
 
 @dataclass(frozen=True)
 class SizingConfig:
+    """How big a trade is. Exactly one of the two fields is populated."""
+
     type: str
-    quantity: int
+    notional_per_trade: float | None = None
+    quantity: int | None = None
 
 
 @dataclass(frozen=True)
@@ -402,16 +406,44 @@ def _parse_risk(node: Any, where: str) -> RiskConfig:
     )
 
 
+def resolve_quantity(sizing: SizingConfig, price: float) -> int:
+    """Shares to trade at `price`. Zero means the trade must be SKIPPED.
+
+    Zero is a real, expected outcome — a Rs 3,000 share against a Rs 1,000
+    notional cannot be traded at all. Callers must record the skip rather than
+    proceed, because a quantity-0 trade would post a P&L of exactly 0 and land
+    in the results as a flat trade that never happened.
+    """
+    if sizing.type == "fixed_quantity":
+        return int(sizing.quantity)
+    if price <= 0:
+        return 0
+    return int(sizing.notional_per_trade // price)
+
+
 def _parse_sizing(node: Any, where: str) -> SizingConfig:
     node = _require_mapping(node, where)
-    _require_keys(node, where, required={"type", "quantity"}, optional=set())
+    if "type" not in node:
+        _fail(where, f"missing required key: type. Allowed: {', '.join(sorted(SIZING_TYPES))}")
+
     stype = node["type"]
     if stype not in SIZING_TYPES:
-        _fail(f"{where}.type", f"unknown sizing type {stype!r}. Allowed: {', '.join(sorted(SIZING_TYPES))}")
+        _fail(
+            f"{where}.type",
+            f"unknown sizing type {stype!r}. Allowed: {', '.join(sorted(SIZING_TYPES))}",
+        )
+    _require_keys(node, where, required={"type"} | set(SIZING_TYPE_KEYS[stype]), optional=set())
+
+    if stype == "notional":
+        raw = node["notional_per_trade"]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+            _fail(f"{where}.notional_per_trade", f"expected a number > 0, got {raw!r}")
+        return SizingConfig(type="notional", notional_per_trade=float(raw))
+
     qty = node["quantity"]
     if isinstance(qty, bool) or not isinstance(qty, int) or qty < 1:
         _fail(f"{where}.quantity", f"expected a whole number >= 1, got {qty!r}")
-    return SizingConfig(type=stype, quantity=qty)
+    return SizingConfig(type="fixed_quantity", quantity=qty)
 
 
 def _parse_strategy(node: Any, where: str) -> Strategy:
@@ -420,9 +452,9 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
         node, where,
         required={
             "name", "enabled", "position_type", "timeframe",
-            "instruments", "entry", "exit", "risk",
+            "instruments", "entry", "exit", "risk", "sizing",
         },
-        optional={"sizing", "max_cycles_per_day"},
+        optional={"max_cycles_per_day"},
     )
 
     name = node["name"]
@@ -468,11 +500,7 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
     if isinstance(max_cycles, bool) or not isinstance(max_cycles, int) or max_cycles < 1:
         _fail(f"{where}.max_cycles_per_day", f"expected a whole number >= 1, got {max_cycles!r}")
 
-    sizing = (
-        _parse_sizing(node["sizing"], f"{where}.sizing")
-        if "sizing" in node
-        else SizingConfig(type="fixed_quantity", quantity=1)
-    )
+    sizing = _parse_sizing(node["sizing"], f"{where}.sizing")
 
     return Strategy(
         name=name,
@@ -585,7 +613,11 @@ def strategy_to_raw(strategy: Strategy) -> dict[str, Any]:
         "entry": group_to_raw(strategy.entry),
         "exit": group_to_raw(strategy.exit),
         "risk": risk,
-        "sizing": {"type": strategy.sizing.type, "quantity": strategy.sizing.quantity},
+        "sizing": (
+            {"type": "notional", "notional_per_trade": strategy.sizing.notional_per_trade}
+            if strategy.sizing.type == "notional"
+            else {"type": "fixed_quantity", "quantity": strategy.sizing.quantity}
+        ),
         "max_cycles_per_day": strategy.max_cycles_per_day,
     }
 

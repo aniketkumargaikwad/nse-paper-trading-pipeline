@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from strategy.parse import (  # noqa: E402
     StrategyConfigError,
     parse_strategy_dict,
+    resolve_quantity,
     strategy_to_raw,
 )
 
@@ -37,9 +38,10 @@ def valid_v2() -> dict:
             "stop_loss": {"type": "percent", "value": 0.7},
             "target": {"type": "percent", "value": 1.5},
         },
-        # v2 sizing (rupee notional) is Task 4's concern, not this one — use
-        # the still-valid v1 shape so these tests isolate risk-block behaviour.
-        "sizing": {"type": "fixed_quantity", "quantity": 1},
+        # v2 sizing: rupee notional, the recommended mode (Task 4). Tests in
+        # this file are about the risk block, not sizing, so this value is
+        # arbitrary — it just needs to be valid.
+        "sizing": {"type": "notional", "notional_per_trade": 100000},
     }
 
 
@@ -216,3 +218,70 @@ def test_a_missing_type_still_surfaces_a_sibling_typo():
     msg = str(exc.value)
     assert "type" in msg
     assert "perod" in msg
+
+
+# ---------------------------------------------------------------------------
+# Sizing: rupee notional (the recommended mode) and legacy fixed_quantity.
+# ---------------------------------------------------------------------------
+
+
+def test_notional_sizing_parses():
+    s = parse_strategy_dict(valid_v2())
+    assert s.sizing.type == "notional"
+    assert s.sizing.notional_per_trade == 100000.0
+    assert s.sizing.quantity is None
+
+
+def test_notional_is_required_with_no_default():
+    doc = valid_v2()
+    doc["sizing"] = {"type": "notional"}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "notional_per_trade" in str(exc.value)
+
+
+def test_legacy_fixed_quantity_still_parses():
+    doc = valid_v2()
+    doc["sizing"] = {"type": "fixed_quantity", "quantity": 5}
+    s = parse_strategy_dict(doc)
+    assert s.sizing.type == "fixed_quantity"
+    assert s.sizing.quantity == 5
+
+
+def test_sizing_is_required_in_v2():
+    doc = valid_v2()
+    del doc["sizing"]
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "sizing" in str(exc.value)
+
+
+def test_resolve_quantity_floors_the_notional():
+    s = parse_strategy_dict(valid_v2())          # notional 100000
+    assert resolve_quantity(s.sizing, price=1500.0) == 66   # 66.67 -> 66
+
+
+def test_resolve_quantity_returns_zero_when_a_share_costs_more_than_the_notional():
+    doc = valid_v2()
+    doc["sizing"] = {"type": "notional", "notional_per_trade": 100}
+    s = parse_strategy_dict(doc)
+    assert resolve_quantity(s.sizing, price=1500.0) == 0
+
+
+def test_resolve_quantity_ignores_price_for_fixed_quantity():
+    doc = valid_v2()
+    doc["sizing"] = {"type": "fixed_quantity", "quantity": 3}
+    s = parse_strategy_dict(doc)
+    assert resolve_quantity(s.sizing, price=99999.0) == 3
+
+
+def test_notional_sizing_round_trips_through_strategy_to_raw():
+    original = parse_strategy_dict(valid_v2())
+    assert parse_strategy_dict(strategy_to_raw(original)) == original
+
+
+def test_fixed_quantity_sizing_round_trips_through_strategy_to_raw():
+    doc = valid_v2()
+    doc["sizing"] = {"type": "fixed_quantity", "quantity": 7}
+    original = parse_strategy_dict(doc)
+    assert parse_strategy_dict(strategy_to_raw(original)) == original
