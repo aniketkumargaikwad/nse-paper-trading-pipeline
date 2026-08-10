@@ -484,6 +484,146 @@ def test_insufficient_history_for_the_atr_period_is_a_hard_error():
 
 
 # ---------------------------------------------------------------------------
+# Trailing stop — the level updates at candle CLOSE and applies from the NEXT
+# candle. A candle that makes a new high AND falls back through the level
+# implied by that same high must NOT exit there: at the moment the low
+# happened, the high had not yet been observed. Update-after-checks is the
+# whole correctness question here.
+# ---------------------------------------------------------------------------
+
+
+def frame_trailing(entry_open: float, highs: list[float], drop_to: float) -> pd.DataFrame:
+    """Entry at `entry_open` (1% trailing, 5% stop, 50% target — wide enough
+    that only the trailing stop is ever in play).
+
+    Candle 0 has close == 0 so the default `close > 0` entry rule from
+    strategy_with() does not fire there; candle 1 is the first positive
+    close, so entry signals there; candle 2 is the flat fill candle
+    (open = entry_open, no wiggle).
+
+    Each `highs` value gets its own candle AFTER that: its low is kept
+    comfortably above the trail level that was active BEFORE it (i.e. set
+    from the previous candle's close), so it cannot trigger a premature
+    exit, and the trail is advanced (never loosened) after it closes — this
+    mirrors the production update-after-checks rule so the fixture stays
+    honest about what "safe" means at each step.
+
+    The final candle drops through the trail level established by the last
+    `highs` candle, down to `drop_to`, without gapping past it — so the
+    exit price is the trail level itself, not the candle's open.
+    """
+    rows = [
+        (0.0, 0.5, -0.5, 0.0),                                       # candle 0: no entry
+        (0.0, 0.5, -0.5, 1.0),                                       # candle 1: signal
+        (entry_open, entry_open, entry_open, entry_open),            # candle 2: flat fill
+    ]
+    best = entry_open
+    trail = entry_open * 0.99   # trail set from the fill candle's own (flat) close
+    for h in highs:
+        safe_low = trail + 1.0
+        rows.append((safe_low + 1.0, h, safe_low, safe_low + 0.5))
+        best = max(best, h)
+        trail = max(trail, best * 0.99)
+    final_open = trail + 5.0
+    rows.append((final_open, final_open + 1.0, drop_to, final_open - 1.0))
+    return make_df(rows)
+
+
+def frame_high_and_reversal_in_one_candle(entry_open: float) -> pd.DataFrame:
+    """The look-ahead case, in ONE candle: a new high of entry_open * 1.05,
+    followed — within that SAME candle — by a pullback to just below the
+    trailing level that high would imply (1% below it). At the moment that
+    low happened, the high had not yet been "observed" (the trail only
+    updates at candle CLOSE); the trail active during this candle is still
+    the one set from the flat fill candle before it (entry_open * 0.99),
+    which this candle's low never approaches. So a correct implementation
+    must not exit here at all — the position runs off the end of the data
+    and closes as "end_of_data" instead.
+    """
+    high = entry_open * 1.05
+    level_from_this_candles_own_high = high * 0.99
+    low = level_from_this_candles_own_high - 1.0
+    return make_df([
+        (0.0, 0.5, -0.5, 0.0),
+        (0.0, 0.5, -0.5, 1.0),
+        (entry_open, entry_open, entry_open, entry_open),   # flat fill
+        (low + 6.5, high, low, low + 3.5),                  # high, then reversal — one candle
+    ])
+
+
+def frame_immediate_drop(entry_open: float, to: float) -> pd.DataFrame:
+    """The fill candle itself drops straight through the fixed stop.
+
+    No trail has been established yet (that only happens AFTER a candle's
+    exit checks) so `trail_price` is still None during this very candle —
+    only the fixed stop can possibly apply here, which is exactly what this
+    fixture is for.
+    """
+    return make_df([
+        (0.0, 0.5, -0.5, 0.0),
+        (0.0, 0.5, -0.5, 1.0),
+        (entry_open, entry_open + 1.0, to, entry_open - 5.0),
+    ])
+
+
+def test_trailing_stop_follows_the_high_and_exits_on_the_pullback():
+    strategy = strategy_with(risk={
+        "stop_loss": {"type": "percent", "value": 5.0},
+        "target": {"type": "percent", "value": 50.0},      # far, so trailing wins
+        "trailing_stop": {"type": "percent", "value": 1.0},
+    })
+    # Entry at 1000; highs 1010 then 1020; then a drop through 1020*0.99 = 1009.8
+    trades = simulate(frame_trailing(entry_open=1000.0, highs=[1010, 1020], drop_to=1000),
+                      strategy, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert trades[0].exit_reason == "trailing_stop"
+    assert trades[0].intended_exit_price == pytest.approx(1009.8)
+
+
+def test_trailing_stop_does_not_use_the_same_candle_it_was_set_from():
+    """The look-ahead case.
+
+    A candle that makes a new high AND falls back through the level implied by
+    that same high must NOT exit at it — at the time the low happened, the
+    high had not yet been observed.
+    """
+    strategy = strategy_with(risk={
+        "stop_loss": {"type": "percent", "value": 5.0},
+        "target": {"type": "percent", "value": 50.0},
+        "trailing_stop": {"type": "percent", "value": 1.0},
+    })
+    trades = simulate(frame_high_and_reversal_in_one_candle(entry_open=1000.0),
+                      strategy, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert trades[0].exit_reason != "trailing_stop"
+
+
+def test_trailing_stop_never_loosens():
+    strategy = strategy_with(risk={
+        "stop_loss": {"type": "percent", "value": 5.0},
+        "target": {"type": "percent", "value": 50.0},
+        "trailing_stop": {"type": "percent", "value": 1.0},
+    })
+    # High 1020 sets the trail at 1009.8; a LOWER subsequent high (1015) must
+    # not pull it back down (1015 * 0.99 = 1004.85 would, if the trail were
+    # allowed to loosen) — the level must stay at 1009.8.
+    trades = simulate(frame_trailing(entry_open=1000.0, highs=[1020, 1015], drop_to=1000),
+                      strategy, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert trades[0].intended_exit_price == pytest.approx(1009.8)
+
+
+def test_the_tighter_of_fixed_and_trailing_wins():
+    """Early in a trade the fixed stop is tighter and must still apply."""
+    strategy = strategy_with(risk={
+        "stop_loss": {"type": "percent", "value": 0.5},
+        "target": {"type": "percent", "value": 50.0},
+        "trailing_stop": {"type": "percent", "value": 5.0},
+    })
+    trades = simulate(frame_immediate_drop(entry_open=1000.0, to=990.0),
+                      strategy, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert trades[0].exit_reason == "stop_loss"
+    assert trades[0].intended_exit_price == pytest.approx(995.0)
+
+
+# ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
 

@@ -505,3 +505,33 @@ def test_an_atr_period_beyond_available_history_does_not_abort_the_whole_run():
         "run_once must catch RiskLevelError, or one bad ATR period aborts "
         "every other strategy in the run"
     )
+
+
+# ---------------------------------------------------------------------------
+# Trailing stop — the paper engine is stateless (every run rebuilds from
+# Supabase) and `positions` has no column to persist a running best price
+# between runs, so a trailing_stop config cannot be honoured here without a
+# schema change. It must be refused loudly, not silently downgraded to a
+# fixed-stop-only trade that would diverge from what the same strategy's
+# backtest shows.
+# ---------------------------------------------------------------------------
+
+
+def test_entry_with_trailing_stop_is_refused_not_silently_ignored() -> None:
+    rows = [
+        (100, 101, 99, 100),   # 09:15
+        (100, 101, 99, 100),   # 09:30
+        (100, 101, 99, 100),   # 09:45
+        (100, 107, 99, 106),   # 10:00 closed candle: close 106 > 105 -> would ENTRY
+        (108, 108.5, 107.5, 108),  # forming candle
+    ]
+    strat = strategy(risk={
+        "stop_loss": {"type": "percent", "value": 1.0},
+        "target": {"type": "percent", "value": 2.0},
+        "trailing_stop": {"type": "percent", "value": 1.0},
+    })
+    store = FakeStore()
+    summary = run(store, {"NSE:RELIANCE": frame(rows)}, strat)
+    assert summary.entries == 0
+    assert len(store.positions) == 0
+    assert any("trailing_stop" in note for note in summary.skipped)

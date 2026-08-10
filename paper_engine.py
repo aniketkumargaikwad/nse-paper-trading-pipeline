@@ -288,6 +288,38 @@ def _process_combo(
     # ---- Flat: entry rules. ----------------------------------------------
     if not signals.entry_signal(closed, strategy):
         return
+
+    # A trailing stop needs a running "best price seen since entry" that
+    # survives to the NEXT run — but this engine has none of its own memory;
+    # every tick rebuilds its whole world from Supabase (see module
+    # docstring). `OpenPosition` (db.py) mirrors the `positions` table, and
+    # that table carries only `stop_loss_price` / `target_price` — there is
+    # no column to persist a running best price or an active trail level
+    # between runs. Backtest.py CAN track it because it holds the entire
+    # candle history in memory for one uninterrupted simulate() call; this
+    # engine cannot reproduce that across independent, stateless ticks
+    # without a schema change (e.g. `positions.best_price_since_entry` plus
+    # wiring this engine to update it after each candle's checks, the same
+    # "update after checks, apply next candle" rule backtest.py uses).
+    #
+    # Silently opening the position anyway and just ignoring trailing_stop
+    # would be exactly the backtest/live divergence risk_levels.py exists to
+    # prevent: the same strategy could show a trailing exit in its backtest
+    # and never trail at all once deployed here. So this refuses loudly
+    # instead — every tick, until the schema gap above is closed — rather
+    # than either faking the behaviour or pretending the config doesn't
+    # exist.
+    if strategy.risk.trailing_stop is not None:
+        summary.skipped.append(
+            f"{combo}: entry signal ignored — trailing_stop is configured but "
+            "the paper engine has no schema support for it yet (positions has "
+            "no column to persist a running best price across stateless runs; "
+            "see the comment above this check in paper_engine.py). Remove "
+            "trailing_stop from this strategy before paper trading it, or add "
+            "the schema support first."
+        )
+        return
+
     if next_open is None:
         summary.skipped.append(
             f"{combo}: entry signal on the day's final candle — no next open "

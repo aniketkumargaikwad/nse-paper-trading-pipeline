@@ -207,6 +207,13 @@ def simulate_with_skips(
     e_signal_ts = e_fill_ts = None
     e_intended = e_price = sl_price = tgt_price = 0.0
     qty = 0
+    # Trailing-stop state. `best_price` is the best price seen since entry
+    # (highest high for a long, lowest low for a short); `trail_price` is the
+    # trailing level derived from it, or None until the first candle after
+    # entry has closed. Both reset on every entry, exactly like `qty` above —
+    # a value leaked from a previous trade would silently corrupt this one.
+    best_price = 0.0
+    trail_price: float | None = None
 
     def close_position(i: int, intended: float, reason: str) -> None:
         nonlocal in_pos, pending_exit_from
@@ -264,32 +271,78 @@ def simulate_with_skips(
                         strategy.risk.target, e_price, pending_entry_from,
                         atr_series, favourable=True, is_long=is_long,
                     )
+                    best_price = e_price
+                    trail_price = None
                     in_pos = True
                     entries_by_day[fill_day] = entries_by_day.get(fill_day, 0) + 1
             pending_entry_from = None
 
         # ---- During the candle: stop-loss / target on high-low range.
         # Worst-case ordering: the stop is checked before the target, and a
-        # gap beyond a level fills at the open, not at the level.
+        # gap beyond a level fills at the open, not at the level. A trailing
+        # exit is a STOP, so it keeps that same precedence over the target —
+        # the effective stop used below is just the tighter of the fixed
+        # stop and the current trail (trail_price is None until a candle has
+        # closed since entry, so the fixed stop alone applies until then).
         if in_pos:
+            effective_stop, reason = sl_price, "stop_loss"
+            if trail_price is not None:
+                tighter = max(sl_price, trail_price) if is_long else min(sl_price, trail_price)
+                if tighter != sl_price:
+                    effective_stop, reason = tighter, "trailing_stop"
+
             if is_long:
-                if opens[i] <= sl_price:
-                    close_position(i, opens[i], "stop_loss")
-                elif lows[i] <= sl_price:
-                    close_position(i, sl_price, "stop_loss")
+                if opens[i] <= effective_stop:
+                    close_position(i, opens[i], reason)
+                elif lows[i] <= effective_stop:
+                    close_position(i, effective_stop, reason)
                 elif opens[i] >= tgt_price:
                     close_position(i, opens[i], "target")
                 elif highs[i] >= tgt_price:
                     close_position(i, tgt_price, "target")
             else:
-                if opens[i] >= sl_price:
-                    close_position(i, opens[i], "stop_loss")
-                elif highs[i] >= sl_price:
-                    close_position(i, sl_price, "stop_loss")
+                if opens[i] >= effective_stop:
+                    close_position(i, opens[i], reason)
+                elif highs[i] >= effective_stop:
+                    close_position(i, effective_stop, reason)
                 elif opens[i] <= tgt_price:
                     close_position(i, opens[i], "target")
                 elif lows[i] <= tgt_price:
                     close_position(i, tgt_price, "target")
+
+        # ---- AFTER this candle's exit checks, and only while still in the
+        # position: advance the trail from this candle's extreme (high for a
+        # long, low for a short), so the new level applies starting NEXT
+        # candle, never this one.
+        #
+        # This ordering is the entire correctness question a trailing stop
+        # raises. Consider a candle that pushes to a new high and then falls
+        # back through the level that high implies, all within itself: at
+        # the instant its low printed, that high had not yet happened — the
+        # candle isn't a stream of ticks here, high and low are just two
+        # numbers describing a closed bar. Updating the trail from this
+        # candle's own high and THEN checking this same candle's low against
+        # it would let the exit use information that did not exist yet when
+        # the low occurred: pure look-ahead, and the kind that makes a
+        # backtest look quietly, plausibly better than the strategy really
+        # is. So the update happens strictly after the checks above, using
+        # `i` as the "signal candle" for any ATR trailing spec — safe
+        # because candle i is now fully closed, unlike the entry case where
+        # ATR is read at the signal candle rather than the fill candle.
+        if in_pos and strategy.risk.trailing_stop is not None:
+            best_price = max(best_price, highs[i]) if is_long else min(best_price, lows[i])
+            candidate = level_from_spec(
+                strategy.risk.trailing_stop, best_price, i,
+                atr_series, favourable=False, is_long=is_long,
+            )
+            # The trail only ever ratchets toward the position — never away
+            # from it — so a pullback in `best_price` (a lower subsequent
+            # high on a long, a higher subsequent low on a short) can never
+            # loosen a level already locked in.
+            trail_price = (
+                candidate if trail_price is None
+                else (max(trail_price, candidate) if is_long else min(trail_price, candidate))
+            )
 
         # ---- At this candle's CLOSE: queue signals for the next open.
         # An entry is only queued while flat: after an exit fills at candle
