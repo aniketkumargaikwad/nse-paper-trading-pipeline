@@ -27,10 +27,30 @@ def _migrate_strategy_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
     out = copy.deepcopy(raw)
 
     risk = out.get("risk")
-    if isinstance(risk, dict) and "stop_loss_pct" in risk:
+    if isinstance(risk, dict) and ("stop_loss_pct" in risk or "target_pct" in risk):
+        # A half-written v1 risk block is entirely plausible from a hand-edited
+        # or AI-generated file. Say what is missing rather than letting a bare
+        # KeyError escape — this audience cannot act on a traceback.
+        missing = [k for k in ("stop_loss_pct", "target_pct") if k not in risk]
+        if missing:
+            name = raw.get("name", "(unnamed)")
+            raise MigrationError(
+                f"strategy {name!r} has an incomplete version 1 risk block: "
+                f"missing {', '.join(missing)}. A version 1 strategy needs both "
+                "stop_loss_pct and target_pct before it can be migrated."
+            )
+        try:
+            stop_value = float(risk["stop_loss_pct"])
+            target_value = float(risk["target_pct"])
+        except (TypeError, ValueError) as exc:
+            name = raw.get("name", "(unnamed)")
+            raise MigrationError(
+                f"strategy {name!r} has a non-numeric version 1 risk value: {exc}. "
+                "stop_loss_pct and target_pct must both be numbers."
+            ) from exc
         out["risk"] = {
-            "stop_loss": {"type": "percent", "value": float(risk["stop_loss_pct"])},
-            "target": {"type": "percent", "value": float(risk["target_pct"])},
+            "stop_loss": {"type": "percent", "value": stop_value},
+            "target": {"type": "percent", "value": target_value},
         }
 
     # v1 defaulted an absent sizing block to one share; make that explicit so

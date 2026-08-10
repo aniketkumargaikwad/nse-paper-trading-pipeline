@@ -88,3 +88,42 @@ def test_the_input_document_is_not_mutated():
     migrate_document(original)
     assert original["version"] == 1
     assert original["strategies"][0]["risk"] == {"stop_loss_pct": 0.7, "target_pct": 1.5}
+
+
+def test_a_half_written_v1_risk_block_fails_with_an_actionable_message():
+    """A hand-edited or AI-generated v1 file can easily carry only one half.
+
+    Letting a bare KeyError escape would give the reader a traceback they
+    cannot act on, which is the opposite of what this codebase promises.
+    """
+    doc = v1_doc()
+    del doc["strategies"][0]["risk"]["target_pct"]
+    with pytest.raises(MigrationError) as exc:
+        migrate_document(doc)
+    msg = str(exc.value)
+    assert "target_pct" in msg
+    assert "old" in msg          # names the offending strategy
+
+
+def test_a_v1_risk_block_with_only_target_pct_is_also_caught():
+    doc = v1_doc()
+    del doc["strategies"][0]["risk"]["stop_loss_pct"]
+    with pytest.raises(MigrationError) as exc:
+        migrate_document(doc)
+    assert "stop_loss_pct" in str(exc.value)
+
+
+def test_a_non_numeric_v1_risk_value_fails_cleanly():
+    doc = v1_doc()
+    doc["strategies"][0]["risk"]["stop_loss_pct"] = "nought point seven"
+    with pytest.raises(MigrationError) as exc:
+        migrate_document(doc)
+    assert "number" in str(exc.value).lower()
+
+
+def test_a_missing_risk_block_is_left_for_the_validator():
+    """Migration should not invent a risk block; parse_strategies reports it."""
+    doc = v1_doc()
+    del doc["strategies"][0]["risk"]
+    migrated = migrate_document(doc)          # must not raise here
+    assert "risk" not in migrated["strategies"][0]
