@@ -455,3 +455,26 @@ def test_strategy_package_and_shim_export_the_same_names():
     import strategy_schema
 
     assert set(strategy.__all__) == set(strategy_schema.__all__)
+
+
+def test_session_rejects_a_time_carrying_seconds():
+    doc = valid_v2()
+    doc["session"] = {"square_off": "15:15:30"}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "no seconds" in str(exc.value)
+
+
+def test_session_bounds_agree_with_the_market_calendar():
+    """vocabulary.py cannot import config — its stdlib-only contract is what
+    lets the migration and the format-doc generator read it without circular
+    imports. So the NSE session bounds are duplicated there deliberately, and
+    this test is what stops the two copies drifting apart.
+    """
+    from datetime import time as _time
+
+    from config import MARKET_CLOSE_IST, MARKET_OPEN_IST
+    from strategy.vocabulary import SESSION_CLOSE_HHMM, SESSION_OPEN_HHMM
+
+    assert _time.fromisoformat(SESSION_OPEN_HHMM) == MARKET_OPEN_IST
+    assert _time.fromisoformat(SESSION_CLOSE_HHMM) == MARKET_CLOSE_IST
