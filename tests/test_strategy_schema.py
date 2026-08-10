@@ -61,7 +61,10 @@ def valid_doc() -> dict:
                         }
                     ]
                 },
-                "risk": {"stop_loss_pct": 0.7, "target_pct": 1.5},
+                "risk": {
+                    "stop_loss": {"type": "percent", "value": 0.7},
+                    "target": {"type": "percent", "value": 1.5},
+                },
             }
         ],
     }
@@ -185,14 +188,14 @@ def test_duplicate_strategy_names_rejected() -> None:
 
 def test_negative_stop_loss_rejected() -> None:
     doc = valid_doc()
-    doc["strategies"][0]["risk"]["stop_loss_pct"] = -1
-    expect_error(doc, "stop_loss_pct")
+    doc["strategies"][0]["risk"]["stop_loss"] = {"type": "percent", "value": -1}
+    expect_error(doc, "risk.stop_loss")
 
 
 def test_absurd_stop_loss_rejected() -> None:
     # 70 (percent) is almost certainly a typo for 0.7 — sanity ceiling is 50.
     doc = valid_doc()
-    doc["strategies"][0]["risk"]["stop_loss_pct"] = 70
+    doc["strategies"][0]["risk"]["stop_loss"] = {"type": "percent", "value": 70}
     expect_error(doc, "between 0 and 50")
 
 

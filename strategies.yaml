@@ -74,8 +74,8 @@ strategies:
           value: 40
 
     risk:
-      stop_loss_pct: 0.7         # exit if price moves 0.7% against entry
-      target_pct: 1.5            # exit if price moves 1.5% in favour
+      stop_loss: { type: percent, value: 0.7 }   # exit if price moves 0.7% against entry
+      target:    { type: percent, value: 1.5 }   # exit if price moves 1.5% in favour
 
     sizing:
       type: fixed_quantity       # only sizing mode in v1; more can be added

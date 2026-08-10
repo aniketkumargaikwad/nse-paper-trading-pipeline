@@ -63,7 +63,10 @@ def threshold_strategy(
                 "timeframe": "15m", "instruments": ["NSE:RELIANCE"],
                 "entry": {"all": [{"indicator": "close", "operator": ">", "value": entry_above}]},
                 "exit": {"any": [{"indicator": "close", "operator": "<", "value": exit_below}]},
-                "risk": {"stop_loss_pct": sl_pct, "target_pct": tgt_pct},
+                "risk": {
+                    "stop_loss": {"type": "percent", "value": sl_pct},
+                    "target": {"type": "percent", "value": tgt_pct},
+                },
                 "sizing": {"type": "fixed_quantity", "quantity": qty},
                 "max_cycles_per_day": max_cycles,
             }

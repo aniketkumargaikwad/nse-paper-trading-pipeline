@@ -59,3 +59,19 @@ SIZING_TYPES: frozenset[str] = frozenset({"fixed_quantity"})
 
 # "EXCHANGE:TRADINGSYMBOL", e.g. NSE:RELIANCE or NSE:M&M or NFO:NIFTY24AUGFUT.
 INSTRUMENT_RE = re.compile(r"^[A-Z]+:[A-Z0-9&\-]+$")
+
+# Stop/target specifications. 'percent' is a flat move from entry; 'atr' scales
+# with the symbol's own volatility, which matters across a universe where one
+# fixed percentage is too tight for volatile names and too loose for calm ones.
+STOP_TYPES: frozenset[str] = frozenset({"percent", "atr"})
+
+# Required keys per stop type. Keys outside these are rejected, so mixing the
+# two forms (e.g. {type: atr, value: 1.5}) fails loudly instead of silently
+# ignoring the key that does not apply.
+STOP_TYPE_KEYS: dict[str, frozenset[str]] = {
+    "percent": frozenset({"value"}),
+    "atr": frozenset({"period", "multiplier"}),
+}
+
+# An intraday stop wider than this is almost certainly a typo (70 for 0.7).
+MAX_STOP_PERCENT = 50.0

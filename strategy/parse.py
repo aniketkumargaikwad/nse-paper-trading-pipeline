@@ -29,10 +29,13 @@ from strategy.vocabulary import (
     INDICATOR_OUTPUTS,
     INDICATOR_PARAMS,
     INSTRUMENT_RE,
+    MAX_STOP_PERCENT,
     POSITION_TYPES,
     PRICE_SOURCES,
     SIZING_TYPES,
     SOURCE_ALLOWED_FOR,
+    STOP_TYPE_KEYS,
+    STOP_TYPES,
 )
 
 
@@ -74,9 +77,45 @@ class ConditionGroup:
 
 
 @dataclass(frozen=True)
+class StopSpec:
+    """A stop or target level: either a flat percent or an ATR multiple.
+
+    Exactly one form is populated. `percent` uses `value`; `atr` uses `period`
+    and `multiplier`.
+    """
+
+    type: str
+    value: float | None = None
+    period: int | None = None
+    multiplier: float | None = None
+
+
+@dataclass(frozen=True)
 class RiskConfig:
-    stop_loss_pct: float
-    target_pct: float
+    stop_loss: StopSpec
+    target: StopSpec
+    trailing_stop: StopSpec | None = None
+
+    # Convenience for percent-only callers (the engine before Task 17 and the
+    # CLI summary). Raises rather than guessing when the stop is ATR-based:
+    # silently reporting 0.0% for an ATR stop would misdescribe the strategy.
+    @property
+    def stop_loss_pct(self) -> float:
+        if self.stop_loss.type != "percent":
+            raise ValueError(
+                f"stop_loss is {self.stop_loss.type!r}, not a percent — "
+                "read risk.stop_loss directly"
+            )
+        return float(self.stop_loss.value)
+
+    @property
+    def target_pct(self) -> float:
+        if self.target.type != "percent":
+            raise ValueError(
+                f"target is {self.target.type!r}, not a percent — "
+                "read risk.target directly"
+            )
+        return float(self.target.value)
 
 
 @dataclass(frozen=True)
@@ -279,20 +318,59 @@ def _parse_condition_group(node: Any, where: str) -> ConditionGroup:
     return ConditionGroup(logic=logic, items=tuple(items))
 
 
+def _parse_stop_spec(node: Any, where: str) -> StopSpec:
+    node = _require_mapping(node, where)
+    if "type" not in node:
+        _fail(where, f"missing required key: type. Allowed: {', '.join(sorted(STOP_TYPES))}")
+
+    stype = node["type"]
+    if stype not in STOP_TYPES:
+        _fail(
+            f"{where}.type",
+            f"unknown stop type {stype!r}. Allowed: {', '.join(sorted(STOP_TYPES))}",
+        )
+
+    # Reject the other form's keys explicitly — {type: atr, value: 1.5} is a
+    # very natural mistake and must not silently use a default multiplier.
+    _require_keys(node, where, required={"type"} | set(STOP_TYPE_KEYS[stype]), optional=set())
+
+    if stype == "percent":
+        raw = node["value"]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            _fail(f"{where}.value", f"expected a number, got {raw!r}")
+        if not 0 < raw <= MAX_STOP_PERCENT:
+            _fail(
+                f"{where}.value",
+                f"must be between 0 and {MAX_STOP_PERCENT:g} (percent), got {raw}",
+            )
+        return StopSpec(type="percent", value=float(raw))
+
+    period = node["period"]
+    if isinstance(period, bool) or not isinstance(period, int) or period < 1:
+        _fail(f"{where}.period", f"expected a whole number >= 1, got {period!r}")
+    mult = node["multiplier"]
+    if isinstance(mult, bool) or not isinstance(mult, (int, float)) or mult <= 0:
+        _fail(f"{where}.multiplier", f"expected a number > 0, got {mult!r}")
+    return StopSpec(type="atr", period=period, multiplier=float(mult))
+
+
 def _parse_risk(node: Any, where: str) -> RiskConfig:
     node = _require_mapping(node, where)
-    _require_keys(node, where, required={"stop_loss_pct", "target_pct"}, optional=set())
-    values: dict[str, float] = {}
-    for key in ("stop_loss_pct", "target_pct"):
-        raw = node[key]
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-            _fail(f"{where}.{key}", f"expected a number, got {raw!r}")
-        if not 0 < raw <= 50:
-            # 50% is an arbitrary sanity ceiling: a wider stop on an intraday
-            # system is almost certainly a typo (e.g. 70 instead of 0.7).
-            _fail(f"{where}.{key}", f"must be between 0 and 50 (percent), got {raw}")
-        values[key] = float(raw)
-    return RiskConfig(stop_loss_pct=values["stop_loss_pct"], target_pct=values["target_pct"])
+    _require_keys(
+        node, where,
+        required={"stop_loss", "target"},
+        optional={"trailing_stop"},
+    )
+    trailing = (
+        _parse_stop_spec(node["trailing_stop"], f"{where}.trailing_stop")
+        if "trailing_stop" in node
+        else None
+    )
+    return RiskConfig(
+        stop_loss=_parse_stop_spec(node["stop_loss"], f"{where}.stop_loss"),
+        target=_parse_stop_spec(node["target"], f"{where}.target"),
+        trailing_stop=trailing,
+    )
 
 
 def _parse_sizing(node: Any, where: str) -> SizingConfig:
@@ -457,6 +535,18 @@ def strategy_to_raw(strategy: Strategy) -> dict[str, Any]:
             ]
         }
 
+    def stop_spec_to_raw(spec: StopSpec) -> dict[str, Any]:
+        if spec.type == "percent":
+            return {"type": "percent", "value": spec.value}
+        return {"type": "atr", "period": spec.period, "multiplier": spec.multiplier}
+
+    risk: dict[str, Any] = {
+        "stop_loss": stop_spec_to_raw(strategy.risk.stop_loss),
+        "target": stop_spec_to_raw(strategy.risk.target),
+    }
+    if strategy.risk.trailing_stop is not None:
+        risk["trailing_stop"] = stop_spec_to_raw(strategy.risk.trailing_stop)
+
     return {
         "name": strategy.name,
         "enabled": strategy.enabled,
@@ -465,10 +555,7 @@ def strategy_to_raw(strategy: Strategy) -> dict[str, Any]:
         "instruments": list(strategy.instruments),
         "entry": group_to_raw(strategy.entry),
         "exit": group_to_raw(strategy.exit),
-        "risk": {
-            "stop_loss_pct": strategy.risk.stop_loss_pct,
-            "target_pct": strategy.risk.target_pct,
-        },
+        "risk": risk,
         "sizing": {"type": strategy.sizing.type, "quantity": strategy.sizing.quantity},
         "max_cycles_per_day": strategy.max_cycles_per_day,
     }

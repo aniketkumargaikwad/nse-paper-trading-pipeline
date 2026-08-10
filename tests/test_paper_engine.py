@@ -185,7 +185,10 @@ def strategy(*, entry_above=105.0, exit_below=90.0, sl_pct=1.0, tgt_pct=2.0,
             "timeframe": "15m", "instruments": ["NSE:RELIANCE"],
             "entry": {"all": [{"indicator": "close", "operator": ">", "value": entry_above}]},
             "exit": {"any": [{"indicator": "close", "operator": "<", "value": exit_below}]},
-            "risk": {"stop_loss_pct": sl_pct, "target_pct": tgt_pct},
+            "risk": {
+                "stop_loss": {"type": "percent", "value": sl_pct},
+                "target": {"type": "percent", "value": tgt_pct},
+            },
             "max_cycles_per_day": max_cycles,
         }],
     }

@@ -58,7 +58,10 @@ def strategy_with(entry: dict, exit_: dict | None = None):
                 "entry": entry,
                 "exit": exit_
                 or {"any": [{"indicator": "close", "operator": "<", "value": 0}]},
-                "risk": {"stop_loss_pct": 0.7, "target_pct": 1.5},
+                "risk": {
+                    "stop_loss": {"type": "percent", "value": 0.7},
+                    "target": {"type": "percent", "value": 1.5},
+                },
             }
         ],
     }
