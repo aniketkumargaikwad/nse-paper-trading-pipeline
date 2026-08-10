@@ -6,11 +6,14 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strategy.migrate import MigrationError, migrate_document  # noqa: E402
 from strategy.parse import parse_strategies  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def v1_doc() -> dict:
@@ -127,3 +130,19 @@ def test_a_missing_risk_block_is_left_for_the_validator():
     del doc["strategies"][0]["risk"]
     migrated = migrate_document(doc)          # must not raise here
     assert "risk" not in migrated["strategies"][0]
+
+
+# ---------------------------------------------------------------------------
+# The shipped strategies.yaml itself
+# ---------------------------------------------------------------------------
+
+
+def test_the_shipped_strategies_file_is_already_v2():
+    raw = yaml.safe_load((REPO_ROOT / "strategies.yaml").read_text(encoding="utf-8"))
+    assert raw["version"] == 2
+    parse_strategies(raw)
+
+
+def test_migrating_the_shipped_file_is_a_no_op():
+    raw = yaml.safe_load((REPO_ROOT / "strategies.yaml").read_text(encoding="utf-8"))
+    assert migrate_document(raw) == raw

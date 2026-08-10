@@ -24,7 +24,7 @@ from backtest import (  # noqa: E402
     evaluate_kill_rules,
     simulate,
 )
-from strategy_schema import parse_strategies  # noqa: E402
+from strategy_schema import migrate_document, parse_strategies  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 UTC = ZoneInfo("UTC")
@@ -77,6 +77,73 @@ def threshold_strategy(
 
 def run(df, strat) -> list[SimTrade]:
     return simulate(df, strat, slippage_pct=SLIP, cost_per_trade_inr=COST)
+
+
+# ---------------------------------------------------------------------------
+# Migration identity — the whole migration promise, asserted rather than
+# assumed: a v1 document and the equivalent hand-written v2 document must
+# parse to the SAME Strategy, and therefore backtest identically.
+# ---------------------------------------------------------------------------
+
+
+def test_migrated_v1_strategy_produces_identical_trades() -> None:
+    v1 = {
+        "version": 1,
+        "strategies": [
+            {
+                "name": "migrate-identity-test",
+                "enabled": True,
+                "position_type": "long",
+                "timeframe": "15m",
+                "instruments": ["NSE:RELIANCE"],
+                "entry": {"all": [{"indicator": "close", "operator": ">", "value": 105}]},
+                "exit": {"any": [{"indicator": "close", "operator": "<", "value": 90}]},
+                "risk": {"stop_loss_pct": 1.0, "target_pct": 2.0},
+                "sizing": {"type": "fixed_quantity", "quantity": 3},
+                "max_cycles_per_day": 5,
+            }
+        ],
+    }
+    v2 = migrate_document(v1)
+
+    # v1 can no longer be parsed directly (parse_strategies requires version
+    # 2), so compare the migrated strategy against one hand-written in v2 form.
+    hand_written_v2 = {
+        "version": 2,
+        "strategies": [
+            {
+                "name": "migrate-identity-test",
+                "enabled": True,
+                "position_type": "long",
+                "timeframe": "15m",
+                "instruments": ["NSE:RELIANCE"],
+                "entry": {"all": [{"indicator": "close", "operator": ">", "value": 105}]},
+                "exit": {"any": [{"indicator": "close", "operator": "<", "value": 90}]},
+                "risk": {
+                    "stop_loss": {"type": "percent", "value": 1.0},
+                    "target": {"type": "percent", "value": 2.0},
+                },
+                "sizing": {"type": "fixed_quantity", "quantity": 3},
+                "max_cycles_per_day": 5,
+            }
+        ],
+    }
+
+    migrated_strat = parse_strategies(v2)[0]
+    hand_strat = parse_strategies(hand_written_v2)[0]
+    assert migrated_strat == hand_strat
+
+    # And the equality is not vacuous: run both through the simulator on the
+    # same candles and confirm the trades themselves come out identical.
+    df = make_df([
+        (100, 101, 99, 100),
+        (100, 107, 99, 106),   # signal candle (close 106 > 105)
+        (108, 109, 107, 108),  # fill candle: open 108
+        (108, 109, 107, 108),
+        (108, 109, 50, 60),    # exit signal: close < 90
+        (60, 61, 59, 60),      # exit fill at open 60
+    ])
+    assert run(df, migrated_strat) == run(df, hand_strat)
 
 
 # ---------------------------------------------------------------------------
