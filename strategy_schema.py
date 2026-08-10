@@ -42,6 +42,7 @@ from strategy.vocabulary import (
     PRICE_SOURCES,
     SIZING_TYPES,
     SOURCE_ALLOWED_FOR,
+    UNIVERSE_RE,
 )
 
 __all__ = [
@@ -49,7 +50,8 @@ __all__ = [
     "Condition", "ConditionGroup", "DEFAULT_OUTPUT", "INDICATOR_OUTPUTS",
     "INDICATOR_PARAMS", "INSTRUMENT_RE", "Operand", "POSITION_TYPES",
     "PRICE_SOURCES", "RiskConfig", "SIZING_TYPES", "SOURCE_ALLOWED_FOR",
-    "SessionConfig", "SizingConfig", "StopSpec", "Strategy", "StrategyConfigError", "load_strategies",
+    "SessionConfig", "SizingConfig", "StopSpec", "Strategy", "StrategyConfigError",
+    "UNIVERSE_RE", "load_strategies",
     "load_strategy_documents", "parse_strategies", "parse_strategy_dict",
     "resolve_quantity", "strategy_to_raw",
 ]
@@ -67,9 +69,14 @@ def main(argv: list[str]) -> int:
     print(f"OK: {path} is valid. {len(strategies)} strateg{'y' if len(strategies) == 1 else 'ies'} defined:")
     for s in strategies:
         state = "enabled" if s.enabled else "DISABLED"
+        # A strategy names its symbols either literally (instruments) or via a
+        # named group (universe) — see Task 6. instruments is empty whenever
+        # universe is set, so "on 0 instrument(s)" would misreport a universe
+        # strategy rather than merely read oddly; branch on which is set.
+        scope = f"universe {s.universe}" if s.universe else f"{len(s.instruments)} instrument(s)"
         print(
             f"  - {s.name} [{state}] {s.position_type} {s.timeframe} "
-            f"on {len(s.instruments)} instrument(s), "
+            f"on {scope}, "
             f"SL {s.risk.stop_loss.describe()} / target {s.risk.target.describe()}, "
             f"max {s.max_cycles_per_day} cycle(s)/day"
         )

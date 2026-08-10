@@ -478,3 +478,69 @@ def test_session_bounds_agree_with_the_market_calendar():
 
     assert _time.fromisoformat(SESSION_OPEN_HHMM) == MARKET_OPEN_IST
     assert _time.fromisoformat(SESSION_CLOSE_HHMM) == MARKET_CLOSE_IST
+
+
+# ---------------------------------------------------------------------------
+# universe: as an alternative to instruments: (Task 6). Parsing only checks
+# the SHAPE of the universe name here — never whether it exists, which needs
+# the database and is checked at save time instead (Task 14).
+# ---------------------------------------------------------------------------
+
+
+def test_universe_replaces_instruments():
+    doc = valid_v2()
+    del doc["instruments"]
+    doc["universe"] = "NIFTY100"
+    s = parse_strategy_dict(doc)
+    assert s.universe == "NIFTY100"
+    assert s.instruments == ()
+
+
+def test_instruments_still_supported():
+    s = parse_strategy_dict(valid_v2())
+    assert s.universe is None
+    assert s.instruments == ("NSE:RELIANCE",)
+
+
+def test_both_universe_and_instruments_is_rejected():
+    doc = valid_v2()
+    doc["universe"] = "NIFTY100"
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "exactly ONE" in str(exc.value)
+
+
+def test_neither_universe_nor_instruments_is_rejected():
+    doc = valid_v2()
+    del doc["instruments"]
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "exactly ONE" in str(exc.value)
+
+
+def test_universe_name_shape_is_validated():
+    doc = valid_v2()
+    del doc["instruments"]
+    doc["universe"] = "nifty 100!"
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "universe" in str(exc.value)
+
+
+def test_universe_round_trips_through_strategy_to_raw():
+    doc = valid_v2()
+    del doc["instruments"]
+    doc["universe"] = "NIFTY100"
+    original = parse_strategy_dict(doc)
+    raw = strategy_to_raw(original)
+    assert raw["universe"] == "NIFTY100"
+    assert "instruments" not in raw
+    assert parse_strategy_dict(raw) == original
+
+
+def test_instruments_round_trips_through_strategy_to_raw():
+    original = parse_strategy_dict(valid_v2())
+    raw = strategy_to_raw(original)
+    assert raw["instruments"] == ["NSE:RELIANCE"]
+    assert "universe" not in raw
+    assert parse_strategy_dict(raw) == original

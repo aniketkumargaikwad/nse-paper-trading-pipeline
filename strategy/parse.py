@@ -43,6 +43,7 @@ from strategy.vocabulary import (
     SOURCE_ALLOWED_FOR,
     STOP_TYPE_KEYS,
     STOP_TYPES,
+    UNIVERSE_RE,
 )
 
 
@@ -164,11 +165,25 @@ class SessionConfig:
 
 @dataclass(frozen=True)
 class Strategy:
+    """`instruments` and `universe` are mutually exclusive (see _parse_strategy):
+    exactly one is set, the other takes its "empty" value (`()` / `None`).
+
+    `universe` has NO default even though the plan describes it as
+    `universe: str | None = None`. `Strategy` has non-defaulted fields after
+    this position (`entry`, `exit`, `risk`, `sizing`, `session`,
+    `max_cycles_per_day`), and a plain dataclass cannot follow a defaulted
+    field with a non-defaulted one — that is a TypeError at class-definition
+    time, not at call time. The only place that constructs a Strategy is
+    `_parse_strategy` below, always with keyword arguments and always passing
+    `universe` explicitly, so dropping the default costs nothing in practice.
+    """
+
     name: str
     enabled: bool
     position_type: str
     timeframe: str
     instruments: tuple[str, ...]
+    universe: str | None
     entry: ConditionGroup
     exit: ConditionGroup
     risk: RiskConfig
@@ -550,9 +565,9 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
         node, where,
         required={
             "name", "enabled", "position_type", "timeframe",
-            "instruments", "entry", "exit", "risk", "sizing",
+            "entry", "exit", "risk", "sizing",
         },
-        optional={"max_cycles_per_day", "session"},
+        optional={"instruments", "universe", "session", "max_cycles_per_day"},
     )
 
     name = node["name"]
@@ -579,20 +594,46 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
             f"Allowed (15-minute and higher only): {', '.join(SUPPORTED_TIMEFRAMES)}",
         )
 
-    raw_instruments = node["instruments"]
-    if not isinstance(raw_instruments, list) or not raw_instruments:
-        _fail(f"{where}.instruments", "expected a non-empty list like [NSE:RELIANCE]")
+    # Exactly one of 'universe' (a named symbol group, resolved at run time —
+    # see Task 9) or 'instruments' (an explicit list) may be set. Parsing only
+    # checks the SHAPE of a universe name here; whether it actually exists is
+    # a database question, out of reach of this pure module (see the module
+    # docstring), and is checked at save time instead (Task 14).
+    has_universe = "universe" in node
+    has_instruments = "instruments" in node
+    if has_universe == has_instruments:
+        _fail(
+            where,
+            "a strategy needs exactly ONE of 'universe' (a named symbol group "
+            "like NIFTY100) or 'instruments' (an explicit list like "
+            "[NSE:RELIANCE])",
+        )
+
+    universe: str | None = None
     instruments: list[str] = []
-    for i, inst in enumerate(raw_instruments):
-        if not isinstance(inst, str) or not INSTRUMENT_RE.match(inst):
+
+    if has_universe:
+        universe = node["universe"]
+        if not isinstance(universe, str) or not UNIVERSE_RE.match(universe):
             _fail(
-                f"{where}.instruments[{i}]",
-                f"expected 'EXCHANGE:TRADINGSYMBOL' in capitals "
-                f"(e.g. NSE:RELIANCE), got {inst!r}",
+                f"{where}.universe",
+                f"expected a universe name in capitals, digits or underscores "
+                f"(e.g. NIFTY100), got {universe!r}",
             )
-        if inst in instruments:
-            _fail(f"{where}.instruments[{i}]", f"duplicate instrument {inst!r}")
-        instruments.append(inst)
+    else:
+        raw_instruments = node["instruments"]
+        if not isinstance(raw_instruments, list) or not raw_instruments:
+            _fail(f"{where}.instruments", "expected a non-empty list like [NSE:RELIANCE]")
+        for i, inst in enumerate(raw_instruments):
+            if not isinstance(inst, str) or not INSTRUMENT_RE.match(inst):
+                _fail(
+                    f"{where}.instruments[{i}]",
+                    f"expected 'EXCHANGE:TRADINGSYMBOL' in capitals "
+                    f"(e.g. NSE:RELIANCE), got {inst!r}",
+                )
+            if inst in instruments:
+                _fail(f"{where}.instruments[{i}]", f"duplicate instrument {inst!r}")
+            instruments.append(inst)
 
     max_cycles = node.get("max_cycles_per_day", 1)
     if isinstance(max_cycles, bool) or not isinstance(max_cycles, int) or max_cycles < 1:
@@ -612,6 +653,7 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
         position_type=position_type,
         timeframe=timeframe,
         instruments=tuple(instruments),
+        universe=universe,
         entry=_parse_condition_group(node["entry"], f"{where}.entry"),
         exit=_parse_condition_group(node["exit"], f"{where}.exit"),
         risk=_parse_risk(node["risk"], f"{where}.risk"),
@@ -724,7 +766,11 @@ def strategy_to_raw(strategy: Strategy) -> dict[str, Any]:
         "enabled": strategy.enabled,
         "position_type": strategy.position_type,
         "timeframe": strategy.timeframe,
-        "instruments": list(strategy.instruments),
+        **(
+            {"universe": strategy.universe}
+            if strategy.universe
+            else {"instruments": list(strategy.instruments)}
+        ),
         "entry": group_to_raw(strategy.entry),
         "exit": group_to_raw(strategy.exit),
         "risk": risk,

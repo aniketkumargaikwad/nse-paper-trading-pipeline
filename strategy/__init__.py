@@ -36,6 +36,7 @@ from strategy.vocabulary import (
     PRICE_SOURCES,
     SIZING_TYPES,
     SOURCE_ALLOWED_FOR,
+    UNIVERSE_RE,
 )
 
 __all__ = [
@@ -59,6 +60,7 @@ __all__ = [
     "SOURCE_ALLOWED_FOR",
     "Strategy",
     "StrategyConfigError",
+    "UNIVERSE_RE",
     "load_strategies",
     "load_strategy_documents",
     "parse_strategies",

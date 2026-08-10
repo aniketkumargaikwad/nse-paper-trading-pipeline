@@ -71,6 +71,11 @@ SIZING_TYPE_KEYS: dict[str, frozenset[str]] = {
 # "EXCHANGE:TRADINGSYMBOL", e.g. NSE:RELIANCE or NSE:M&M or NFO:NIFTY24AUGFUT.
 INSTRUMENT_RE = re.compile(r"^[A-Z]+:[A-Z0-9&\-]+$")
 
+# A universe name: capitals, digits and underscores. Matches how NSE index
+# names are written (NIFTY50, NIFTY_MIDCAP_100) and keeps custom group names
+# free of the spaces and punctuation that make them awkward to reference.
+UNIVERSE_RE = re.compile(r"^[A-Z0-9_]{2,40}$")
+
 # Stop/target specifications. 'percent' is a flat move from entry; 'atr' scales
 # with the symbol's own volatility, which matters across a universe where one
 # fixed percentage is too tight for volatile names and too loose for calm ones.
