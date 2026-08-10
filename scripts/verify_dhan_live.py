@@ -68,18 +68,36 @@ def main() -> int:
         return 1
     print(f"   OK - {len(base)} candles, {base.index[0]} .. {base.index[-1]}")
 
-    # THE critical check: do candles land inside the NSE session in IST?
+    # THE critical check: are Dhan's epoch timestamps UTC instants, or already
+    # IST-shifted? The discriminator is the FIRST candle of a normal session:
+    # read correctly it lands at exactly 09:15 IST; misread by 5h30m it would
+    # land at 14:45. Nothing else separates the two readings as cleanly.
     ist = base.index.tz_convert(IST)
-    minute_of_day = ist.hour * 60 + ist.minute
-    in_session = ((minute_of_day >= 9 * 60 + 15) & (minute_of_day <= 15 * 60 + 30)).all()
     first = ist[0]
     print(f"   First candle in IST: {first:%Y-%m-%d %H:%M} (session opens 09:15)")
-    if not in_session:
-        print("   FAILED - candles fall OUTSIDE the 09:15-15:30 IST session.")
-        print("   Dhan's timestamps are most likely IST-shifted, not UTC epochs.")
-        print("   Fix parse_candle_payload in providers/dhan.py, then re-run.")
+    if (first.hour, first.minute) != (9, 15):
+        print("   FAILED - the first candle is not at 09:15 IST.")
+        print("   If it reads 14:45, Dhan's timestamps are IST-shifted rather")
+        print("   than UTC epochs: fix parse_candle_payload in providers/dhan.py.")
         return 1
-    print("   OK - every candle falls inside the NSE session (timestamps correct)")
+    print("   OK - first candle lands exactly on the open (timestamps correct)")
+
+    # A few candles legitimately sit outside 09:15-15:30 and are NOT errors:
+    #   * Muhurat trading - NSE's ceremonial Diwali evening session (~18:00)
+    #   * occasional post-close prints just after 15:30
+    # These are real market data, so they are reported, not treated as failures.
+    minute_of_day = ist.hour * 60 + ist.minute
+    outside = base.index[(minute_of_day < 9 * 60 + 15) | (minute_of_day > 15 * 60 + 30)]
+    if len(outside):
+        share = 100.0 * len(outside) / len(base)
+        dates = sorted({d.astimezone(IST).date().isoformat() for d in outside})
+        print(f"   note: {len(outside)} candle(s) ({share:.1f}%) outside regular "
+              f"hours on {', '.join(dates[:5])}")
+        print("         - expected for muhurat sessions and post-close prints.")
+        if share > 5.0:
+            print("   FAILED - too many candles outside session hours to be")
+            print("   explained by special sessions; investigate before trusting.")
+            return 1
 
     print("4. Re-reading (must make NO network call) ...")
 
