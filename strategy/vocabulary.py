@@ -75,3 +75,9 @@ STOP_TYPE_KEYS: dict[str, frozenset[str]] = {
 
 # An intraday stop wider than this is almost certainly a typo (70 for 0.7).
 MAX_STOP_PERCENT = 50.0
+
+# The same typo class on the ATR side: `multiplier: 150` almost certainly meant
+# 1.5. Deliberately NO ceiling on the ATR `period` — every other indicator
+# period in this parser is validated only as > 0, and bounding this one alone
+# would be inconsistent.
+MAX_ATR_MULTIPLIER = 20.0

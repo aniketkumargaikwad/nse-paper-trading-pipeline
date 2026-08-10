@@ -19,6 +19,7 @@ from strategy.parse import (
     Operand,
     RiskConfig,
     SizingConfig,
+    StopSpec,
     Strategy,
     StrategyConfigError,
     load_strategies,
@@ -46,7 +47,7 @@ __all__ = [
     "Condition", "ConditionGroup", "DEFAULT_OUTPUT", "INDICATOR_OUTPUTS",
     "INDICATOR_PARAMS", "INSTRUMENT_RE", "Operand", "POSITION_TYPES",
     "PRICE_SOURCES", "RiskConfig", "SIZING_TYPES", "SOURCE_ALLOWED_FOR",
-    "SizingConfig", "Strategy", "StrategyConfigError", "load_strategies",
+    "SizingConfig", "StopSpec", "Strategy", "StrategyConfigError", "load_strategies",
     "load_strategy_documents", "parse_strategies", "parse_strategy_dict",
     "strategy_to_raw",
 ]
@@ -67,7 +68,7 @@ def main(argv: list[str]) -> int:
         print(
             f"  - {s.name} [{state}] {s.position_type} {s.timeframe} "
             f"on {len(s.instruments)} instrument(s), "
-            f"SL {s.risk.stop_loss_pct}% / target {s.risk.target_pct}%, "
+            f"SL {s.risk.stop_loss.describe()} / target {s.risk.target.describe()}, "
             f"max {s.max_cycles_per_day} cycle(s)/day"
         )
     return 0

@@ -29,6 +29,7 @@ from strategy.vocabulary import (
     INDICATOR_OUTPUTS,
     INDICATOR_PARAMS,
     INSTRUMENT_RE,
+    MAX_ATR_MULTIPLIER,
     MAX_STOP_PERCENT,
     POSITION_TYPES,
     PRICE_SOURCES,
@@ -88,6 +89,17 @@ class StopSpec:
     value: float | None = None
     period: int | None = None
     multiplier: float | None = None
+
+    def describe(self) -> str:
+        """Human-readable form, for the CLI summary and the UI.
+
+        Always branch on `type` rather than inferring the form from which
+        optional field happens to be set — that inference would silently do
+        the wrong thing on a StopSpec built by hand rather than by the parser.
+        """
+        if self.type == "percent":
+            return f"{self.value:g}%"
+        return f"{self.multiplier:g}x ATR({self.period})"
 
 
 @dataclass(frozen=True)
@@ -321,7 +333,19 @@ def _parse_condition_group(node: Any, where: str) -> ConditionGroup:
 def _parse_stop_spec(node: Any, where: str) -> StopSpec:
     node = _require_mapping(node, where)
     if "type" not in node:
-        _fail(where, f"missing required key: type. Allowed: {', '.join(sorted(STOP_TYPES))}")
+        # Report sibling typos in the SAME message rather than only after the
+        # missing type is fixed. Without `type` we cannot know which key set
+        # applies, so anything outside the union of every stop form is
+        # reported as unknown — enough to surface `perod: 14` immediately.
+        problems = [f"missing required key: type. Allowed: {', '.join(sorted(STOP_TYPES))}"]
+        every_key = {"type"}.union(*STOP_TYPE_KEYS.values())
+        unknown = sorted(node.keys() - every_key)
+        if unknown:
+            problems.append(
+                f"unknown key(s): {', '.join(unknown)}. "
+                f"Allowed across all stop types: {', '.join(sorted(every_key))}"
+            )
+        _fail(where, "; ".join(problems))
 
     stype = node["type"]
     if stype not in STOP_TYPES:
@@ -351,6 +375,11 @@ def _parse_stop_spec(node: Any, where: str) -> StopSpec:
     mult = node["multiplier"]
     if isinstance(mult, bool) or not isinstance(mult, (int, float)) or mult <= 0:
         _fail(f"{where}.multiplier", f"expected a number > 0, got {mult!r}")
+    if mult > MAX_ATR_MULTIPLIER:
+        _fail(
+            f"{where}.multiplier",
+            f"must be at most {MAX_ATR_MULTIPLIER:g}, got {mult}",
+        )
     return StopSpec(type="atr", period=period, multiplier=float(mult))
 
 

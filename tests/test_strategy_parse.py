@@ -14,7 +14,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from strategy.parse import StrategyConfigError, parse_strategy_dict  # noqa: E402
+from strategy.parse import (  # noqa: E402
+    StrategyConfigError,
+    parse_strategy_dict,
+    strategy_to_raw,
+)
 
 
 def valid_v2() -> dict:
@@ -102,3 +106,113 @@ def test_percent_out_of_range_is_rejected():
     with pytest.raises(StrategyConfigError) as exc:
         parse_strategy_dict(doc)
     assert "between 0 and 50" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# The compatibility properties. These are the one mechanism keeping the engine
+# working until the backtest engine reads StopSpec directly, and an earlier
+# review caught that nothing exercised their raising branch.
+# ---------------------------------------------------------------------------
+
+
+def atr_stop_doc() -> dict:
+    doc = valid_v2()
+    doc["risk"]["stop_loss"] = {"type": "atr", "period": 14, "multiplier": 1.5}
+    return doc
+
+
+def test_stop_loss_pct_raises_on_an_atr_stop_rather_than_guessing():
+    """Returning 0.0 here would misdescribe the strategy in every summary."""
+    s = parse_strategy_dict(atr_stop_doc())
+    with pytest.raises(ValueError) as exc:
+        _ = s.risk.stop_loss_pct
+    assert "atr" in str(exc.value)
+
+
+def test_target_pct_raises_on_an_atr_target():
+    doc = valid_v2()
+    doc["risk"]["target"] = {"type": "atr", "period": 14, "multiplier": 3}
+    s = parse_strategy_dict(doc)
+    with pytest.raises(ValueError) as exc:
+        _ = s.risk.target_pct
+    assert "atr" in str(exc.value)
+
+
+def test_the_two_properties_are_independent():
+    """An ATR stop with a percent target: only the stop side may raise."""
+    s = parse_strategy_dict(atr_stop_doc())
+    with pytest.raises(ValueError):
+        _ = s.risk.stop_loss_pct
+    assert s.risk.target_pct == 1.5
+
+
+def test_describe_renders_both_forms():
+    s = parse_strategy_dict(atr_stop_doc())
+    assert s.risk.stop_loss.describe() == "1.5x ATR(14)"
+    assert s.risk.target.describe() == "1.5%"
+
+
+# ---------------------------------------------------------------------------
+# Round-tripping. Only the percent form was covered before.
+# ---------------------------------------------------------------------------
+
+
+def test_atr_stop_round_trips_through_strategy_to_raw():
+    original = parse_strategy_dict(atr_stop_doc())
+    assert parse_strategy_dict(strategy_to_raw(original)) == original
+
+
+def test_trailing_stop_round_trips_through_strategy_to_raw():
+    doc = valid_v2()
+    doc["risk"]["trailing_stop"] = {"type": "percent", "value": 0.5}
+    original = parse_strategy_dict(doc)
+    assert parse_strategy_dict(strategy_to_raw(original)) == original
+
+
+def test_absent_trailing_stop_is_omitted_not_emitted_as_null():
+    raw = strategy_to_raw(parse_strategy_dict(valid_v2()))
+    assert "trailing_stop" not in raw["risk"]
+
+
+# ---------------------------------------------------------------------------
+# ATR field validation and the typo ceilings.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_period", [0, -1, 2.5, "14", True])
+def test_bad_atr_period_is_rejected(bad_period):
+    doc = valid_v2()
+    doc["risk"]["stop_loss"] = {"type": "atr", "period": bad_period, "multiplier": 1.5}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "period" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad_multiplier", [0, -1, "1.5", True])
+def test_bad_atr_multiplier_is_rejected(bad_multiplier):
+    doc = valid_v2()
+    doc["risk"]["stop_loss"] = {"type": "atr", "period": 14, "multiplier": bad_multiplier}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "multiplier" in str(exc.value)
+
+
+def test_an_absurd_atr_multiplier_is_rejected_as_a_likely_typo():
+    """`multiplier: 150` almost certainly meant 1.5 — same class as 70 for 0.7."""
+    doc = valid_v2()
+    doc["risk"]["stop_loss"] = {"type": "atr", "period": 14, "multiplier": 150}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "20" in str(exc.value)
+
+
+def test_a_missing_type_still_surfaces_a_sibling_typo():
+    """Both problems in ONE message; fixing them one round-trip at a time is
+    exactly what this parser's _require_keys rationale exists to avoid."""
+    doc = valid_v2()
+    doc["risk"]["stop_loss"] = {"perod": 14, "multiplier": 1.5}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    msg = str(exc.value)
+    assert "type" in msg
+    assert "perod" in msg
