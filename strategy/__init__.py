@@ -20,6 +20,7 @@ from strategy.parse import (
     load_strategy_documents,
     parse_strategies,
     parse_strategy_dict,
+    resolve_quantity,
     strategy_to_raw,
 )
 from strategy.vocabulary import (
@@ -60,5 +61,6 @@ __all__ = [
     "load_strategy_documents",
     "parse_strategies",
     "parse_strategy_dict",
+    "resolve_quantity",
     "strategy_to_raw",
 ]

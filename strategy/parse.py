@@ -18,6 +18,7 @@ caller, which has database access (see db.SupabaseStore.save_strategy_document).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Union
 
 import yaml
@@ -418,13 +419,31 @@ def resolve_quantity(sizing: SizingConfig, price: float) -> int:
         return int(sizing.quantity)
     if price <= 0:
         return 0
-    return int(sizing.notional_per_trade // price)
+    # Decimal, not float //. Binary floating point floors one short at exact
+    # decimal boundaries (100.0 // 0.1 is 999.0, not 1000.0), which would
+    # silently size one share light. This mirrors the deliberate choice to
+    # store prices as numeric(14,4) rather than float — see the Phase 0 data
+    # model — and this function is the sizing source of truth for every
+    # backtest and paper trade.
+    return int(Decimal(str(sizing.notional_per_trade)) // Decimal(str(price)))
 
 
 def _parse_sizing(node: Any, where: str) -> SizingConfig:
     node = _require_mapping(node, where)
     if "type" not in node:
-        _fail(where, f"missing required key: type. Allowed: {', '.join(sorted(SIZING_TYPES))}")
+        # Surface sibling typos in the SAME message, exactly as _parse_stop_spec
+        # does — without `type` we cannot know which key set applies, so
+        # anything outside the union of every sizing form is reported as
+        # unknown. That is enough to catch `typ: notional` on the first pass.
+        problems = [f"missing required key: type. Allowed: {', '.join(sorted(SIZING_TYPES))}"]
+        every_key = {"type"}.union(*SIZING_TYPE_KEYS.values())
+        unknown = sorted(node.keys() - every_key)
+        if unknown:
+            problems.append(
+                f"unknown key(s): {', '.join(unknown)}. "
+                f"Allowed across all sizing types: {', '.join(sorted(every_key))}"
+            )
+        _fail(where, "; ".join(problems))
 
     stype = node["type"]
     if stype not in SIZING_TYPES:

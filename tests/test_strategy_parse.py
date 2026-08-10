@@ -18,6 +18,7 @@ from strategy.parse import (  # noqa: E402
     StrategyConfigError,
     parse_strategy_dict,
     resolve_quantity,
+    resolve_quantity,
     strategy_to_raw,
 )
 
@@ -285,3 +286,73 @@ def test_fixed_quantity_sizing_round_trips_through_strategy_to_raw():
     doc["sizing"] = {"type": "fixed_quantity", "quantity": 7}
     original = parse_strategy_dict(doc)
     assert parse_strategy_dict(strategy_to_raw(original)) == original
+
+
+# ---------------------------------------------------------------------------
+# Sizing: cross-form rejection and typo surfacing, mirroring the stop-spec
+# tests above. Review caught that only the stop side had this coverage.
+# ---------------------------------------------------------------------------
+
+
+def test_notional_sizing_rejects_a_quantity_key():
+    doc = valid_v2()
+    doc["sizing"] = {"type": "notional", "notional_per_trade": 100000, "quantity": 5}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "quantity" in str(exc.value)
+
+
+def test_fixed_quantity_sizing_rejects_a_notional_key():
+    doc = valid_v2()
+    doc["sizing"] = {"type": "fixed_quantity", "quantity": 5, "notional_per_trade": 100000}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "notional_per_trade" in str(exc.value)
+
+
+def test_unknown_sizing_type_lists_the_allowed_ones():
+    doc = valid_v2()
+    doc["sizing"] = {"type": "risk_based", "notional_per_trade": 100000}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    msg = str(exc.value)
+    assert "risk_based" in msg
+    assert "notional" in msg and "fixed_quantity" in msg
+
+
+def test_a_missing_sizing_type_still_surfaces_a_sibling_typo():
+    doc = valid_v2()
+    doc["sizing"] = {"typ": "notional", "notional_per_trade": 100000}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    msg = str(exc.value)
+    assert "type" in msg
+    assert "typ" in msg
+
+
+@pytest.mark.parametrize("bad", [0, -1, "100000", True])
+def test_bad_notional_is_rejected(bad):
+    doc = valid_v2()
+    doc["sizing"] = {"type": "notional", "notional_per_trade": bad}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "notional_per_trade" in str(exc.value)
+
+
+def test_resolve_quantity_is_exact_at_decimal_boundaries():
+    """Float // floors one short here: 100.0 // 0.1 is 999.0, not 1000.0.
+
+    Sizing one share light on every trade would quietly bias every backtest,
+    so this uses Decimal — matching the deliberate numeric(14,4) choice in the
+    candle store rather than trusting binary floating point.
+    """
+    doc = valid_v2()
+    doc["sizing"] = {"type": "notional", "notional_per_trade": 100}
+    sizing = parse_strategy_dict(doc).sizing
+    assert resolve_quantity(sizing, price=0.1) == 1000
+
+
+def test_resolve_quantity_handles_a_price_of_zero_without_raising():
+    sizing = parse_strategy_dict(valid_v2()).sizing
+    assert resolve_quantity(sizing, price=0.0) == 0
+    assert resolve_quantity(sizing, price=-5.0) == 0
