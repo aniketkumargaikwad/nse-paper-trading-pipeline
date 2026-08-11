@@ -93,8 +93,12 @@ def test_round_trip_of_every_indicator_shape() -> None:
     assert restored.position_type == "short"
 
 
-def test_invalid_document_rejected_before_storage() -> None:
-    """A malformed strategy must never reach the database."""
+def test_a_malformed_document_fails_validation() -> None:
+    """The parser rejects it; storage then keeps it as a DRAFT, not a live row.
+
+    Draft handling itself is covered in tests/test_strategy_drafts.py — this
+    only pins that the parser is what decides validity.
+    """
     bad = {
         "name": "bad", "enabled": True, "position_type": "long",
         "timeframe": "1m",  # faster than the 5m base is forbidden
