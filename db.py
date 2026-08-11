@@ -145,6 +145,31 @@ class ClosedTrade:
 # ---------------------------------------------------------------------------
 
 
+def to_native(value: Any) -> Any:
+    """Convert numpy scalars to plain Python types, recursively.
+
+    The simulator reads prices out of numpy arrays, so a trade's net_pnl is a
+    numpy.float64 and every comparison built from it - `net_pnl > 0` in the
+    kill-rule flags - is a numpy.bool_. Neither survives JSON encoding, so an
+    otherwise complete backtest died at the insert with "Object of type bool_
+    is not JSON serializable", losing every row it had just spent minutes
+    computing.
+
+    Applied at the database boundary rather than at each call site: the
+    simulator is entitled to use numpy, and every writer would otherwise have
+    to remember this independently. Anything without .item() passes through
+    untouched, so dates, strings and None are unaffected.
+    """
+    if isinstance(value, dict):
+        return {k: to_native(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_native(v) for v in value]
+    item = getattr(value, "item", None)
+    if item is not None and hasattr(value, "dtype"):
+        return item()
+    return value
+
+
 @dataclass(frozen=True)
 class SaveResult:
     """Outcome of saving a strategy: valid and runnable, or a stored draft."""
@@ -692,7 +717,7 @@ class SupabaseStore:
 
     def insert_backtest_runs(self, rows: Iterable[Mapping[str, Any]]) -> int:
         """Bulk-insert strategy-level run rows (shaped by backtest.py)."""
-        payload = [dict(r) for r in rows]
+        payload = [to_native(dict(r)) for r in rows]
         if not payload:
             return 0
         try:
@@ -703,7 +728,7 @@ class SupabaseStore:
 
     def insert_backtest_results(self, rows: Iterable[Mapping[str, Any]]) -> int:
         """Bulk-insert backtest result rows (shaped by backtest.py). Returns count."""
-        payload = [dict(r) for r in rows]
+        payload = [to_native(dict(r)) for r in rows]
         if not payload:
             return 0
         try:

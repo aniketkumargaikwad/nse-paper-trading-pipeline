@@ -51,6 +51,13 @@ class _Query:
         self._filters.append((column, value))
         return self
 
+    def insert(self, rows):
+        payload = rows if isinstance(rows, list) else [rows]
+        for r in payload:
+            self._table.rows.append(dict(r))
+            self._table.inserts.append(dict(r))
+        return self
+
     def upsert(self, row, on_conflict=None):
         rows = row if isinstance(row, list) else [row]
         for r in rows:
@@ -72,6 +79,7 @@ class _Table:
     def __init__(self):
         self.rows: list[dict] = []
         self.upserts: list[dict] = []
+        self.inserts: list[dict] = []
 
 
 class FakeClient:
@@ -311,3 +319,56 @@ def test_seeding_does_not_touch_existing_strategies(store):
     ])
     assert store.seed_strategies_if_empty([valid_doc()]) == 0
     assert [s.name for s in store.list_strategies()] == ["mine"]
+
+
+# ---------------------------------------------------------------------------
+# numpy at the database boundary.
+#
+# The simulator reads prices out of numpy arrays, so a trade's net_pnl is a
+# numpy.float64 and every comparison built from it — `net_pnl > 0` in the
+# kill-rule flags — is a numpy.bool_. Neither survives JSON encoding, and a
+# 50-symbol backtest died at the insert having already computed everything,
+# losing all of it.
+# ---------------------------------------------------------------------------
+
+
+def test_numpy_scalars_are_converted_before_insert(store):
+    import json
+
+    import numpy as np
+
+    from db import to_native
+
+    row = {
+        "batch_id": "b", "strategy_name": "s",
+        "net_pnl": np.float64(-440446.12),
+        "total_trades": np.int64(3298),
+        "passed_kill_rules": np.bool_(False),
+        "kill_rule_flags": {"net_positive_after_costs": {"passed": np.bool_(False)}},
+        "symbols": ["NSE:TCS"],
+        "constituents_as_of": None,
+    }
+    native = to_native(row)
+    json.dumps(native)          # the operation that used to raise
+
+    assert type(native["passed_kill_rules"]) is bool
+    assert type(native["net_pnl"]) is float
+    assert type(native["total_trades"]) is int
+    assert type(native["kill_rule_flags"]["net_positive_after_costs"]["passed"]) is bool
+    # Plain values must pass through untouched.
+    assert native["symbols"] == ["NSE:TCS"]
+    assert native["constituents_as_of"] is None
+
+
+def test_backtest_inserts_survive_numpy_values(store):
+    """The end-to-end guard: the insert path itself, not just the helper."""
+    import numpy as np
+
+    assert store.insert_backtest_results([
+        {"strategy_name": "s", "net_pnl": np.float64(1.5),
+         "passed_kill_rules": np.bool_(True)},
+    ]) == 1
+    assert store.insert_backtest_runs([
+        {"strategy_name": "s", "sharpe_daily": np.float64(-5.27),
+         "passed_kill_rules": np.bool_(False)},
+    ]) == 1
