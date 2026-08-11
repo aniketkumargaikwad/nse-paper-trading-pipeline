@@ -190,18 +190,31 @@ def test_daily_request_is_not_clamped() -> None:
 def test_timeframe_maps_to_yahoo_interval() -> None:
     fake = FakeYF()
     client = client_with(fake)
-    for tf, expected in [("15m", "15m"), ("30m", "30m"), ("60m", "1h"), ("day", "1d")]:
+    for tf, expected in [
+        ("5m", "5m"), ("15m", "15m"), ("30m", "30m"), ("60m", "1h"), ("day", "1d"),
+    ]:
         client.fetch_historical_candles(
             "RELIANCE.NS", tf, NOW - timedelta(days=5), NOW, now_utc=NOW
         )
         assert fake.calls[-1]["interval"] == expected
 
 
+def test_five_minute_is_supported_and_maps_to_yahoo_interval() -> None:
+    fake = FakeYF()
+    client = client_with(fake)
+    client.fetch_historical_candles(
+        "RELIANCE.NS", "5m", NOW - timedelta(days=5), NOW, now_utc=NOW
+    )
+    assert fake.calls[-1]["interval"] == "5m"
+    assert client.max_history_days("5m") == 58
+
+
 def test_unsupported_timeframe_rejected() -> None:
     client = client_with(FakeYF())
-    with pytest.raises(KiteClientError, match="Unsupported timeframe"):
+    # Yahoo has no 25-minute interval; the dhan provider derives it instead.
+    with pytest.raises(KiteClientError, match="cannot serve"):
         client.fetch_historical_candles(
-            "RELIANCE.NS", "5m", NOW - timedelta(days=1), NOW, now_utc=NOW
+            "RELIANCE.NS", "25m", NOW - timedelta(days=1), NOW, now_utc=NOW
         )
 
 

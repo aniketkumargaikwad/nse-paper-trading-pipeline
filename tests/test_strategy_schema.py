@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def valid_doc() -> dict:
     """Smallest document that passes validation; tests break one thing each."""
     return {
-        "version": 1,
+        "version": 2,
         "strategies": [
             {
                 "name": "test-strat",
@@ -61,7 +61,11 @@ def valid_doc() -> dict:
                         }
                     ]
                 },
-                "risk": {"stop_loss_pct": 0.7, "target_pct": 1.5},
+                "risk": {
+                    "stop_loss": {"type": "percent", "value": 0.7},
+                    "target": {"type": "percent", "value": 1.5},
+                },
+                "sizing": {"type": "fixed_quantity", "quantity": 1},
             }
         ],
     }
@@ -91,8 +95,10 @@ def test_shipped_strategies_file_is_valid() -> None:
     assert s.position_type == "long"
     assert s.timeframe == "15m"
     assert len(s.instruments) == 5
-    assert s.risk.stop_loss_pct == 0.7
-    assert s.risk.target_pct == 1.5
+    assert s.risk.stop_loss.type == "percent"
+    assert s.risk.stop_loss.value == 0.7
+    assert s.risk.target.type == "percent"
+    assert s.risk.target.value == 1.5
     assert s.max_cycles_per_day == 2
 
     # Entry: EMA cross AND RSI AND volume filter.
@@ -112,9 +118,18 @@ def test_shipped_strategies_file_is_valid() -> None:
 def test_valid_minimal_doc_parses() -> None:
     strategies = parse_strategies(valid_doc())
     assert strategies[0].name == "test-strat"
-    # Defaults applied when optional keys are omitted.
     assert strategies[0].sizing.quantity == 1
+    # max_cycles_per_day is still optional and still defaults.
     assert strategies[0].max_cycles_per_day == 1
+
+
+def test_missing_sizing_is_rejected() -> None:
+    """`sizing` used to default to {fixed_quantity: 1}; it is now required —
+    a default here would be a silent opinion about acceptable cost drag
+    (see strategy/parse.py:_parse_sizing)."""
+    doc = valid_doc()
+    del doc["strategies"][0]["sizing"]
+    expect_error(doc, "sizing")
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +176,8 @@ def test_param_typo_rejected() -> None:
 
 def test_bad_timeframe_rejected() -> None:
     doc = valid_doc()
-    doc["strategies"][0]["timeframe"] = "5m"  # faster than 15m is forbidden
-    expect_error(doc, "unsupported timeframe '5m'")
+    doc["strategies"][0]["timeframe"] = "1m"  # faster than the 5m base is forbidden
+    expect_error(doc, "unsupported timeframe '1m'")
 
 
 def test_bad_instrument_format_rejected() -> None:
@@ -185,14 +200,14 @@ def test_duplicate_strategy_names_rejected() -> None:
 
 def test_negative_stop_loss_rejected() -> None:
     doc = valid_doc()
-    doc["strategies"][0]["risk"]["stop_loss_pct"] = -1
-    expect_error(doc, "stop_loss_pct")
+    doc["strategies"][0]["risk"]["stop_loss"] = {"type": "percent", "value": -1}
+    expect_error(doc, "risk.stop_loss")
 
 
 def test_absurd_stop_loss_rejected() -> None:
     # 70 (percent) is almost certainly a typo for 0.7 — sanity ceiling is 50.
     doc = valid_doc()
-    doc["strategies"][0]["risk"]["stop_loss_pct"] = 70
+    doc["strategies"][0]["risk"]["stop_loss"] = {"type": "percent", "value": 70}
     expect_error(doc, "between 0 and 50")
 
 

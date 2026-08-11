@@ -177,15 +177,20 @@ def frame(rows: list[tuple]) -> pd.DataFrame:
 
 
 def strategy(*, entry_above=105.0, exit_below=90.0, sl_pct=1.0, tgt_pct=2.0,
-             max_cycles=5, position_type="long"):
+             max_cycles=5, position_type="long",
+             sizing=None, risk=None):
     doc = {
-        "version": 1,
+        "version": 2,
         "strategies": [{
             "name": "pe-test", "enabled": True, "position_type": position_type,
             "timeframe": "15m", "instruments": ["NSE:RELIANCE"],
             "entry": {"all": [{"indicator": "close", "operator": ">", "value": entry_above}]},
             "exit": {"any": [{"indicator": "close", "operator": "<", "value": exit_below}]},
-            "risk": {"stop_loss_pct": sl_pct, "target_pct": tgt_pct},
+            "risk": risk or {
+                "stop_loss": {"type": "percent", "value": sl_pct},
+                "target": {"type": "percent", "value": tgt_pct},
+            },
+            "sizing": sizing or {"type": "fixed_quantity", "quantity": 1},
             "max_cycles_per_day": max_cycles,
         }],
     }
@@ -263,6 +268,48 @@ def test_entry_skipped_when_no_forming_candle() -> None:
     assert summary.entries == 0
     assert store.positions == {}
     assert any("final candle" in note for note in summary.skipped)
+
+
+def test_entry_derives_quantity_from_notional_sizing() -> None:
+    # Forming open is 108 -> floor(100000 / (108 * 1.0005)) shares, not the
+    # sizing.quantity field (which does not exist under notional sizing).
+    rows = [
+        (100, 101, 99, 100),   # 09:15
+        (100, 101, 99, 100),   # 09:30
+        (100, 101, 99, 100),   # 09:45
+        (100, 107, 99, 106),   # 10:00 closed candle: close 106 > 105 -> ENTRY
+        (108, 108.5, 107.5, 108),  # forming candle, open 108
+    ]
+    store = FakeStore()
+    strat = strategy(sizing={"type": "notional", "notional_per_trade": 100000})
+    summary = run(store, {"NSE:RELIANCE": frame(rows)}, strat)
+    assert summary.entries == 1
+    pos = store.positions[("pe-test", "NSE:RELIANCE")]
+    from decimal import Decimal
+    expected_price = 108.0 * 1.0005
+    assert pos.quantity == int(Decimal(str(100000)) // Decimal(str(expected_price)))
+    assert pos.quantity > 1
+
+
+def test_entry_skipped_when_notional_below_share_price() -> None:
+    # A Rs 500 notional cannot buy a ~Rs 108 share is false — invert it: use
+    # a notional smaller than the forming open so quantity resolves to 0.
+    rows = [
+        (100, 101, 99, 100),   # 09:15
+        (100, 101, 99, 100),   # 09:30
+        (100, 101, 99, 100),   # 09:45
+        (100, 107, 99, 106),   # 10:00 closed candle: close 106 > 105 -> ENTRY
+        (108, 108.5, 107.5, 108),  # forming candle, open 108
+    ]
+    store = FakeStore()
+    strat = strategy(sizing={"type": "notional", "notional_per_trade": 50})
+    summary = run(store, {"NSE:RELIANCE": frame(rows)}, strat)
+    assert summary.entries == 0
+    assert store.positions == {}
+    assert any(
+        "notional_per_trade" in note and "0 shares" in note
+        for note in summary.skipped
+    )
 
 
 def test_max_cycles_per_day_blocks_entry() -> None:
@@ -374,3 +421,117 @@ def test_short_position_stop_and_target_sides() -> None:
     assert t.intended_exit_price == 98.0
     assert t.exit_price == pytest.approx(98.0 * 1.0005)  # buy-back pays slippage
     assert t.gross_pnl == pytest.approx(100.0 - t.exit_price, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# ATR stops in the paper engine. The batch backtester and this engine must
+# compute levels identically — a divergence would mean a strategy showed one
+# backtest and behaved differently once deployed.
+# ---------------------------------------------------------------------------
+
+ATR_RISK = {
+    "stop_loss": {"type": "atr", "period": 2, "multiplier": 1.5},
+    "target": {"type": "percent", "value": 2.0},
+}
+
+
+def test_atr_stop_levels_match_the_backtester_exactly():
+    """Same strategy, same candles, same level — asserted, not assumed."""
+    import pandas as pd
+
+    from risk_levels import build_atr_series, stop_and_target
+    from paper_engine import _stop_target_levels
+
+    strat = strategy(risk=dict(ATR_RISK))
+    closed = pd.DataFrame(
+        {
+            "open": [100.0, 102.0, 101.0, 103.0],
+            "high": [103.0, 105.0, 104.0, 106.0],
+            "low": [99.0, 100.0, 99.5, 101.0],
+            "close": [102.0, 101.0, 103.0, 105.0],
+            "volume": [1000.0] * 4,
+        },
+        index=pd.date_range("2026-07-16 04:00", periods=4, freq="15min", tz="UTC"),
+    )
+    entry_price = 105.0
+
+    from_engine = _stop_target_levels(strat, closed, entry_price)
+    from_shared = stop_and_target(
+        strat, entry_price,
+        signal_idx=len(closed) - 1,
+        atr_series=build_atr_series(closed, strat),
+    )
+    assert from_engine == from_shared
+    stop, target = from_engine
+    assert stop < entry_price < target      # long: stop below, target above
+
+
+def test_an_atr_period_beyond_available_history_does_not_abort_the_whole_run():
+    """run_once promises a failure on one combination is recorded, not fatal.
+
+    An ATR period outrunning the available history used to escape the
+    per-combination handler and take down every other strategy in the run.
+    """
+    import pandas as pd
+
+    from risk_levels import RiskLevelError
+
+    strat = strategy(
+        risk={
+            "stop_loss": {"type": "atr", "period": 500, "multiplier": 1.5},
+            "target": {"type": "percent", "value": 2.0},
+        }
+    )
+    closed = pd.DataFrame(
+        {
+            "open": [100.0, 102.0], "high": [103.0, 105.0],
+            "low": [99.0, 100.0], "close": [102.0, 101.0],
+            "volume": [1000.0, 1000.0],
+        },
+        index=pd.date_range("2026-07-16 04:00", periods=2, freq="15min", tz="UTC"),
+    )
+    with pytest.raises(RiskLevelError) as exc:
+        __import__("paper_engine")._stop_target_levels(strat, closed, 105.0)
+    msg = str(exc.value)
+    assert "500" in msg and "pe-test" in msg
+
+    # And run_once catches it: the summary records the skip rather than raising.
+    import inspect
+
+    import paper_engine
+
+    source = inspect.getsource(paper_engine.run_once)
+    assert "RiskLevelError" in source, (
+        "run_once must catch RiskLevelError, or one bad ATR period aborts "
+        "every other strategy in the run"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Trailing stop — the paper engine is stateless (every run rebuilds from
+# Supabase) and `positions` has no column to persist a running best price
+# between runs, so a trailing_stop config cannot be honoured here without a
+# schema change. It must be refused loudly, not silently downgraded to a
+# fixed-stop-only trade that would diverge from what the same strategy's
+# backtest shows.
+# ---------------------------------------------------------------------------
+
+
+def test_entry_with_trailing_stop_is_refused_not_silently_ignored() -> None:
+    rows = [
+        (100, 101, 99, 100),   # 09:15
+        (100, 101, 99, 100),   # 09:30
+        (100, 101, 99, 100),   # 09:45
+        (100, 107, 99, 106),   # 10:00 closed candle: close 106 > 105 -> would ENTRY
+        (108, 108.5, 107.5, 108),  # forming candle
+    ]
+    strat = strategy(risk={
+        "stop_loss": {"type": "percent", "value": 1.0},
+        "target": {"type": "percent", "value": 2.0},
+        "trailing_stop": {"type": "percent", "value": 1.0},
+    })
+    store = FakeStore()
+    summary = run(store, {"NSE:RELIANCE": frame(rows)}, strat)
+    assert summary.entries == 0
+    assert len(store.positions) == 0
+    assert any("trailing_stop" in note for note in summary.skipped)

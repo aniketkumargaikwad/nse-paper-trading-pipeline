@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import json
+
+import yaml
 import os
 import sys
 import uuid
@@ -31,7 +33,13 @@ from postgrest.exceptions import APIError
 from supabase import Client, create_client
 
 from config import UTC, Settings
-from strategy_schema import Strategy, parse_strategy_dict
+from strategy_schema import (
+    CURRENT_VERSION,
+    MigrationError,
+    Strategy,
+    migrate_document,
+    parse_strategy_dict,
+)
 
 # Postgres error code for unique-constraint violations. We treat these as
 # "someone (a previous run) already did this" — the core of idempotency.
@@ -136,6 +144,20 @@ class ClosedTrade:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class SaveResult:
+    """Outcome of saving a strategy: valid and runnable, or a stored draft."""
+
+    name: str
+    status: str                     # 'valid' | 'draft'
+    strategy: Strategy | None       # populated only when valid
+    errors: tuple[str, ...] = ()
+
+    @property
+    def is_valid(self) -> bool:
+        return self.status == "valid"
+
+
 class SupabaseStore:
     """All reads/writes the pipeline performs against Supabase."""
 
@@ -238,10 +260,15 @@ class SupabaseStore:
         docs = []
         for row in resp.data:
             doc = dict(row.get("definition") or {})
+            doc["name"] = row["name"]
+            doc["status"] = row.get("status", "valid")
+            doc["raw_source"] = row.get("raw_source")
+            doc["validation_errors"] = row.get("validation_errors") or []
             # `enabled` lives in its own column so it can be toggled cheaply;
             # it always wins over any stale copy inside the definition blob.
-            doc["enabled"] = bool(row["enabled"])
-            doc["name"] = row["name"]
+            # A draft has no enabled value at all, hence the None guard.
+            if row.get("enabled") is not None:
+                doc["enabled"] = bool(row["enabled"])
             docs.append(doc)
         return docs
 
@@ -254,6 +281,12 @@ class SupabaseStore:
         """
         strategies = []
         for doc in self.list_strategy_documents():
+            # Drafts are blocked HERE and only here. Every engine loads
+            # through this method, so one filter is the whole enforcement.
+            if doc.get("status") != "valid":
+                continue
+            doc = {k: v for k, v in doc.items()
+                   if k not in ("status", "raw_source", "validation_errors")}
             try:
                 strategies.append(parse_strategy_dict(doc, where=f"strategy {doc.get('name')!r}"))
             except ValueError as exc:
@@ -263,25 +296,134 @@ class SupabaseStore:
                 ) from exc
         return strategies
 
-    def save_strategy_document(self, doc: Mapping[str, Any]) -> Strategy:
-        """Create or update one strategy. Validates BEFORE writing.
+    def known_universe_names(self) -> set[str]:
+        """Names of every universe currently in symbol_groups."""
+        try:
+            resp = self._table("symbol_groups").select("name").execute()
+        except APIError as exc:
+            raise self._wrap(exc, "listing universes") from exc
+        return {row["name"] for row in resp.data}
 
-        Returns the parsed Strategy so callers can show what was saved.
+    def save_strategy_document(
+        self, doc: Mapping[str, Any], *, raw_source: str | None = None
+    ) -> SaveResult:
+        """Create or update one strategy, storing it as a draft if invalid.
+
+        A strategy arriving from an external AI tool is EXPECTED to be wrong on
+        the first attempt, so rejecting it outright would mean retyping or
+        re-prompting from scratch. Drafts are stored with the text they came
+        from and their errors, are editable, and are blocked from every engine
+        by list_strategies().
         """
-        strategy = parse_strategy_dict(dict(doc), where="strategy")
-        row = {
-            "name": strategy.name,
-            "enabled": strategy.enabled,
-            "position_type": strategy.position_type,
-            "timeframe": strategy.timeframe,
-            "definition": json.loads(json.dumps(dict(doc), default=str)),
-            "updated_at": _iso(datetime.now(tz=UTC)),
-        }
+        doc = dict(doc)
+        name = doc.get("name")
+        if not isinstance(name, str) or not name.strip():
+            # The one thing a draft cannot be missing: it is the primary key,
+            # so there would be nowhere to put the draft.
+            raise DatabaseError(
+                "a strategy needs a 'name' before it can be saved, even as a "
+                "draft - the name is its primary key."
+            )
+        name = name.strip()
+
+        errors: list[str] = []
+        strategy: Strategy | None = None
+        try:
+            strategy = parse_strategy_dict(doc, where="strategy")
+        except ValueError as exc:
+            errors.append(str(exc))
+
+        # Universe existence needs the database, so it cannot live in the pure
+        # parser - validating a pasted strategy has to work offline. It is
+        # checked here instead, on the same save.
+        if strategy is not None and strategy.universe:
+            known = self.known_universe_names()
+            if strategy.universe not in known:
+                available = ", ".join(sorted(known)) or "(none defined yet)"
+                errors.append(
+                    f"strategy.universe: unknown universe "
+                    f"{strategy.universe!r}. Available: {available}. "
+                    "Create it with scripts/refresh_universes.py."
+                )
+                strategy = None
+
+        now = _iso(datetime.now(tz=UTC))
+        if strategy is not None:
+            row = {
+                "name": name,
+                "enabled": strategy.enabled,
+                "position_type": strategy.position_type,
+                "timeframe": strategy.timeframe,
+                "definition": json.loads(json.dumps(doc, default=str)),
+                "raw_source": raw_source,
+                "format_version": CURRENT_VERSION,
+                "status": "valid",
+                "validation_errors": None,
+                "updated_at": now,
+            }
+        else:
+            row = {
+                "name": name,
+                "enabled": None,
+                "position_type": None,
+                "timeframe": None,
+                "definition": None,
+                "raw_source": raw_source,
+                "format_version": None,
+                "status": "draft",
+                "validation_errors": errors,
+                "updated_at": now,
+            }
+
         try:
             self._table("strategies").upsert(row, on_conflict="name").execute()
         except APIError as exc:
-            raise self._wrap(exc, f"saving strategy {strategy.name}") from exc
-        return strategy
+            raise self._wrap(exc, f"saving strategy {name}") from exc
+
+        return SaveResult(
+            name=name, status=row["status"], strategy=strategy,
+            errors=tuple(errors),
+        )
+
+    def save_strategy_text(self, text: str) -> SaveResult:
+        """Save a strategy pasted as YAML text.
+
+        Accepts either a bare strategy mapping or a full document with a
+        `version:` and `strategies:` list - an external AI tool will produce
+        either, and both should just work.
+        """
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            # No document at all means no name to key a draft on, so this is
+            # the one paste failure that cannot become a draft.
+            raise DatabaseError(
+                f"the pasted text is not valid YAML: {exc}\n"
+                "Common causes: inconsistent indentation, a missing ':', or an "
+                "unquoted '>' operator (write operator: \">\")."
+            ) from exc
+
+        if isinstance(data, dict) and "strategies" in data:
+            try:
+                data = migrate_document(data)
+            except MigrationError as exc:
+                raise DatabaseError(str(exc)) from exc
+            entries = data.get("strategies") or []
+            if len(entries) != 1:
+                raise DatabaseError(
+                    f"expected exactly one strategy in the pasted text, "
+                    f"found {len(entries)}. Paste them one at a time."
+                )
+            doc = entries[0]
+        else:
+            doc = data
+
+        if not isinstance(doc, dict):
+            raise DatabaseError(
+                "the pasted text is not a strategy: expected a mapping of "
+                "key: value lines."
+            )
+        return self.save_strategy_document(doc, raw_source=text)
 
     def set_strategy_enabled(self, name: str, enabled: bool) -> None:
         """Flip a strategy live/paused — the 'one-click deploy' action."""
@@ -318,34 +460,6 @@ class SupabaseStore:
         for doc in documents:
             self.save_strategy_document(doc)
         return len(documents)
-
-    def sync_strategies(self, strategies: Sequence[Strategy]) -> None:
-        """Mirror the validated strategies.yaml into the `strategies` table.
-
-        Strategies removed from the YAML are marked disabled (not deleted) so
-        their historical trades keep a visible parent on the dashboard.
-        """
-        rows = [
-            {
-                "name": s.name,
-                "enabled": s.enabled,
-                "position_type": s.position_type,
-                "timeframe": s.timeframe,
-                "definition": json.loads(json.dumps(asdict(s), default=str)),
-                "updated_at": _iso(datetime.now(tz=UTC)),
-            }
-            for s in strategies
-        ]
-        try:
-            if rows:
-                self._table("strategies").upsert(rows, on_conflict="name").execute()
-            current_names = [s.name for s in strategies]
-            query = self._table("strategies").update({"enabled": False})
-            if current_names:
-                query = query.not_.in_("name", current_names)
-            query.execute()
-        except APIError as exc:
-            raise self._wrap(exc, "syncing strategies") from exc
 
     # -- positions ------------------------------------------------------------
 

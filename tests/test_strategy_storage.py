@@ -79,7 +79,10 @@ def test_round_trip_of_every_indicator_shape() -> None:
             ]
         },
         "exit": {"any": [{"indicator": "close", "operator": "<", "value": 1}]},
-        "risk": {"stop_loss_pct": 1.0, "target_pct": 2.0},
+        "risk": {
+            "stop_loss": {"type": "percent", "value": 1.0},
+            "target": {"type": "percent", "value": 2.0},
+        },
         "sizing": {"type": "fixed_quantity", "quantity": 25},
         "max_cycles_per_day": 3,
     }
@@ -90,22 +93,37 @@ def test_round_trip_of_every_indicator_shape() -> None:
     assert restored.position_type == "short"
 
 
-def test_invalid_document_rejected_before_storage() -> None:
-    """A malformed strategy must never reach the database."""
+def test_a_malformed_document_fails_validation() -> None:
+    """The parser rejects it; storage then keeps it as a DRAFT, not a live row.
+
+    Draft handling itself is covered in tests/test_strategy_drafts.py — this
+    only pins that the parser is what decides validity.
+    """
     bad = {
         "name": "bad", "enabled": True, "position_type": "long",
-        "timeframe": "5m",  # faster than 15m is forbidden
+        "timeframe": "1m",  # faster than the 5m base is forbidden
         "instruments": ["NSE:RELIANCE"],
         "entry": {"all": [{"indicator": "close", "operator": ">", "value": 1}]},
         "exit": {"any": [{"indicator": "close", "operator": "<", "value": 1}]},
-        "risk": {"stop_loss_pct": 1.0, "target_pct": 2.0},
+        "risk": {
+            "stop_loss": {"type": "percent", "value": 1.0},
+            "target": {"type": "percent", "value": 2.0},
+        },
+        "sizing": {"type": "fixed_quantity", "quantity": 1},
     }
     with pytest.raises(StrategyConfigError, match="unsupported timeframe"):
         parse_strategy_dict(bad)
 
 
 def test_ui_built_document_shape_is_accepted() -> None:
-    """Exactly what the Strategies page builder produces."""
+    """Exactly what the Strategies page builder produces.
+
+    NOTE: app_pages/strategies.py itself still emits the v1 `stop_loss_pct`/
+    `target_pct` keys as of this task — updating the builder's output shape
+    is out of scope here (see Task 3's file list). This fixture is written
+    in the v2 shape the parser now requires, matching what the builder will
+    need to emit once it is updated.
+    """
     doc = {
         "name": "MY-STRATEGY-v1",
         "enabled": False,
@@ -118,7 +136,10 @@ def test_ui_built_document_shape_is_accepted() -> None:
         "exit": {"any": [
             {"indicator": "rsi", "params": {"period": 14}, "operator": "<", "value": 40.0}
         ]},
-        "risk": {"stop_loss_pct": 0.7, "target_pct": 1.5},
+        "risk": {
+            "stop_loss": {"type": "percent", "value": 0.7},
+            "target": {"type": "percent", "value": 1.5},
+        },
         "sizing": {"type": "fixed_quantity", "quantity": 10},
         "max_cycles_per_day": 2,
     }

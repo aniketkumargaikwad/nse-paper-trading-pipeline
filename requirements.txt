@@ -20,6 +20,17 @@ yfinance>=0.2.65
 # historical-data API this project runs on.
 kiteconnect==5.0.1
 
+# TOTP generation for unattended Dhan token renewal (no daily login).
+pyotp==2.9.0
+
+# Direct REST calls to Dhan, carrying API credentials. requests also arrives
+# transitively via kiteconnect, streamlit, and yfinance, but it is pinned
+# explicitly here rather than left to whatever those resolve to. The pin must
+# be at least 2.32.4: earlier 2.32.x releases carry CVE-2024-47081, a
+# URL-parsing flaw that can leak .netrc credentials to a malicious host via
+# crafted redirects — a real risk for a client that carries API credentials.
+requests==2.32.4
+
 # Supabase Python client — the only persistent state store.
 supabase==2.15.0
 

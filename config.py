@@ -40,34 +40,6 @@ MARKET_OPEN_IST = time(9, 15)
 MARKET_CLOSE_IST = time(15, 30)
 
 # ---------------------------------------------------------------------------
-# Timeframes
-# ---------------------------------------------------------------------------
-# The system supports 15-minute and higher ONLY (hard constraint: no tick/1m/5m
-# logic anywhere). These two maps are the single source of truth; the strategy
-# validator, the Kite client, and the engines all import from here.
-
-# Our timeframe label -> Kite Connect historical API `interval` string.
-# ASSUMPTION: Kite Connect v3 interval names ("15minute", "30minute",
-# "60minute", "day"). Verify against current Kite docs if a fetch fails.
-TIMEFRAME_TO_KITE_INTERVAL: dict[str, str] = {
-    "15m": "15minute",
-    "30m": "30minute",
-    "60m": "60minute",
-    "day": "day",
-}
-
-# Our timeframe label -> candle length in minutes ("day" uses the full NSE
-# session length of 375 minutes: 09:15-15:30 IST).
-TIMEFRAME_MINUTES: dict[str, int] = {
-    "15m": 15,
-    "30m": 30,
-    "60m": 60,
-    "day": 375,
-}
-
-SUPPORTED_TIMEFRAMES: tuple[str, ...] = tuple(TIMEFRAME_TO_KITE_INTERVAL)
-
-# ---------------------------------------------------------------------------
 # Simulated fill-realism defaults (used by BOTH backtester and paper engine)
 # ---------------------------------------------------------------------------
 
@@ -77,10 +49,73 @@ DEFAULT_COST_PER_TRADE_INR = 30.0  # flat round-trip brokerage+taxes estimate
 # Path (relative to repo root) of the strategy definitions file.
 STRATEGIES_FILE = "strategies.yaml"
 
+
+class ConfigError(RuntimeError):
+    """Raised when required configuration is missing or malformed."""
+
+
+# ---------------------------------------------------------------------------
+# Timeframes
+# ---------------------------------------------------------------------------
+# These maps are the single source of truth; the strategy validator, the
+# data providers, and the engines all import from here.
+
+# Our timeframe label -> Kite Connect historical API `interval` string.
+# ASSUMPTION: Kite Connect v3 interval names. Only used when DATA_PROVIDER=kite.
+TIMEFRAME_TO_KITE_INTERVAL: dict[str, str] = {
+    "5m": "5minute",
+    "15m": "15minute",
+    "30m": "30minute",
+    "60m": "60minute",
+    "day": "day",
+}
+
+# Our timeframe label -> candle length in minutes ("day" uses the full NSE
+# session length of 375 minutes: 09:15-15:30 IST).
+TIMEFRAME_MINUTES: dict[str, int] = {
+    "5m": 5,
+    "15m": 15,
+    "25m": 25,
+    "30m": 30,
+    "60m": 60,
+    "day": 375,
+}
+
+SUPPORTED_TIMEFRAMES: tuple[str, ...] = tuple(TIMEFRAME_MINUTES)
+
+# ---------------------------------------------------------------------------
+# Candle storage model
+# ---------------------------------------------------------------------------
+# Only two timeframes are ever PERSISTED:
+#   * BASE_TIMEFRAME ('5m') - every intraday timeframe is resampled from it,
+#     which guarantees they are mutually consistent and lets us add new
+#     timeframes without refetching anything.
+#   * 'day' - stored separately because Dhan's daily feed is corporate-action
+#     ADJUSTED and reaches back to inception, so it is both cleaner and far
+#     longer than anything we could resample from intraday data.
+BASE_TIMEFRAME = "5m"
+STORED_TIMEFRAMES: tuple[str, ...] = (BASE_TIMEFRAME, "day")
+
+
+def source_timeframe_for(timeframe: str) -> str:
+    """Which STORED timeframe must be read to serve `timeframe`.
+
+    Intraday requests are served from the 5-minute base; daily is served
+    directly. Anything else is rejected rather than silently approximated —
+    a quietly-wrong timeframe would corrupt every result built on it.
+    """
+    if timeframe not in SUPPORTED_TIMEFRAMES:
+        raise ConfigError(
+            f"Unsupported timeframe {timeframe!r}. "
+            f"Allowed: {', '.join(SUPPORTED_TIMEFRAMES)}"
+        )
+    return "day" if timeframe == "day" else BASE_TIMEFRAME
+
+
 # ---------------------------------------------------------------------------
 # Market-data provider
 # ---------------------------------------------------------------------------
-# Where candles come from. Both providers return the identical canonical
+# Where candles come from. All providers return the identical canonical
 # DataFrame, so every other module is unaware of which one is in use.
 #
 #   yfinance (default) - FREE, no account, no API key, NO daily login.
@@ -92,17 +127,24 @@ STRATEGIES_FILE = "strategies.yaml"
 #   kite               - Zerodha Kite Connect. Requires the PAID "Connect"
 #                        plan (the free Personal tier excludes historical
 #                        data) plus a daily 2FA login via login.py.
+#   dhan               - Dhan HQ Trading APIs. Account and AMC are free, but
+#                        the Data APIs subscription costs ~Rs.499+GST/month
+#                        (subscribe on the "Data APIs" tab at web.dhan.co ->
+#                        Profile -> DhanHQ Trading APIs). Gives 5 years of
+#                        5-minute intraday history plus a
+#                        corporate-action-adjusted daily feed back to
+#                        inception. No daily login: its 24h access token is
+#                        renewed unattended via TOTP (see dhan_auth.py, a
+#                        later task). Candles are cached in Supabase so
+#                        Dhan's API is only ever hit for the incremental gap.
 #
-# Switch with DATA_PROVIDER=kite in .env / GitHub Secrets. No code changes.
+# Switch with DATA_PROVIDER=kite|dhan in .env / GitHub Secrets. No code changes.
 DEFAULT_DATA_PROVIDER = "yfinance"
-SUPPORTED_DATA_PROVIDERS: tuple[str, ...] = ("yfinance", "kite")
+SUPPORTED_DATA_PROVIDERS: tuple[str, ...] = ("yfinance", "kite", "dhan")
 
-# Providers that need the daily Kite access token written by login.py.
+# Providers needing an interactive morning login. Dhan is deliberately NOT
+# here: it renews its 24h token unattended via TOTP (see dhan_auth.py).
 PROVIDERS_REQUIRING_DAILY_LOGIN: frozenset[str] = frozenset({"kite"})
-
-
-class ConfigError(RuntimeError):
-    """Raised when required configuration is missing or malformed."""
 
 
 @dataclass(frozen=True)

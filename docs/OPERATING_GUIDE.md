@@ -87,9 +87,10 @@ python -m venv .venv
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/ -q
 ```
-Expected: `133 passed`. This proves the code and all libraries are healthy —
-**no internet accounts needed yet.** If this fails, stop and fix Python before
-anything else.
+Expected: `367 passed, 1 skipped`. This proves the code and all libraries are
+healthy — **no internet accounts needed yet.** (The one skip is the Dhan
+fixture test; it un-skips once you run `scripts\verify_dhan_live.py` with Dhan
+credentials.) If this fails, stop and fix Python before anything else.
 
 ### 2.2 Create your local secrets file (laptop)
 
@@ -97,36 +98,79 @@ anything else.
 Copy-Item .env.example .env
 notepad .env
 ```
-Leave `notepad` open — you will paste four values into it during 2.3 and 2.4.
-The `.env` file is **git-ignored**; it never leaves your laptop.
+Leave `notepad` open — you will paste values into it during 2.3 (market data)
+and 2.4 (Supabase). The `.env` file is **git-ignored**; it never leaves your
+laptop.
 
-### 2.3 Market data — nothing to do (it's free by default)
+### 2.3 Market data — Dhan (precise, 5 years of history, paid Data API)
 
-**Skip this step.** The system ships with `DATA_PROVIDER=yfinance`, a **free**
-Yahoo Finance feed that needs **no account, no API key, and no daily login**.
+The platform can now source candles from **Dhan**, which gives **5 years of
+5-minute history** and renews its access token automatically, so there is
+**no daily login**. Account opening and the AMC are free, but reading candles
+requires Dhan's **Data APIs subscription, ~₹499 + GST/month** — trading APIs
+are free, data APIs are not. Subscribe on the **"Data APIs" tab at
+web.dhan.co → Profile → DhanHQ Trading APIs** before running a backfill, or
+every request fails with HTTP 401 / `DH-902`.
+
+This is optional. The default remains `yfinance` (no account at all), but it
+serves only ~58 days of intraday history, which is too little for meaningful
+backtests.
+
+**One-time setup:**
+
+1. Open a free Dhan account at [dhan.co](https://dhan.co) (₹0 opening, ₹0 AMC).
+   You do not need to fund it to place trades, but you **do** need to
+   subscribe to the paid Data APIs (~₹499+GST/month) to pull candles.
+2. Go to **web.dhan.co → Profile → DhanHQ Trading APIs**, subscribe on the
+   **"Data APIs" tab**, and enable API access.
+3. Enable **TOTP** for your account and save the secret it shows you. You will
+   also need your account **PIN**.
+4. Put the required values in `.env`. Unattended token generation
+   (`https://dhanhq.co/docs/v2/authentication/`) authenticates with the
+   client ID, PIN, and TOTP — **not** an API key/secret:
+   ```
+   DATA_PROVIDER=dhan
+   DHAN_CLIENT_ID=...
+   DHAN_PIN=...
+   DHAN_TOTP_SECRET=...
+   ```
+   `DHAN_API_KEY` / `DHAN_API_SECRET` are **optional** and unused by this
+   automated flow — they belong to Dhan's browser-redirect OAuth flow, which
+   cannot run unattended.
+5. Load the symbol master, then warm the cache:
+   ```powershell
+   .\.venv\Scripts\python.exe backfill.py --refresh-instruments
+   .\.venv\Scripts\python.exe backfill.py --symbols NSE:RELIANCE,NSE:TCS --years 2
+   ```
+6. Verify the whole path end to end:
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\verify_dhan_live.py
+   ```
+
+**Why candles are cached:** backtests read from your Supabase database, never
+from a live API — so they run identically at 2 a.m., on weekends, and on
+exchange holidays.
+
+> **⚠️ Run step 6 before trusting any backtest.** Dhan's epoch timestamps are
+> read as UTC instants, and that assumption has not yet been checked against a
+> live response. If it is wrong, every candle is shifted by 5h30m and results
+> are silently wrong. `verify_dhan_live.py` settles it in seconds.
+
+> **On the PIN and TOTP secret.** Both are second-factor credentials: keep
+> them in `.env` (git-ignored) or GitHub Secrets, never in the repo. Note
+> that Dhan requires a **whitelisted static IP** for order placement and this
+> project never whitelists one — so even a leaked token cannot trade your
+> account.
 
 <details>
-<summary>Why not Zerodha Kite Connect? (click to expand)</summary>
+<summary>Other providers (yfinance, Kite)</summary>
 
-Kite Connect's **free** tiers explicitly exclude the historical-chart-data API
-this project runs on:
+`DATA_PROVIDER=yfinance` (the default) needs no account at all, but serves only
+**~58 days** of 15m/30m history — too little for meaningful backtests. It is
+kept as a fallback and as a cross-check on Dhan's data.
 
-| Kite tier | Cost | Historical data? |
-|---|---|---|
-| Connect | **₹500 / 30 days** | ✅ yes |
-| Personal | free | ❌ **no historical data, no live quotes** |
-| Publisher | free | ❌ no API access at all |
-
-So a paid plan is the only Kite option that works here. You can switch to it
-any time (see §9) — the code supports both.
-
-**What the free feed costs you instead:**
-- 15m/30m history reaches back only **~58 days** (60m: ~2 years, daily: 5+
-  years). Deep backtesting therefore belongs on the **60m or day** timeframe.
-- It's an unofficial API — it can break or throttle without notice.
-- Data quality is below a broker feed (occasional missing bars).
-- Prices are split/dividend adjusted, so they won't match the exact rupees
-  traded that day (harmless here: every rule is percentage/indicator based).
+`DATA_PROVIDER=kite` requires Zerodha's **paid** Connect plan (₹500/30 days;
+the free Personal tier has no historical-data API) plus a daily login.
 </details>
 
 ### 2.4 Supabase database (browser → paste into `.env`)
@@ -511,6 +555,9 @@ If the kill rules pass, change `enabled: false` → `true`, then commit and push
 | Turn the auto-schedule on/off | `gh workflow enable paper-engine` / `gh workflow disable paper-engine` |
 | See recent cloud runs | `gh run list --limit 10` |
 | Read a failed run's log | `gh run view <run-id> --log-failed` |
+| Load the Dhan symbol master | `.\.venv\Scripts\python.exe backfill.py --refresh-instruments` |
+| Warm the candle cache | `.\.venv\Scripts\python.exe backfill.py --symbols NSE:RELIANCE --years 2` |
+| Verify the data layer end to end | `.\.venv\Scripts\python.exe scripts\verify_dhan_live.py` |
 
 ---
 
@@ -539,6 +586,13 @@ panel (or the `run_audit` table). Every run leaves one row saying `ok`,
 | Backtest: "date range longer than Kite allows" | Kite tightened its limits | Lower `TIMEFRAME_MAX_DAYS_PER_REQUEST` in `kite_client.py` |
 | `Instrument 'NSE:XYZ' not found` | Typo in `strategies.yaml`, or expired F&O contract | Fix the symbol to match Kite exactly |
 | `ZoneInfo` error on Windows | `tzdata` not installed | Re-run the pip install from Step 2.1 |
+| `is not in the instruments table` | Symbol master not loaded | `backfill.py --refresh-instruments` |
+| `Missing Dhan credential(s)` | `.env` incomplete | Add `DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET` (§2.3) |
+| HTTP 401 / `DH-902` ("User has not subscribed to Data APIs") | Dhan account has no Data APIs subscription | Subscribe (~₹499+GST/month) on the "Data APIs" tab at web.dhan.co → Profile → DhanHQ Trading APIs |
+| `Could not obtain a Dhan access token` | API access not enabled, wrong PIN, or a bad TOTP secret | Re-check web.dhan.co → Profile → DhanHQ Trading APIs; verify `DHAN_PIN`; paste the TOTP secret without spaces |
+| `The dhan provider needs a Supabase connection` | Used `--no-db` with `DATA_PROVIDER=dhan` | Dhan caches candles in Supabase; drop `--no-db` or use yfinance |
+| Backtest is slow the first time | Cache is cold; candles are being fetched | Normal — later runs read from cache |
+| Candles look shifted by 5h30m | Dhan timestamp interpretation is wrong | Run `scripts\verify_dhan_live.py`; it detects and explains this |
 
 ---
 

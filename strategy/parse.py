@@ -1,0 +1,826 @@
+"""Validation: a raw strategy document becomes a checked Strategy object.
+
+Deliberately strict and deliberately hand-rolled. Every failure names the exact
+location (e.g. ``strategies[0].entry.all[1].operator``) and says how to fix it.
+
+Those messages are not a nicety — strategies now arrive pasted in from external
+AI tools and are EXPECTED to be wrong on the first attempt, so the correction
+loop is the common path rather than the rare one. That is also why this module
+is not built on pydantic or jsonschema: their errors are cryptic to a reader who
+is not a Python developer.
+
+PURE MODULE: no network, no database, no clock. Validating a pasted strategy
+must work offline. In particular, a `universe:` name is validated for SHAPE
+here; whether that universe actually exists is checked at save time by the
+caller, which has database access (see db.SupabaseStore.save_strategy_document).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import time
+from decimal import Decimal
+from typing import Any, Union
+
+import yaml
+
+from config import SUPPORTED_TIMEFRAMES
+from strategy.migrate import CURRENT_VERSION, migrate_document
+from strategy.vocabulary import (
+    ALL_OPERATORS,
+    DEFAULT_OUTPUT,
+    INDICATOR_OUTPUTS,
+    INDICATOR_PARAMS,
+    INSTRUMENT_RE,
+    MAX_ATR_MULTIPLIER,
+    MAX_STOP_PERCENT,
+    POSITION_TYPES,
+    PRICE_SOURCES,
+    SESSION_CLOSE_HHMM,
+    SESSION_KEYS,
+    SESSION_OPEN_HHMM,
+    SIZING_TYPE_KEYS,
+    SIZING_TYPES,
+    SOURCE_ALLOWED_FOR,
+    STOP_TYPE_KEYS,
+    STOP_TYPES,
+    UNIVERSE_RE,
+)
+
+
+class StrategyConfigError(ValueError):
+    """Raised when strategies.yaml is malformed. Message says where and why."""
+
+
+# ---------------------------------------------------------------------------
+# In-memory representation (what the rest of the system consumes)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Operand:
+    """One side of a condition: an indicator (or raw series) to evaluate."""
+
+    indicator: str
+    params: dict[str, Any] = field(default_factory=dict)
+    source: str = "close"   # only meaningful for ema/sma
+    output: str | None = None  # only meaningful for multi-output indicators
+
+
+@dataclass(frozen=True)
+class Condition:
+    """`left <operator> (value | right)` evaluated on closed candles only."""
+
+    left: Operand
+    operator: str
+    value: float | None = None      # exactly one of value / right is set
+    right: Operand | None = None
+
+
+@dataclass(frozen=True)
+class ConditionGroup:
+    """AND/OR combination of conditions; groups may nest arbitrarily."""
+
+    logic: str  # "all" (AND) or "any" (OR)
+    items: tuple[Union[Condition, "ConditionGroup"], ...]
+
+
+@dataclass(frozen=True)
+class StopSpec:
+    """A stop or target level: either a flat percent or an ATR multiple.
+
+    Exactly one form is populated. `percent` uses `value`; `atr` uses `period`
+    and `multiplier`.
+    """
+
+    type: str
+    value: float | None = None
+    period: int | None = None
+    multiplier: float | None = None
+
+    def describe(self) -> str:
+        """Human-readable form, for the CLI summary and the UI.
+
+        Always branch on `type` rather than inferring the form from which
+        optional field happens to be set — that inference would silently do
+        the wrong thing on a StopSpec built by hand rather than by the parser.
+        """
+        if self.type == "percent":
+            return f"{self.value:g}%"
+        return f"{self.multiplier:g}x ATR({self.period})"
+
+
+@dataclass(frozen=True)
+class RiskConfig:
+    stop_loss: StopSpec
+    target: StopSpec
+    trailing_stop: StopSpec | None = None
+
+
+@dataclass(frozen=True)
+class SizingConfig:
+    """How big a trade is. Exactly one of the two fields is populated."""
+
+    type: str
+    notional_per_trade: float | None = None
+    quantity: int | None = None
+
+
+@dataclass(frozen=True)
+class SessionConfig:
+    """Intraday timing rules. All times are IST; every field is optional.
+
+    `no_entry_before` / `no_entry_after` bound the FILL candle, not the signal
+    candle — the fill is when the position actually opens.
+
+    `square_off` closes any open position at the open of the first candle
+    starting at or after it, and blocks entry fills from that time. A strategy
+    with square_off set never holds overnight.
+    """
+
+    no_entry_before: time | None = None
+    no_entry_after: time | None = None
+    square_off: time | None = None
+
+    def allows_entry_at(self, fill_time: time) -> bool:
+        """May an entry FILL on a candle starting at `fill_time` (IST)?
+
+        Lives here rather than in either engine because both must apply the
+        identical rule — a strategy must not pass a backtest under one
+        interpretation and then trade under another.
+
+        `square_off` blocks entries from its time onward: a position opened
+        at or after square-off would be closed on the very candle it opened,
+        which is not a trade, just a pair of costs.
+        """
+        if self.no_entry_before and fill_time < self.no_entry_before:
+            return False
+        if self.no_entry_after and fill_time > self.no_entry_after:
+            return False
+        if self.square_off and fill_time >= self.square_off:
+            return False
+        return True
+
+
+@dataclass(frozen=True)
+class Strategy:
+    """`instruments` and `universe` are mutually exclusive (see _parse_strategy):
+    exactly one is set, the other takes its "empty" value (`()` / `None`).
+
+    `universe` has NO default even though the plan describes it as
+    `universe: str | None = None`. `Strategy` has non-defaulted fields after
+    this position (`entry`, `exit`, `risk`, `sizing`, `session`,
+    `max_cycles_per_day`), and a plain dataclass cannot follow a defaulted
+    field with a non-defaulted one — that is a TypeError at class-definition
+    time, not at call time. The only place that constructs a Strategy is
+    `_parse_strategy` below, always with keyword arguments and always passing
+    `universe` explicitly, so dropping the default costs nothing in practice.
+    """
+
+    name: str
+    enabled: bool
+    position_type: str
+    timeframe: str
+    instruments: tuple[str, ...]
+    universe: str | None
+    entry: ConditionGroup
+    exit: ConditionGroup
+    risk: RiskConfig
+    sizing: SizingConfig
+    session: SessionConfig
+    max_cycles_per_day: int
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers. Every helper takes `where`, a human-readable path like
+# "strategies[0].entry.all[1]" used to build precise error messages.
+# ---------------------------------------------------------------------------
+
+
+def _fail(where: str, message: str) -> None:
+    raise StrategyConfigError(f"{where}: {message}")
+
+
+def _require_mapping(node: Any, where: str) -> dict:
+    if not isinstance(node, dict):
+        _fail(where, f"expected a mapping (key: value lines), got {type(node).__name__}")
+    return node
+
+
+def _require_keys(node: dict, where: str, required: set[str], optional: set[str]) -> None:
+    """Reject missing required keys AND unknown keys (typo protection).
+
+    Both problems are reported in ONE message: a typo like `perod: 14`
+    produces both a missing key (period) and an unknown key (perod), and
+    seeing them side by side is what makes the typo obvious.
+    """
+    problems: list[str] = []
+    missing = sorted(required - node.keys())
+    if missing:
+        problems.append(f"missing required key(s): {', '.join(missing)}")
+    unknown = sorted(node.keys() - required - optional)
+    if unknown:
+        problems.append(
+            f"unknown key(s): {', '.join(unknown)}. "
+            f"Allowed: {', '.join(sorted(required | optional))}"
+        )
+    if problems:
+        _fail(where, "; ".join(problems))
+
+
+def _parse_operand(node: Any, where: str) -> Operand:
+    node = _require_mapping(node, where)
+    _require_keys(node, where, required={"indicator"}, optional={"params", "source", "output"})
+
+    indicator = node["indicator"]
+    if indicator not in INDICATOR_PARAMS:
+        _fail(
+            where,
+            f"unknown indicator {indicator!r}. "
+            f"Supported: {', '.join(sorted(INDICATOR_PARAMS))}",
+        )
+
+    # --- params ---
+    expected_params = INDICATOR_PARAMS[indicator]
+    raw_params = node.get("params") or {}
+    if raw_params:
+        raw_params = _require_mapping(raw_params, f"{where}.params")
+    if expected_params or raw_params:
+        # Rejects both missing params (e.g. rsi without period) and unknown
+        # ones (e.g. the typo `perod: 14`).
+        _require_keys(raw_params, f"{where}.params", required=set(expected_params), optional=set())
+    params: dict[str, Any] = {}
+    for pname, ptypes in expected_params.items():
+        pval = raw_params[pname]
+        # bool is a subclass of int in Python; reject it explicitly so
+        # `period: true` doesn't silently become period=1.
+        if isinstance(pval, bool) or not isinstance(pval, ptypes):
+            _fail(
+                f"{where}.params.{pname}",
+                f"expected {' or '.join(t.__name__ for t in ptypes)}, got {pval!r}",
+            )
+        if pval <= 0:
+            _fail(f"{where}.params.{pname}", f"must be > 0, got {pval}")
+        params[pname] = pval
+
+    # --- source (volume SMA etc.) ---
+    source = node.get("source", "close")
+    if "source" in node:
+        if indicator not in SOURCE_ALLOWED_FOR:
+            _fail(
+                f"{where}.source",
+                f"'source' is only allowed on {', '.join(sorted(SOURCE_ALLOWED_FOR))}, "
+                f"not on {indicator!r}",
+            )
+        if source not in PRICE_SOURCES:
+            _fail(
+                f"{where}.source",
+                f"unknown source {source!r}. Allowed: {', '.join(sorted(PRICE_SOURCES))}",
+            )
+
+    # --- output (multi-output indicators) ---
+    output = node.get("output")
+    if "output" in node:
+        allowed = INDICATOR_OUTPUTS.get(indicator)
+        if allowed is None:
+            _fail(
+                f"{where}.output",
+                f"'output' is not applicable to {indicator!r} "
+                f"(only {', '.join(sorted(INDICATOR_OUTPUTS))} have multiple outputs)",
+            )
+        if output not in allowed:
+            _fail(
+                f"{where}.output",
+                f"unknown output {output!r} for {indicator}. Allowed: {', '.join(allowed)}",
+            )
+    elif indicator in DEFAULT_OUTPUT:
+        output = DEFAULT_OUTPUT[indicator]
+
+    # MACD's slow period must exceed fast, or the indicator is meaningless.
+    if indicator == "macd" and params["fast"] >= params["slow"]:
+        _fail(f"{where}.params", f"macd 'fast' ({params['fast']}) must be < 'slow' ({params['slow']})")
+
+    return Operand(indicator=indicator, params=params, source=source, output=output)
+
+
+def _parse_condition(node: dict, where: str) -> Condition:
+    # A condition node carries the left operand's keys inline plus
+    # operator + (value | compare_to).
+    _require_keys(
+        node, where,
+        required={"indicator", "operator"},
+        optional={"params", "source", "output", "value", "compare_to"},
+    )
+
+    operator = node["operator"]
+    if operator not in ALL_OPERATORS:
+        _fail(
+            f"{where}.operator",
+            f"unknown operator {operator!r}. "
+            f"Allowed: {', '.join(sorted(ALL_OPERATORS))}. "
+            "Tip: quote comparison operators in YAML, e.g. operator: \">\"",
+        )
+
+    has_value = "value" in node
+    has_compare = "compare_to" in node
+    if has_value == has_compare:  # both present or both absent
+        _fail(
+            where,
+            "a condition needs exactly ONE of 'value' (a fixed number) or "
+            "'compare_to' (another indicator)",
+        )
+
+    left_keys = {k: node[k] for k in ("indicator", "params", "source", "output") if k in node}
+    left = _parse_operand(left_keys, where)
+
+    value: float | None = None
+    right: Operand | None = None
+    if has_value:
+        raw = node["value"]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            _fail(f"{where}.value", f"expected a number, got {raw!r}")
+        value = float(raw)
+    else:
+        right = _parse_operand(node["compare_to"], f"{where}.compare_to")
+
+    return Condition(left=left, operator=operator, value=value, right=right)
+
+
+def _parse_condition_group(node: Any, where: str) -> ConditionGroup:
+    node = _require_mapping(node, where)
+    if set(node.keys()) not in ({"all"}, {"any"}):
+        _fail(
+            where,
+            f"expected exactly one of 'all:' (AND) or 'any:' (OR) at the top, "
+            f"got key(s): {', '.join(sorted(node.keys())) or '(none)'}",
+        )
+    logic = next(iter(node))
+    raw_items = node[logic]
+    if not isinstance(raw_items, list) or not raw_items:
+        _fail(f"{where}.{logic}", "expected a non-empty list of conditions")
+
+    items: list[Condition | ConditionGroup] = []
+    for i, item in enumerate(raw_items):
+        item_where = f"{where}.{logic}[{i}]"
+        item = _require_mapping(item, item_where)
+        # A nested group is a mapping whose only key is all/any.
+        if set(item.keys()) <= {"all", "any"} and item:
+            items.append(_parse_condition_group(item, item_where))
+        else:
+            items.append(_parse_condition(item, item_where))
+    return ConditionGroup(logic=logic, items=tuple(items))
+
+
+def _parse_stop_spec(node: Any, where: str) -> StopSpec:
+    node = _require_mapping(node, where)
+    if "type" not in node:
+        # Report sibling typos in the SAME message rather than only after the
+        # missing type is fixed. Without `type` we cannot know which key set
+        # applies, so anything outside the union of every stop form is
+        # reported as unknown — enough to surface `perod: 14` immediately.
+        problems = [f"missing required key: type. Allowed: {', '.join(sorted(STOP_TYPES))}"]
+        every_key = {"type"}.union(*STOP_TYPE_KEYS.values())
+        unknown = sorted(node.keys() - every_key)
+        if unknown:
+            problems.append(
+                f"unknown key(s): {', '.join(unknown)}. "
+                f"Allowed across all stop types: {', '.join(sorted(every_key))}"
+            )
+        _fail(where, "; ".join(problems))
+
+    stype = node["type"]
+    if stype not in STOP_TYPES:
+        _fail(
+            f"{where}.type",
+            f"unknown stop type {stype!r}. Allowed: {', '.join(sorted(STOP_TYPES))}",
+        )
+
+    # Reject the other form's keys explicitly — {type: atr, value: 1.5} is a
+    # very natural mistake and must not silently use a default multiplier.
+    _require_keys(node, where, required={"type"} | set(STOP_TYPE_KEYS[stype]), optional=set())
+
+    if stype == "percent":
+        raw = node["value"]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            _fail(f"{where}.value", f"expected a number, got {raw!r}")
+        if not 0 < raw <= MAX_STOP_PERCENT:
+            _fail(
+                f"{where}.value",
+                f"must be between 0 and {MAX_STOP_PERCENT:g} (percent), got {raw}",
+            )
+        return StopSpec(type="percent", value=float(raw))
+
+    period = node["period"]
+    if isinstance(period, bool) or not isinstance(period, int) or period < 1:
+        _fail(f"{where}.period", f"expected a whole number >= 1, got {period!r}")
+    mult = node["multiplier"]
+    if isinstance(mult, bool) or not isinstance(mult, (int, float)) or mult <= 0:
+        _fail(f"{where}.multiplier", f"expected a number > 0, got {mult!r}")
+    if mult > MAX_ATR_MULTIPLIER:
+        _fail(
+            f"{where}.multiplier",
+            f"must be at most {MAX_ATR_MULTIPLIER:g}, got {mult}",
+        )
+    return StopSpec(type="atr", period=period, multiplier=float(mult))
+
+
+def _parse_risk(node: Any, where: str) -> RiskConfig:
+    node = _require_mapping(node, where)
+    _require_keys(
+        node, where,
+        required={"stop_loss", "target"},
+        optional={"trailing_stop"},
+    )
+    trailing = (
+        _parse_stop_spec(node["trailing_stop"], f"{where}.trailing_stop")
+        if "trailing_stop" in node
+        else None
+    )
+    return RiskConfig(
+        stop_loss=_parse_stop_spec(node["stop_loss"], f"{where}.stop_loss"),
+        target=_parse_stop_spec(node["target"], f"{where}.target"),
+        trailing_stop=trailing,
+    )
+
+
+def resolve_quantity(sizing: SizingConfig, price: float) -> int:
+    """Shares to trade at `price`. Zero means the trade must be SKIPPED.
+
+    Zero is a real, expected outcome — a Rs 3,000 share against a Rs 1,000
+    notional cannot be traded at all. Callers must record the skip rather than
+    proceed, because a quantity-0 trade would post a P&L of exactly 0 and land
+    in the results as a flat trade that never happened.
+    """
+    if sizing.type == "fixed_quantity":
+        return int(sizing.quantity)
+    if price <= 0:
+        return 0
+    # Decimal, not float //. Binary floating point floors one short at exact
+    # decimal boundaries (100.0 // 0.1 is 999.0, not 1000.0), which would
+    # silently size one share light. This mirrors the deliberate choice to
+    # store prices as numeric(14,4) rather than float — see the Phase 0 data
+    # model — and this function is the sizing source of truth for every
+    # backtest and paper trade.
+    return int(Decimal(str(sizing.notional_per_trade)) // Decimal(str(price)))
+
+
+def _parse_sizing(node: Any, where: str) -> SizingConfig:
+    node = _require_mapping(node, where)
+    if "type" not in node:
+        # Surface sibling typos in the SAME message, exactly as _parse_stop_spec
+        # does — without `type` we cannot know which key set applies, so
+        # anything outside the union of every sizing form is reported as
+        # unknown. That is enough to catch `typ: notional` on the first pass.
+        problems = [f"missing required key: type. Allowed: {', '.join(sorted(SIZING_TYPES))}"]
+        every_key = {"type"}.union(*SIZING_TYPE_KEYS.values())
+        unknown = sorted(node.keys() - every_key)
+        if unknown:
+            problems.append(
+                f"unknown key(s): {', '.join(unknown)}. "
+                f"Allowed across all sizing types: {', '.join(sorted(every_key))}"
+            )
+        _fail(where, "; ".join(problems))
+
+    stype = node["type"]
+    if stype not in SIZING_TYPES:
+        _fail(
+            f"{where}.type",
+            f"unknown sizing type {stype!r}. Allowed: {', '.join(sorted(SIZING_TYPES))}",
+        )
+    _require_keys(node, where, required={"type"} | set(SIZING_TYPE_KEYS[stype]), optional=set())
+
+    if stype == "notional":
+        raw = node["notional_per_trade"]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+            _fail(f"{where}.notional_per_trade", f"expected a number > 0, got {raw!r}")
+        return SizingConfig(type="notional", notional_per_trade=float(raw))
+
+    qty = node["quantity"]
+    if isinstance(qty, bool) or not isinstance(qty, int) or qty < 1:
+        _fail(f"{where}.quantity", f"expected a whole number >= 1, got {qty!r}")
+    return SizingConfig(type="fixed_quantity", quantity=qty)
+
+
+_SESSION_OPEN = time.fromisoformat(SESSION_OPEN_HHMM)
+_SESSION_CLOSE = time.fromisoformat(SESSION_CLOSE_HHMM)
+
+
+def _parse_time(raw: Any, where: str) -> time:
+    if not isinstance(raw, str):
+        _fail(
+            where,
+            f"expected a quoted HH:MM time like \"15:15\", got {raw!r}. "
+            "Quote it in YAML — an unquoted 15:15 is not a string.",
+        )
+    try:
+        parsed = time.fromisoformat(raw)
+    except ValueError:
+        _fail(where, f"expected HH:MM in 24-hour IST, got {raw!r}")
+    if parsed.second or parsed.microsecond:
+        _fail(where, f"expected HH:MM with no seconds, got {raw!r}")
+    if not _SESSION_OPEN <= parsed <= _SESSION_CLOSE:
+        _fail(
+            where,
+            f"{raw} is outside the NSE session "
+            f"({SESSION_OPEN_HHMM}-{SESSION_CLOSE_HHMM} IST); it would never trigger",
+        )
+    return parsed
+
+
+def _parse_session(node: Any, where: str) -> SessionConfig:
+    node = _require_mapping(node, where)
+    _require_keys(node, where, required=set(), optional=set(SESSION_KEYS))
+
+    times = {
+        key: _parse_time(node[key], f"{where}.{key}")
+        for key in SESSION_KEYS
+        if key in node
+    }
+    before, after = times.get("no_entry_before"), times.get("no_entry_after")
+    square_off = times.get("square_off")
+
+    if before and after and before >= after:
+        _fail(
+            where,
+            f"no_entry_before ({before:%H:%M}) must be earlier than "
+            f"no_entry_after ({after:%H:%M}); as written no entry could ever fill",
+        )
+    earliest_entry = before or _SESSION_OPEN
+    if square_off and square_off <= earliest_entry:
+        _fail(
+            f"{where}.square_off",
+            f"square_off ({square_off:%H:%M}) is at or before the earliest "
+            f"possible entry ({earliest_entry:%H:%M}); every position would be "
+            "closed on the candle it opened",
+        )
+    return SessionConfig(
+        no_entry_before=before, no_entry_after=after, square_off=square_off
+    )
+
+
+def _parse_strategy(node: Any, where: str) -> Strategy:
+    node = _require_mapping(node, where)
+    _require_keys(
+        node, where,
+        required={
+            "name", "enabled", "position_type", "timeframe",
+            "entry", "exit", "risk", "sizing",
+        },
+        optional={"instruments", "universe", "session", "max_cycles_per_day"},
+    )
+
+    name = node["name"]
+    if not isinstance(name, str) or not name.strip():
+        _fail(f"{where}.name", f"expected a non-empty string, got {name!r}")
+    name = name.strip()
+
+    enabled = node["enabled"]
+    if not isinstance(enabled, bool):
+        _fail(f"{where}.enabled", f"expected true or false, got {enabled!r}")
+
+    position_type = node["position_type"]
+    if position_type not in POSITION_TYPES:
+        _fail(
+            f"{where}.position_type",
+            f"expected one of {', '.join(sorted(POSITION_TYPES))}, got {position_type!r}",
+        )
+
+    timeframe = node["timeframe"]
+    if timeframe not in SUPPORTED_TIMEFRAMES:
+        _fail(
+            f"{where}.timeframe",
+            f"unsupported timeframe {timeframe!r}. "
+            f"Allowed (15-minute and higher only): {', '.join(SUPPORTED_TIMEFRAMES)}",
+        )
+
+    # Exactly one of 'universe' (a named symbol group, resolved at run time —
+    # see Task 9) or 'instruments' (an explicit list) may be set. Parsing only
+    # checks the SHAPE of a universe name here; whether it actually exists is
+    # a database question, out of reach of this pure module (see the module
+    # docstring), and is checked at save time instead (Task 14).
+    has_universe = "universe" in node
+    has_instruments = "instruments" in node
+    if has_universe == has_instruments:
+        _fail(
+            where,
+            "a strategy needs exactly ONE of 'universe' (a named symbol group "
+            "like NIFTY100) or 'instruments' (an explicit list like "
+            "[NSE:RELIANCE])",
+        )
+
+    universe: str | None = None
+    instruments: list[str] = []
+
+    if has_universe:
+        universe = node["universe"]
+        if not isinstance(universe, str) or not UNIVERSE_RE.match(universe):
+            _fail(
+                f"{where}.universe",
+                f"expected a universe name in capitals, digits or underscores "
+                f"(e.g. NIFTY100), got {universe!r}",
+            )
+    else:
+        raw_instruments = node["instruments"]
+        if not isinstance(raw_instruments, list) or not raw_instruments:
+            _fail(f"{where}.instruments", "expected a non-empty list like [NSE:RELIANCE]")
+        for i, inst in enumerate(raw_instruments):
+            if not isinstance(inst, str) or not INSTRUMENT_RE.match(inst):
+                _fail(
+                    f"{where}.instruments[{i}]",
+                    f"expected 'EXCHANGE:TRADINGSYMBOL' in capitals "
+                    f"(e.g. NSE:RELIANCE), got {inst!r}",
+                )
+            if inst in instruments:
+                _fail(f"{where}.instruments[{i}]", f"duplicate instrument {inst!r}")
+            instruments.append(inst)
+
+    max_cycles = node.get("max_cycles_per_day", 1)
+    if isinstance(max_cycles, bool) or not isinstance(max_cycles, int) or max_cycles < 1:
+        _fail(f"{where}.max_cycles_per_day", f"expected a whole number >= 1, got {max_cycles!r}")
+
+    sizing = _parse_sizing(node["sizing"], f"{where}.sizing")
+
+    session = (
+        _parse_session(node["session"], f"{where}.session")
+        if "session" in node
+        else SessionConfig()
+    )
+
+    return Strategy(
+        name=name,
+        enabled=enabled,
+        position_type=position_type,
+        timeframe=timeframe,
+        instruments=tuple(instruments),
+        universe=universe,
+        entry=_parse_condition_group(node["entry"], f"{where}.entry"),
+        exit=_parse_condition_group(node["exit"], f"{where}.exit"),
+        risk=_parse_risk(node["risk"], f"{where}.risk"),
+        sizing=sizing,
+        session=session,
+        max_cycles_per_day=max_cycles,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def parse_strategies(data: Any) -> list[Strategy]:
+    """Validate an already-loaded YAML document and return Strategy objects."""
+    root = _require_mapping(data, "(top level)")
+    _require_keys(root, "(top level)", required={"version", "strategies"}, optional=set())
+
+    if root["version"] != CURRENT_VERSION:
+        _fail(
+            "version",
+            f"unsupported version {root['version']!r}; this code understands "
+            f"version {CURRENT_VERSION}. A version 1 file must be migrated "
+            "first — see strategy.migrate.migrate_document().",
+        )
+
+    raw_strategies = root["strategies"]
+    if not isinstance(raw_strategies, list) or not raw_strategies:
+        _fail("strategies", "expected a non-empty list of strategies")
+
+    strategies: list[Strategy] = []
+    seen_names: set[str] = set()
+    for i, raw in enumerate(raw_strategies):
+        strategy = _parse_strategy(raw, f"strategies[{i}]")
+        if strategy.name in seen_names:
+            _fail(
+                f"strategies[{i}].name",
+                f"duplicate strategy name {strategy.name!r} — names must be "
+                "unique because they key positions and trades in the database",
+            )
+        seen_names.add(strategy.name)
+        strategies.append(strategy)
+    return strategies
+
+
+def parse_strategy_dict(raw: Any, where: str = "strategy") -> Strategy:
+    """Validate ONE raw strategy dict (the shape of a strategies.yaml entry).
+
+    Used by the database layer and the UI builder, so anything stored or
+    entered through a form passes exactly the same validation as the file.
+    """
+    return _parse_strategy(raw, where)
+
+
+def strategy_to_raw(strategy: Strategy) -> dict[str, Any]:
+    """Convert a Strategy back into its raw dict form.
+
+    Round-trips through parse_strategy_dict, so the UI can load an existing
+    strategy into an edit form and the app can export back to YAML.
+    """
+
+    def operand_to_raw(op: Operand, *, inline: bool) -> dict[str, Any]:
+        node: dict[str, Any] = {"indicator": op.indicator}
+        if op.params:
+            node["params"] = dict(op.params)
+        if op.source != "close":
+            node["source"] = op.source
+        # Only emit `output` when it differs from the implicit default.
+        if op.output is not None and op.output != DEFAULT_OUTPUT.get(op.indicator):
+            node["output"] = op.output
+        return node
+
+    def condition_to_raw(cond: Condition) -> dict[str, Any]:
+        node = operand_to_raw(cond.left, inline=True)
+        node["operator"] = cond.operator
+        if cond.right is not None:
+            node["compare_to"] = operand_to_raw(cond.right, inline=False)
+        else:
+            node["value"] = cond.value
+        return node
+
+    def group_to_raw(group: ConditionGroup) -> dict[str, Any]:
+        return {
+            group.logic: [
+                group_to_raw(item) if isinstance(item, ConditionGroup) else condition_to_raw(item)
+                for item in group.items
+            ]
+        }
+
+    def stop_spec_to_raw(spec: StopSpec) -> dict[str, Any]:
+        if spec.type == "percent":
+            return {"type": "percent", "value": spec.value}
+        return {"type": "atr", "period": spec.period, "multiplier": spec.multiplier}
+
+    risk: dict[str, Any] = {
+        "stop_loss": stop_spec_to_raw(strategy.risk.stop_loss),
+        "target": stop_spec_to_raw(strategy.risk.target),
+    }
+    if strategy.risk.trailing_stop is not None:
+        risk["trailing_stop"] = stop_spec_to_raw(strategy.risk.trailing_stop)
+
+    session_raw = {
+        key: f"{value:%H:%M}"
+        for key, value in (
+            ("no_entry_before", strategy.session.no_entry_before),
+            ("no_entry_after", strategy.session.no_entry_after),
+            ("square_off", strategy.session.square_off),
+        )
+        if value is not None
+    }
+
+    return {
+        "name": strategy.name,
+        "enabled": strategy.enabled,
+        "position_type": strategy.position_type,
+        "timeframe": strategy.timeframe,
+        **(
+            {"universe": strategy.universe}
+            if strategy.universe
+            else {"instruments": list(strategy.instruments)}
+        ),
+        "entry": group_to_raw(strategy.entry),
+        "exit": group_to_raw(strategy.exit),
+        "risk": risk,
+        "sizing": (
+            {"type": "notional", "notional_per_trade": strategy.sizing.notional_per_trade}
+            if strategy.sizing.type == "notional"
+            else {"type": "fixed_quantity", "quantity": strategy.sizing.quantity}
+        ),
+        **({"session": session_raw} if session_raw else {}),
+        "max_cycles_per_day": strategy.max_cycles_per_day,
+    }
+
+
+def load_strategy_documents(path: str = "strategies.yaml") -> list[dict[str, Any]]:
+    """Load the raw (but validated) strategy dicts from a YAML file.
+
+    Used to seed the database on first run: the DB stores these raw dicts so
+    they can be re-validated on every read by the same code path.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    # Migrate before validating: a v1 file on disk must still load, and the
+    # DB should be seeded with v2 documents so every later read (which also
+    # migrates, harmlessly, via the version==CURRENT_VERSION passthrough)
+    # sees the current shape.
+    data = migrate_document(data)
+    parse_strategies(data)  # validate, discard the objects
+    return list(data["strategies"])
+
+
+def load_strategies(path: str = "strategies.yaml") -> list[Strategy]:
+    """Load and validate strategies from a YAML file.
+
+    Raises:
+        StrategyConfigError: on any structural problem, with location + fix.
+        FileNotFoundError: if the file does not exist.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        # PyYAML errors already contain line/column info; wrap for consistency.
+        raise StrategyConfigError(
+            f"{path} is not valid YAML: {exc}\n"
+            "Common causes: inconsistent indentation, a missing ':', or an "
+            "unquoted '>' operator (write operator: \">\")."
+        ) from exc
+    data = migrate_document(data)
+    return parse_strategies(data)

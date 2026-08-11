@@ -44,10 +44,10 @@ def make_df(closes, volumes=None) -> pd.DataFrame:
     )
 
 
-def strategy_with(entry: dict, exit_: dict | None = None):
+def strategy_with(entry: dict | None = None, exit_: dict | None = None, risk: dict | None = None):
     """Build a validated Strategy around given entry/exit condition groups."""
     doc = {
-        "version": 1,
+        "version": 2,
         "strategies": [
             {
                 "name": "sig-test",
@@ -55,10 +55,16 @@ def strategy_with(entry: dict, exit_: dict | None = None):
                 "position_type": "long",
                 "timeframe": "15m",
                 "instruments": ["NSE:RELIANCE"],
-                "entry": entry,
+                "entry": entry
+                or {"all": [{"indicator": "close", "operator": ">", "value": 0}]},
                 "exit": exit_
                 or {"any": [{"indicator": "close", "operator": "<", "value": 0}]},
-                "risk": {"stop_loss_pct": 0.7, "target_pct": 1.5},
+                "risk": risk
+                or {
+                    "stop_loss": {"type": "percent", "value": 0.7},
+                    "target": {"type": "percent", "value": 1.5},
+                },
+                "sizing": {"type": "fixed_quantity", "quantity": 1},
             }
         ],
     }
@@ -247,3 +253,51 @@ def test_unsorted_frame_is_rejected() -> None:
     df = make_df([100, 101, 102]).iloc[::-1]  # reversed index
     with pytest.raises(ValueError, match="not sorted"):
         signals.entry_series(df, strat)
+
+
+# ---------------------------------------------------------------------------
+# ATR stop/target periods must count toward the fetch window. The paper engine
+# builds those ATR series from the SAME frame this function sizes, so a short
+# entry lookback paired with a long ATR stop would otherwise under-fetch and
+# fail at run time on history it was never asked to retrieve.
+# ---------------------------------------------------------------------------
+
+
+def test_an_atr_stop_period_extends_the_required_history():
+    short_lookback = strategy_with(
+        risk={
+            "stop_loss": {"type": "percent", "value": 1.0},
+            "target": {"type": "percent", "value": 2.0},
+        }
+    )
+    long_atr_stop = strategy_with(
+        risk={
+            "stop_loss": {"type": "atr", "period": 100, "multiplier": 1.5},
+            "target": {"type": "percent", "value": 2.0},
+        }
+    )
+    assert signals.min_candles_required(long_atr_stop) > signals.min_candles_required(short_lookback)
+    # 5 x (100 + 1) + 10, matching how an ATR indicator lookback is treated.
+    assert signals.min_candles_required(long_atr_stop) >= 100
+
+
+def test_an_atr_target_period_also_counts():
+    atr_target = strategy_with(
+        risk={
+            "stop_loss": {"type": "percent", "value": 1.0},
+            "target": {"type": "atr", "period": 80, "multiplier": 3},
+        }
+    )
+    assert signals.min_candles_required(atr_target) >= 80
+
+
+def test_a_trailing_atr_period_counts_too():
+    """Trailing behaviour lands later, but its history need is real now."""
+    trailing = strategy_with(
+        risk={
+            "stop_loss": {"type": "percent", "value": 1.0},
+            "target": {"type": "percent", "value": 2.0},
+            "trailing_stop": {"type": "atr", "period": 60, "multiplier": 1.0},
+        }
+    )
+    assert signals.min_candles_required(trailing) >= 60

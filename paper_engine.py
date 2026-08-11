@@ -47,9 +47,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Sequence
 
+import numpy as np
 import pandas as pd
 
+import indicators
 import signals
+# Reused rather than reimplemented: the batch backtester (backtest.py) and this
+# engine must compute a stop/target level identically, or the same strategy
+# could show a profitable backtest and a different live behaviour. Both the
+# hard-error-on-insufficient-history rule and the ATR-at-the-signal-candle
+# rule live in ONE place (risk_levels) for exactly that reason.
+from risk_levels import RiskLevelError, build_atr_series, stop_and_target
 from config import IST, TIMEFRAME_MINUTES, UTC, Settings, get_settings
 from data_provider import create_data_client, describe_provider
 from db import ClosedTrade, OpenPosition, SupabaseStore
@@ -61,7 +69,7 @@ from kite_client import (
     lookback_start_utc,
 )
 from market_calendar import load_holidays, session_gate
-from strategy_schema import Strategy, load_strategy_documents
+from strategy_schema import Strategy, load_strategy_documents, resolve_quantity
 
 
 @dataclass
@@ -119,6 +127,27 @@ def _check_stop_target(position: OpenPosition, candle: pd.Series) -> tuple[float
         if low <= tgt:
             return tgt, "target"
     return None
+
+
+def _stop_target_levels(
+    strategy: Strategy, closed: pd.DataFrame, entry_price: float,
+) -> tuple[float, float]:
+    """(stop_loss_price, target_price) for a brand-new entry.
+
+    `closed` is the SAME closed-candle frame `signals.entry_signal` just
+    evaluated, so its last row is the entry SIGNAL candle — the one whose
+    close fired the entry, one candle before the fill this engine is about
+    to record. Delegating to risk_levels keeps this identical to the batch
+    backtester's ATR-at-the-signal-candle rule instead of quietly re-deriving
+    it here — if the two diverged, a strategy could show one backtest and
+    behave differently once deployed.
+    """
+    return stop_and_target(
+        strategy,
+        entry_price,
+        signal_idx=len(closed) - 1,
+        atr_series=build_atr_series(closed, strategy),
+    )
 
 
 def _build_trade(
@@ -217,6 +246,13 @@ def _process_combo(
             )
             return
         hit = _check_stop_target(position, closed.iloc[-1])
+        # Square-off is checked only when the stop and target did not fire, so
+        # it stays last in the same worst-case ordering the backtester uses:
+        # if a candle both hit the stop and reached square-off time, the stop
+        # is the worse outcome and the one that would really have fired first.
+        if hit is None and strategy.session.square_off is not None:
+            if last_ts.astimezone(IST).time() >= strategy.session.square_off:
+                hit = (float(closed["open"].iloc[-1]), "square_off")
         if hit is not None:
             intended, reason = hit
             trade = _build_trade(
@@ -259,6 +295,38 @@ def _process_combo(
     # ---- Flat: entry rules. ----------------------------------------------
     if not signals.entry_signal(closed, strategy):
         return
+
+    # A trailing stop needs a running "best price seen since entry" that
+    # survives to the NEXT run — but this engine has none of its own memory;
+    # every tick rebuilds its whole world from Supabase (see module
+    # docstring). `OpenPosition` (db.py) mirrors the `positions` table, and
+    # that table carries only `stop_loss_price` / `target_price` — there is
+    # no column to persist a running best price or an active trail level
+    # between runs. Backtest.py CAN track it because it holds the entire
+    # candle history in memory for one uninterrupted simulate() call; this
+    # engine cannot reproduce that across independent, stateless ticks
+    # without a schema change (e.g. `positions.best_price_since_entry` plus
+    # wiring this engine to update it after each candle's checks, the same
+    # "update after checks, apply next candle" rule backtest.py uses).
+    #
+    # Silently opening the position anyway and just ignoring trailing_stop
+    # would be exactly the backtest/live divergence risk_levels.py exists to
+    # prevent: the same strategy could show a trailing exit in its backtest
+    # and never trail at all once deployed here. So this refuses loudly
+    # instead — every tick, until the schema gap above is closed — rather
+    # than either faking the behaviour or pretending the config doesn't
+    # exist.
+    if strategy.risk.trailing_stop is not None:
+        summary.skipped.append(
+            f"{combo}: entry signal ignored — trailing_stop is configured but "
+            "the paper engine has no schema support for it yet (positions has "
+            "no column to persist a running best price across stateless runs; "
+            "see the comment above this check in paper_engine.py). Remove "
+            "trailing_stop from this strategy before paper trading it, or add "
+            "the schema support first."
+        )
+        return
+
     if next_open is None:
         summary.skipped.append(
             f"{combo}: entry signal on the day's final candle — no next open "
@@ -275,19 +343,43 @@ def _process_combo(
         )
         return
 
+    # Session rules bound the FILL candle, not the signal candle — the fill is
+    # when the position actually opens. Identical rule to the backtester's, so
+    # a strategy cannot pass a backtest under one interpretation and trade
+    # under another.
+    fill_time = next_open_ts.astimezone(IST).time()
+    if not strategy.session.allows_entry_at(fill_time):
+        summary.skipped.append(
+            f"{combo}: entry signal ignored — a fill at "
+            f"{fill_time:%H:%M} IST falls outside this strategy's session "
+            f"rules (no_entry_before/no_entry_after/square_off)"
+        )
+        return
+
     entry_price = _entry_fill_price(next_open, strategy.position_type, settings.slippage_pct)
-    if strategy.position_type == "long":
-        sl_price = entry_price * (1 - strategy.risk.stop_loss_pct / 100)
-        tgt_price = entry_price * (1 + strategy.risk.target_pct / 100)
-    else:
-        sl_price = entry_price * (1 + strategy.risk.stop_loss_pct / 100)
-        tgt_price = entry_price * (1 - strategy.risk.target_pct / 100)
+
+    # Quantity is derived from THIS trade's own entry fill price — see
+    # resolve_quantity's docstring. Zero is a real, expected outcome (a
+    # dear share against a modest notional) and must never open a
+    # zero-quantity position: that would sit in `positions` looking like a
+    # live trade the strategy actually took, when nothing was ever bought.
+    qty = resolve_quantity(strategy.sizing, entry_price)
+    if qty < 1:
+        summary.skipped.append(
+            f"{combo}: entry signal ignored — notional_per_trade "
+            f"₹{strategy.sizing.notional_per_trade:,.0f} buys 0 shares at the "
+            f"entry fill price ₹{entry_price:,.2f}. Raise notional_per_trade "
+            f"to at least the share price to trade this symbol."
+        )
+        return
+
+    sl_price, tgt_price = _stop_target_levels(strategy, closed, entry_price)
 
     created = store.open_position(
         strategy_name=strategy.name,
         instrument=instrument,
         position_type=strategy.position_type,
-        quantity=strategy.sizing.quantity,
+        quantity=qty,
         entry_signal_candle_ts=last_ts.to_pydatetime(),
         entry_fill_ts=next_open_ts,
         intended_entry_price=next_open,
@@ -343,6 +435,13 @@ def run_once(
                 # else in this run can work without a session either.
                 if isinstance(exc, TokenExpiredError):
                     raise
+                summary.skipped.append(f"{strategy.name}/{instrument}: {exc}")
+            except RiskLevelError as exc:
+                # One strategy's ATR period outrunning its available history
+                # must not take down every other combination in the run — this
+                # loop's whole contract is that a failure on one is recorded,
+                # not fatal. Thin early-session data or a strategy edited to a
+                # longer period would otherwise abort healthy strategies too.
                 summary.skipped.append(f"{strategy.name}/{instrument}: {exc}")
     return summary
 

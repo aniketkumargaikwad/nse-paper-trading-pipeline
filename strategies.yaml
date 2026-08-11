@@ -28,9 +28,77 @@
 #              never evaluated on a forming candle)
 #
 # Conditions are grouped with `all:` (AND) or `any:` (OR); groups may nest.
+#
+# Symbols: `instruments` vs `universe`
+# -------------------------------------
+# Every strategy names its symbols with exactly ONE of these two keys:
+#
+#   instruments: an explicit list, e.g. [NSE:RELIANCE, NSE:TCS] — use this
+#                 when you mean these specific stocks and no others.
+#
+#   universe:    a named symbol group, e.g. NIFTY100 — the strategy trades
+#                whatever that group currently contains. Use this when you
+#                want the strategy to track an index rather than a fixed
+#                list, so it doesn't quietly go stale as index membership
+#                changes.
+#
+# Stops and targets (risk.stop_loss, risk.target, risk.trailing_stop)
+# ---------------------------------------------------------------------------
+# Each of these is a STOP SPEC — one of two shapes, chosen by `type`:
+#
+#   {type: percent, value: 0.7}
+#     A flat move from the entry price, e.g. 0.7 means 0.7%. Simple and
+#     predictable, but the same percentage is too tight for a volatile
+#     stock and too loose for a calm one.
+#
+#   {type: atr, period: 14, multiplier: 1.5}
+#     A multiple of the stock's own Average True Range (its typical
+#     candle-to-candle range over `period` candles) — the stop widens or
+#     tightens with the stock's actual volatility instead of one fixed
+#     number applied to everything. Recommended when a strategy trades a
+#     `universe` spanning stocks of very different character.
+#
+#   risk.trailing_stop is OPTIONAL and uses the same two shapes. When set,
+#   the stop is ratcheted in the trade's favour as price moves, and never
+#   loosened; it replaces the fixed stop_loss once the trade has moved
+#   enough to trail. Omit it entirely for a plain fixed stop.
+#
+# Position sizing (sizing)
+# -------------------------
+#   {type: notional, notional_per_trade: 100000}     <- RECOMMENDED
+#     Spend approximately this many rupees per trade; the number of shares
+#     is worked out from the entry price at trade time. This is what makes
+#     a backtest across a `universe` fair: a Rs 30 round-trip cost is the
+#     same drag whether the stock is Rs 200 or Rs 4,000, because the trade
+#     size is the same in rupees either way.
+#
+#   {type: fixed_quantity, quantity: 1}                <- LEGACY, DISCOURAGED
+#     Trade exactly this many shares every time, regardless of price. Kept
+#     for strategies migrated from format v1. Avoid it for anything new:
+#     at a fixed share count, a ~Rs 30 round-trip cost against a 1.5%
+#     target loses money on most large-cap stocks regardless of how good
+#     the signal is, and the drag is proportionally worse the cheaper the
+#     stock — a fixed-quantity strategy run across several stocks is
+#     partly just ranking them by share price rather than by signal
+#     quality.
+#
+# Session (optional)
+# -------------------
+#   session:
+#     no_entry_before: "09:20"   # no entry FILL before this IST time
+#     no_entry_after:  "14:45"   # no entry FILL at or after this IST time
+#     square_off:      "15:15"   # force-close any open position at/after this
+#                                 # IST time, and block entries from then on
+#
+#   All three are optional and independent; times are quoted "HH:MM" in IST,
+#   24-hour, within the NSE cash session (09:15-15:30) — an unquoted time
+#   like 15:15 is not a string in YAML and will be rejected. Omitting
+#   `session` entirely means no timing restriction: entries can fill any time
+#   the entry rule fires, and nothing force-closes the position (it can hold
+#   overnight if the exit rule and stops don't trigger first).
 # =============================================================================
 
-version: 1
+version: 2
 
 strategies:
   - name: TF-EMA-RSI-15m-v1
@@ -74,11 +142,11 @@ strategies:
           value: 40
 
     risk:
-      stop_loss_pct: 0.7         # exit if price moves 0.7% against entry
-      target_pct: 1.5            # exit if price moves 1.5% in favour
+      stop_loss: { type: percent, value: 0.7 }   # exit if price moves 0.7% against entry
+      target:    { type: percent, value: 1.5 }   # exit if price moves 1.5% in favour
 
     sizing:
-      type: fixed_quantity       # only sizing mode in v1; more can be added
-      quantity: 1
+      type: notional              # spend ~this many rupees per trade, not a fixed share count
+      notional_per_trade: 100000
 
     max_cycles_per_day: 2        # max complete entry+exit round-trips per day

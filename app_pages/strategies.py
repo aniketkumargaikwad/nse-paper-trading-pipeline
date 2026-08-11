@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 
 import pandas as pd
+from pathlib import Path
+
 import streamlit as st
 import yaml
 
@@ -168,7 +170,35 @@ def _builder(ctx: AppContext) -> None:
     r1, r2, r3 = st.columns(3)
     stop = r1.number_input("Stop loss %", 0.1, 50.0, value=0.7, step=0.1)
     target = r2.number_input("Target %", 0.1, 50.0, value=1.5, step=0.1)
-    qty = r3.number_input("Quantity", 1, 100000, value=10, step=1)
+    notional = r3.number_input(
+        "Rupees per trade", 1000, 100_000_000, value=100_000, step=10_000,
+        help=(
+            "Trade size in rupees, not shares. Quantity is worked out per "
+            "symbol as this amount divided by the share price, so trading "
+            "costs weigh the same on a cheap stock as an expensive one."
+        ),
+    )
+
+    trail_on = st.checkbox(
+        "Add a trailing stop",
+        help="Follows the price in your favour and never loosens.",
+    )
+    trail = None
+    if trail_on:
+        trail = st.number_input("Trailing stop %", 0.1, 50.0, value=0.5, step=0.1)
+
+    st.markdown("**🕘 Session (optional)**")
+    s1, s2 = st.columns(2)
+    square_off_on = s1.checkbox(
+        "Square off intraday",
+        help=(
+            "Close any open position before the session ends. Without this a "
+            "position can be held overnight, exposed to gaps your stop cannot "
+            "protect against."
+        ),
+    )
+    square_off = s2.text_input("Square off at (IST)", value="15:15",
+                               disabled=not square_off_on)
 
     # The single most common beginner mistake: a flat cost that swallows the
     # whole target. Warn with real numbers before they ever run it.
@@ -177,12 +207,25 @@ def _builder(ctx: AppContext) -> None:
         value=1500.0, step=50.0,
         help="Only used for the sanity check — not stored in the strategy.",
     )
-    gross = approx_price * qty * target / 100
+    # Quantity is derived exactly as the engines derive it, so the number
+    # shown here is the number that will actually be traded.
+    est_qty = int(notional // approx_price)
+    gross = approx_price * est_qty * target / 100
+    st.caption(
+        f"At ₹{approx_price:,.0f} a share, ₹{notional:,.0f} buys "
+        f"**{est_qty:,} shares**."
+    )
+    if est_qty < 1:
+        st.error(
+            "⚠️ **Rupees per trade is below the share price**, so this "
+            "strategy would buy zero shares and every signal would be "
+            "skipped. Raise it above the share price."
+        )
     if gross < 30 * 2:
         st.error(
             f"⚠️ **Costs will eat this strategy.** A winning trade earns about "
             f"₹{gross:,.0f}, but every round-trip costs ₹30. "
-            f"Raise **Quantity** or **Target %** until the win is comfortably "
+            f"Raise **Rupees per trade** or **Target %** until the win is comfortably "
             f"above ₹150 (5× cost). At the current settings it "
             f"{'barely breaks even' if gross > 30 else 'LOSES money even when it wins'}."
         )
@@ -200,8 +243,21 @@ def _builder(ctx: AppContext) -> None:
         "instruments": [i.strip() for i in instruments_raw.splitlines() if i.strip()],
         "entry": entry,
         "exit": exit_,
-        "risk": {"stop_loss_pct": float(stop), "target_pct": float(target)},
-        "sizing": {"type": "fixed_quantity", "quantity": int(qty)},
+        "risk": {
+            "stop_loss": {"type": "percent", "value": float(stop)},
+            "target": {"type": "percent", "value": float(target)},
+            **(
+                {"trailing_stop": {"type": "percent", "value": float(trail)}}
+                if trail is not None
+                else {}
+            ),
+        },
+        "sizing": {"type": "notional", "notional_per_trade": float(notional)},
+        **(
+            {"session": {"square_off": square_off.strip()}}
+            if square_off_on and square_off.strip()
+            else {}
+        ),
         "max_cycles_per_day": int(max_cycles),
     }
 
@@ -220,21 +276,115 @@ def _builder(ctx: AppContext) -> None:
                     use_container_width=True, disabled=not ctx.can_edit):
         try:
             saved = ctx.store().save_strategy_document(doc)
-        except StrategyConfigError as exc:
-            st.error(f"Cannot save — {exc}")
         except Exception as exc:
             st.error(f"Save failed: {exc}")
         else:
-            st.success(
-                f"Saved **{saved.name}** (paused). Backtest it first, then "
-                "switch it Live in the list above."
-            )
+            _report_save(saved, paused_hint=True)
             st.cache_data.clear()
 
 
 # ---------------------------------------------------------------------------
 # Page
+def _report_save(saved, *, paused_hint: bool) -> None:
+    """Show the outcome of a save, including the draft case.
+
+    A strategy that cannot run must never look like one that can, so a draft
+    is reported as a warning with its errors listed — not as a success.
+    """
+    if saved.is_valid:
+        message = f"Saved **{saved.name}**"
+        if paused_hint:
+            message += (
+                " (paused). Backtest it first, then switch it Live in the "
+                "list above."
+            )
+        st.success(message)
+        return
+
+    st.warning(
+        f"Saved **{saved.name}** as a **draft**. It is stored so you can fix "
+        "it, but it will not run until these are resolved:"
+    )
+    for message in saved.errors:
+        st.markdown(f"- `{message}`")
+    st.caption(
+        "Paste those messages back into ChatGPT and it will usually correct "
+        "itself."
+    )
+
+
+def render_paste_box(ctx) -> None:
+    """Paste a strategy written elsewhere — the Pine-Script-style workflow.
+
+    The format reference is carried inline so the loop is self-contained:
+    copy it into ChatGPT, paste what comes back here.
+    """
+    st.subheader("📋 Paste a strategy")
+    st.caption(
+        "Wrote one in ChatGPT? Paste the YAML here. Copy the format reference "
+        "below into the chat first, so it knows what this system accepts."
+    )
+
+    format_doc_path = Path(__file__).resolve().parent.parent / "docs" / "STRATEGY_FORMAT.md"
+    with st.expander("📖 Format reference — copy this into ChatGPT first"):
+        if format_doc_path.exists():
+            st.code(format_doc_path.read_text(encoding="utf-8"), language="markdown")
+        else:
+            st.warning(
+                "docs/STRATEGY_FORMAT.md is missing. Generate it with:  "
+                "python scripts/gen_strategy_format_doc.py"
+            )
+
+    text = st.text_area(
+        "Strategy YAML", height=320, key="paste_yaml",
+        placeholder="version: 2\nstrategies:\n  - name: my-strategy\n    ...",
+    )
+    if not st.button("✅ Validate and save", key="paste_save",
+                     type="primary", disabled=not ctx.can_edit):
+        return
+    if not text.strip():
+        st.warning("Nothing to save yet — paste a strategy above.")
+        return
+
+    try:
+        saved = ctx.store().save_strategy_text(text)
+    except Exception as exc:
+        # Unparseable YAML has no name to key a draft on, so it lands here
+        # rather than becoming a draft. The message says what to fix.
+        st.error(str(exc))
+        return
+
+    _report_save(saved, paused_hint=False)
+    st.cache_data.clear()
+
+
 # ---------------------------------------------------------------------------
+
+
+def _describe_stop(spec) -> str:
+    """Render either stop form. Mirrors StopSpec.describe for raw dicts."""
+    if not isinstance(spec, dict):
+        return "?"
+    if spec.get("type") == "atr":
+        return f"{spec.get('multiplier', '?')}x ATR({spec.get('period', '?')})"
+    return f"{spec.get('value', '?')}%"
+
+
+def _describe_risk(risk) -> str:
+    if not isinstance(risk, dict):
+        return "?"
+    text = f"{_describe_stop(risk.get('stop_loss'))} / {_describe_stop(risk.get('target'))}"
+    if risk.get("trailing_stop"):
+        text += f" (trail {_describe_stop(risk['trailing_stop'])})"
+    return text
+
+
+def _describe_sizing(sizing) -> str:
+    if not isinstance(sizing, dict):
+        return "?"
+    if sizing.get("type") == "notional":
+        return f"₹{sizing.get('notional_per_trade', 0):,.0f}/trade"
+    return f"{sizing.get('quantity', '?')} shares"
 
 
 def render(ctx: AppContext) -> None:
@@ -247,7 +397,9 @@ def render(ctx: AppContext) -> None:
 
     strategies = load_all(ctx)["strategies"]
 
-    tab_list, tab_new = st.tabs(["📋 Your strategies", "➕ Build a new one"])
+    tab_list, tab_new, tab_paste = st.tabs(
+        ["📋 Your strategies", "➕ Build a new one", "📋 Paste one"]
+    )
 
     with tab_list:
         if strategies.empty:
@@ -263,12 +415,32 @@ def render(ctx: AppContext) -> None:
                 "A live strategy is evaluated every 15 minutes during market hours."
             )
             for _, row in strategies.iterrows():
-                live = bool(row["enabled"])
-                icon = "🟢" if live else "⏸"
-                with st.expander(
-                    f"{icon} **{row['name']}** · {row['timeframe']} · {row['position_type']}"
-                    + ("  —  LIVE" if live else "  —  paused")
-                ):
+                # A draft is stored but cannot run. It must never be presented
+                # the same way as a strategy that can.
+                is_draft = row.get("status") == "draft"
+                live = bool(row["enabled"]) and not is_draft
+                icon = "📝" if is_draft else ("🟢" if live else "⏸")
+                if is_draft:
+                    heading = f"{icon} **{row['name']}** — DRAFT, will not run"
+                else:
+                    heading = (
+                        f"{icon} **{row['name']}** · {row['timeframe']} · "
+                        f"{row['position_type']}"
+                        + ("  —  LIVE" if live else "  —  paused")
+                    )
+                with st.expander(heading):
+                    if is_draft:
+                        st.warning(
+                            "This strategy could not be validated, so it is "
+                            "stored as a draft and is skipped by every engine. "
+                            "Fix these and paste it again:"
+                        )
+                        for message in (row.get("validation_errors") or []):
+                            st.markdown(f"- `{message}`")
+                        if row.get("raw_source"):
+                            with st.expander("What you pasted"):
+                                st.code(row["raw_source"], language="yaml")
+                        continue
                     definition = row.get("definition") or {}
                     if isinstance(definition, str):
                         definition = json.loads(definition)
@@ -278,9 +450,9 @@ def render(ctx: AppContext) -> None:
                     meta[1].metric("Direction", row["position_type"])
                     risk = definition.get("risk", {})
                     meta[2].metric("Stop / Target",
-                                   f"{risk.get('stop_loss_pct','?')}% / {risk.get('target_pct','?')}%")
+                                   _describe_risk(risk))
                     meta[3].metric("Quantity",
-                                   definition.get("sizing", {}).get("quantity", "?"))
+                                   _describe_sizing(definition.get("sizing", {})))
 
                     st.write("**Instruments:** " + ", ".join(definition.get("instruments", [])))
                     st.code(yaml.safe_dump(definition, sort_keys=False), language="yaml")
@@ -320,3 +492,6 @@ def render(ctx: AppContext) -> None:
                 ".venv\\Scripts\\streamlit.exe run dashboard.py\n```"
             )
         _builder(ctx)
+
+    with tab_paste:
+        render_paste_box(ctx)

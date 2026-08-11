@@ -44,15 +44,24 @@ recalled from training data.
 | Source | Intraday history | Cost |
 |---|---|---|
 | yfinance (current) | ~58 days on 15m | free |
-| **Dhan** ✅ | **5 years** of 1/5/15/25/60-min; daily to inception | **₹0** API, ₹0 AMC, ₹0 account opening |
+| **Dhan** ✅ | **5 years** of 1/5/15/25/60-min; daily to inception | **₹499+GST/mo** Data API (account/AMC free) |
 | Upstox v3 | minutes/hours from Jan 2022 | free with account |
 | Breeze (ICICI) | 3 years | free |
 | TrueData / GDFL | tick / L1, exchange-authorised | paid subscription |
 | Zerodha Kite | years | **paid** — ₹500/30 days |
 
-**Chosen: Dhan.** Longest free intraday history, zero cost, and it doubles as
-the future execution broker — meaning one instrument-ID space and the same data
-the broker itself sees.
+**Chosen: Dhan.** Longest intraday history among the paid options, and it
+doubles as the future execution broker — meaning one instrument-ID space and
+the same data the broker itself sees. It is the cheapest of the paid options
+evaluated here (~₹499+GST/month for the Data APIs subscription, vs. ₹500/30
+days for Zerodha Kite Connect), and account opening plus the AMC are free.
+
+> **Correction (found during implementation):** this section originally
+> stated Dhan was free (`₹0` API/AMC/account-opening). That was wrong: the
+> account and AMC are free, but the Data APIs used for historical/intraday
+> candles require a paid subscription (~₹499+GST/month), confirmed live via
+> an HTTP 401 / `DH-902` ("User has not subscribed to Data APIs") response.
+> The table and rationale above have been corrected accordingly.
 
 Zerodha was excluded on evidence: its free *Personal* tier explicitly has **no
 historical-data API**; only the paid *Connect* plan (₹500/30 days) includes it.
@@ -295,7 +304,9 @@ create table provider_tokens (
     updated_at   timestamptz not null default now()
 );
 
-create index candles_instrument_tf_ts_idx on candles (instrument_id, timeframe, ts desc);
+-- No separate (instrument_id, timeframe, ts desc) index: it would duplicate
+-- the primary key (instrument_id, timeframe, ts). Postgres btrees scan in
+-- both directions, so it added ~375MB at target scale for no query benefit.
 create index quality_unresolved_idx on data_quality_flags (instrument_id) where not resolved;
 ```
 

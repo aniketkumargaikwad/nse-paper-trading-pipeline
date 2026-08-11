@@ -275,3 +275,25 @@ def test_unknown_symbol_fails_with_actionable_message() -> None:
     client = MarketDataClient(kite, store, sleep_fn=lambda s: None)
     with pytest.raises(KiteClientError, match="strategies.yaml"):
         client.resolve_instrument_tokens(["NSE:RELAINCE"], today_ist=datetime(2026, 7, 17).date())
+
+
+# ---------------------------------------------------------------------------
+# Timeframe capability guard
+# ---------------------------------------------------------------------------
+
+
+def test_kite_maps_cover_the_same_timeframes() -> None:
+    """Guards the class of bug where a timeframe passes the guard and then
+    KeyErrors on a lookup in a narrower map."""
+    from kite_client import TIMEFRAME_MAX_DAYS_PER_REQUEST, TIMEFRAME_TO_KITE_INTERVAL
+
+    assert set(TIMEFRAME_MAX_DAYS_PER_REQUEST) == set(TIMEFRAME_TO_KITE_INTERVAL)
+
+
+def test_unsupported_timeframe_rejected_cleanly() -> None:
+    """25m must raise a clear error, never a bare KeyError."""
+    client, _ = make_client()
+    with pytest.raises(KiteClientError, match="cannot serve"):
+        client.fetch_historical_candles(
+            1, "25m", utc(2026, 8, 1), utc(2026, 8, 2), now_utc=utc(2026, 8, 2)
+        )

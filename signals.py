@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 import indicators
+from risk_levels import atr_periods_for
 from strategy_schema import Condition, ConditionGroup, Operand, Strategy
 
 # ---------------------------------------------------------------------------
@@ -178,8 +179,20 @@ def min_candles_required(strategy: Strategy) -> int:
     exactly 21 candles produces a subtly wrong number, which is worse than
     an obviously missing one. +10 covers the cross operators' shift(1) and
     general slack. Over-fetching is cheap; silently-wrong indicators are not.
+
+    ATR-based risk periods (stop, target, trailing) count too, even though
+    they never appear in entry/exit conditions: the paper engine computes
+    those ATR series from this SAME fetched frame (see
+    paper_engine._stop_target_levels), so an entry rule with a short
+    lookback must not starve a much longer ATR stop period of history —
+    that would turn a perfectly good strategy into a hard error every run
+    for a reason that isn't obvious from the strategy definition itself.
     """
     lookbacks = [_operand_lookback(op) for op in _walk_operands(strategy)]
+    # Sourced from risk_levels rather than re-listed here: that module is
+    # what actually builds these series, and a second list would drift the
+    # moment a new risk field is added (trailing_stop already proved it).
+    lookbacks += [period + 1 for period in atr_periods_for(strategy)]
     return 5 * max(lookbacks) + 10
 
 
