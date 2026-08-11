@@ -16,7 +16,7 @@ from pathlib import Path
 import streamlit as st
 import yaml
 
-from app_common import AppContext, empty_state, load_all, page_header
+from app_common import AppContext, empty_state, load_all, page_header, to_ist
 from strategy_schema import (
     COMPARISON_OPERATORS,
     CROSS_OPERATORS,
@@ -387,6 +387,117 @@ def _describe_sizing(sizing) -> str:
     return f"{sizing.get('quantity', '?')} shares"
 
 
+def _scope_of(definition: dict) -> str:
+    """What a strategy trades, in one cell.
+
+    A universe strategy has no `instruments` key at all, so asking for one
+    yields an empty string and the reader cannot tell an empty list from a
+    universe of 500.
+    """
+    if definition.get("universe"):
+        return f"universe {definition['universe']}"
+    instruments = definition.get("instruments") or []
+    if not instruments:
+        return "—"
+    if len(instruments) <= 2:
+        return ", ".join(instruments)
+    return f"{len(instruments)} instruments"
+
+
+def _latest_verdicts(runs: pd.DataFrame) -> dict[str, dict]:
+    """Each strategy's most recent backtest verdict, keyed by name."""
+    if runs.empty:
+        return {}
+    ordered = runs.sort_values("created_at", ascending=False)
+    return {
+        name: group.iloc[0].to_dict()
+        for name, group in ordered.groupby("strategy_name")
+    }
+
+
+def _render_grid(strategies: pd.DataFrame, runs: pd.DataFrame) -> None:
+    """One row per strategy: what it is, and how it last tested.
+
+    The list below shows strategies one expander at a time, which answers
+    "what is this strategy" but never "which of these is worth my attention".
+    That needs them side by side, with the backtest verdict attached — knowing
+    a strategy exists is not the same as knowing it works.
+    """
+    verdicts = _latest_verdicts(runs)
+    rows = []
+    for _, r in strategies.iterrows():
+        definition = r.get("definition") or {}
+        if isinstance(definition, str):
+            definition = json.loads(definition)
+        is_draft = r.get("status") == "draft"
+        v = verdicts.get(r["name"])
+
+        rows.append({
+            "State": (
+                "📝 draft" if is_draft
+                else ("🟢 live" if bool(r["enabled"]) else "⏸ paused")
+            ),
+            "Strategy": r["name"],
+            "TF": r.get("timeframe") or "—",
+            "Trades": (
+                "—" if is_draft else _scope_of(definition)
+            ),
+            # Backtest columns are blank rather than zero when a strategy has
+            # never been tested: untested and tested-badly are different facts,
+            # and a 0 would present the first as the second.
+            "Net ₹": float(v["net_pnl"]) if v else None,
+            "Symbols +": (
+                f"{int(v['symbols_profitable'])}/{int(v['symbols_resolved'])}"
+                if v else "—"
+            ),
+            "Sharpe": (
+                float(v["sharpe_daily"])
+                if v and v.get("sharpe_daily") is not None else None
+            ),
+            "Passed": bool(v["passed_kill_rules"]) if v else False,
+            "Tested": (
+                to_ist(pd.Series([v["created_at"]])).iloc[0].strftime("%d %b %H:%M")
+                if v else "never"
+            ),
+        })
+
+    grid = pd.DataFrame(rows)
+    st.dataframe(
+        grid, use_container_width=True, hide_index=True,
+        column_config={
+            "Net ₹": st.column_config.NumberColumn(
+                format="%.0f",
+                help="From the most recent backtest. Blank means never tested.",
+            ),
+            "Sharpe": st.column_config.NumberColumn(
+                format="%.2f",
+                help=(
+                    "Return per unit of risk. Blank means never tested, or not "
+                    "measurable from the data available."
+                ),
+            ),
+            "Symbols +": st.column_config.TextColumn(
+                help=(
+                    "How many symbols the strategy actually made money on. A "
+                    "large profit earned on very few symbols usually means one "
+                    "outlier carried it."
+                ),
+            ),
+            "Passed": st.column_config.CheckboxColumn(
+                disabled=True, help="Cleared every robustness rule."
+            ),
+        },
+    )
+
+    untested = sum(1 for r in rows if r["Tested"] == "never")
+    if untested:
+        st.caption(
+            f"{untested} strateg{'y has' if untested == 1 else 'ies have'} never "
+            "been backtested. Run one from the **Backtest** page before trusting "
+            "anything it does."
+        )
+
+
 def render(ctx: AppContext) -> None:
     page_header(
         "🧠 Strategies",
@@ -395,7 +506,9 @@ def render(ctx: AppContext) -> None:
         ctx,
     )
 
-    strategies = load_all(ctx)["strategies"]
+    data = load_all(ctx)
+    strategies = data["strategies"]
+    runs = data.get("backtest_runs", pd.DataFrame())
 
     tab_list, tab_new, tab_paste = st.tabs(
         ["📋 Your strategies", "➕ Build a new one", "📋 Paste one"]
@@ -410,10 +523,14 @@ def render(ctx: AppContext) -> None:
                 "🧠",
             )
         else:
+            live_count = int(strategies["enabled"].fillna(False).sum())
             st.caption(
-                f"{int(strategies['enabled'].sum())} live of {len(strategies)}. "
+                f"{live_count} live of {len(strategies)}. "
                 "A live strategy is evaluated every 15 minutes during market hours."
             )
+            _render_grid(strategies, runs)
+            st.divider()
+            st.caption("Open a strategy for its full definition and controls.")
             for _, row in strategies.iterrows():
                 # A draft is stored but cannot run. It must never be presented
                 # the same way as a strategy that can.
@@ -454,7 +571,13 @@ def render(ctx: AppContext) -> None:
                     meta[3].metric("Quantity",
                                    _describe_sizing(definition.get("sizing", {})))
 
-                    st.write("**Instruments:** " + ", ".join(definition.get("instruments", [])))
+                    if definition.get("universe"):
+                        st.write(f"**Universe:** {definition['universe']}")
+                    else:
+                        st.write(
+                            "**Instruments:** "
+                            + ", ".join(definition.get("instruments", []))
+                        )
                     st.code(yaml.safe_dump(definition, sort_keys=False), language="yaml")
 
                     a, b = st.columns([1, 1])
