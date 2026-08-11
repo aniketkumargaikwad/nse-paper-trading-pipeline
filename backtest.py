@@ -29,8 +29,8 @@ A combination "passes" only if ALL hold:
   * at least MIN_TRADES trades (too few = statistical noise),
   * net P&L positive AFTER costs,
   * max drawdown within MAX_DRAWDOWN_PCT of the capital base,
-  * the strategy is profitable on at least MIN_PROFITABLE_SYMBOLS of its
-    instruments (edge on one symbol only is usually curve-fitting).
+  * the strategy is profitable on at least MIN_PROFITABLE_SYMBOL_PCT of the
+    symbols traded (edge on one symbol only is usually curve-fitting).
 The flags (with required-vs-actual numbers) are stored per row so the
 dashboard can show WHY something failed, not just that it failed.
 """
@@ -54,7 +54,7 @@ import signals
 from backtest_types import SimResult, SimTrade, SkippedEntry
 from metrics import (
     MAX_DRAWDOWN_PCT,
-    MIN_PROFITABLE_SYMBOLS,
+    MIN_PROFITABLE_SYMBOL_PCT,
     MIN_TRADES,
     ComboMetrics,
     compute_metrics,

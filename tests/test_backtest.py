@@ -691,7 +691,9 @@ def test_kill_rules_all_pass() -> None:
         ({"total_trades": MIN_TRADES - 1}, 4),   # too few trades
         ({"net_pnl": -1.0}, 4),                  # loses money net of costs
         ({"max_drawdown_pct": 35.0}, 4),         # blows the drawdown cap
-        ({}, 2),                                 # profitable on too few symbols
+        # 1 of 5 is 20%, under the 40% bar. (2 of 5 is exactly 40% and now
+        # PASSES — the rule became a proportion in Phase 2.)
+        ({}, 1),                                 # profitable on too few symbols
     ],
 )
 def test_each_kill_rule_can_fail_alone(metrics_kw, symbols) -> None:
@@ -702,11 +704,17 @@ def test_each_kill_rule_can_fail_alone(metrics_kw, symbols) -> None:
     assert sum(1 for f in flags.values() if not f["passed"]) == 1
 
 
-def test_symbol_requirement_capped_by_instrument_count() -> None:
-    # A 1-instrument strategy cannot be asked for 3 profitable symbols.
+def test_a_one_instrument_strategy_is_judged_on_that_one() -> None:
+    """The rule is a proportion now, so a single symbol must simply be
+    profitable — 100% clears the 40% bar, 0% does not."""
     passed, flags = evaluate_kill_rules(good_metrics(), profitable_symbols=1, total_symbols=1)
     assert passed
-    assert flags["symbol_robustness"]["required_profitable_symbols"] == 1
+    assert flags["symbol_robustness"]["actual_pct"] == 100.0
+    assert flags["symbol_robustness"]["total_symbols"] == 1
+
+    passed, flags = evaluate_kill_rules(good_metrics(), profitable_symbols=0, total_symbols=1)
+    assert not passed
+    assert flags["symbol_robustness"]["actual_pct"] == 0.0
 
 
 
