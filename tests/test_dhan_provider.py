@@ -148,6 +148,9 @@ def make_provider(http, token="tok") -> DhanProvider:
         def get_access_token(self):
             return token
 
+        def invalidate(self):
+            pass
+
     class FakeInstruments:
         def resolve(self, symbol):
             return ("2885", "NSE_EQ", "EQUITY")
@@ -351,3 +354,103 @@ def test_only_the_two_chart_endpoints_are_reachable() -> None:
     """Stronger than a blacklist: pin the exact endpoint set."""
     source = (Path(__file__).resolve().parent.parent / "providers" / "dhan.py").read_text()
     assert set(re.findall(r"/charts/\w+", source)) == {"/charts/intraday", "/charts/historical"}
+
+
+# ---------------------------------------------------------------------------
+# A 401 from a token that died before its stated expiry.
+#
+# Dhan has been observed rejecting a token hours early. get_access_token's
+# clock check cannot see that, so without a 401-triggered refresh the same
+# dead token is replayed until a human deletes the row — every symbol in a
+# backfill failing identically, with no path to recovery.
+# ---------------------------------------------------------------------------
+
+
+class RotatingTokens:
+    """Hands out a new token each time it is invalidated."""
+
+    def __init__(self):
+        self.tokens = ["stale", "fresh"]
+        self.invalidated = 0
+
+    def get_access_token(self):
+        return self.tokens[0]
+
+    def invalidate(self):
+        self.invalidated += 1
+        if len(self.tokens) > 1:
+            self.tokens.pop(0)
+
+
+def make_provider_with(tokens, http) -> DhanProvider:
+    class FakeInstruments:
+        def resolve(self, symbol):
+            return ("2885", "NSE_EQ", "EQUITY")
+
+    return DhanProvider(
+        token_manager=tokens, instrument_resolver=FakeInstruments(),
+        client_id="CID", http=http, sleep_fn=lambda s: None,
+    )
+
+
+def unauthorised() -> FakeResponse:
+    return FakeResponse(
+        {"errorCode": "DH-901",
+         "errorMessage": "Client ID or user generated access token is invalid or expired."},
+        status_code=401,
+    )
+
+
+def test_a_401_invalidates_the_token_and_retries_once() -> None:
+    tokens = RotatingTokens()
+    http = FakeHttp([unauthorised(), FakeResponse(sample_payload())])
+    df = make_provider_with(tokens, http).fetch(
+        "NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 4)
+    )
+    assert len(df) == 3, "the retry should succeed on a fresh token"
+    assert tokens.invalidated == 1
+    assert http.calls[0]["headers"]["access-token"] == "stale"
+    assert http.calls[1]["headers"]["access-token"] == "fresh", (
+        "the retry must carry the NEW token, not replay the dead one"
+    )
+
+
+def test_a_second_401_gives_up_with_a_clear_error() -> None:
+    """A fresh token still rejected is a real credentials or subscription
+    problem. Retrying it only delays the message and burns TOTP codes."""
+    tokens = RotatingTokens()
+    http = FakeHttp([unauthorised(), unauthorised()])
+    with pytest.raises(ProviderError) as exc:
+        make_provider_with(tokens, http).fetch(
+            "NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 4)
+        )
+    assert "401" in str(exc.value)
+    assert tokens.invalidated == 1, "exactly one refresh attempt, not a loop"
+    assert len(http.calls) == 2
+
+
+def test_other_4xx_still_does_not_trigger_a_token_refresh() -> None:
+    tokens = RotatingTokens()
+    http = FakeHttp([FakeResponse({"errorMessage": "bad parameter"}, status_code=400)])
+    with pytest.raises(ProviderError):
+        make_provider_with(tokens, http).fetch(
+            "NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 4)
+        )
+    assert tokens.invalidated == 0
+
+
+def test_an_unsubscribed_401_does_not_burn_a_token_refresh() -> None:
+    """DH-902 is a 401 too, but a fresh token cannot fix a lapsed subscription
+    — refreshing would spend a TOTP code to reach the same error later."""
+    tokens = RotatingTokens()
+    http = FakeHttp([FakeResponse(
+        {"errorCode": "DH-902",
+         "errorMessage": "User has not subscribed to Data APIs"},
+        status_code=401,
+    )])
+    with pytest.raises(ProviderError, match="Data APIs"):
+        make_provider_with(tokens, http).fetch(
+            "NSE:RELIANCE", "5m", utc(2026, 8, 1), utc(2026, 8, 4)
+        )
+    assert tokens.invalidated == 0
+    assert len(http.calls) == 1

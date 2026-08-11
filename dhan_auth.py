@@ -182,6 +182,31 @@ class DhanTokenManager:
         self._store.save_token(self.provider, token)
         return token.access_token
 
+    def invalidate(self) -> None:
+        """Mark the cached token unusable so the next read mints a fresh one.
+
+        Needed because expiry is not the only way a token dies. Dhan has been
+        observed rejecting a token HOURS before its stated expiryTime, and the
+        clock-based check in get_access_token cannot see that: it keeps
+        handing back a token the server refuses, so every request 401s
+        forever with no path to recovery.
+
+        Implemented by back-dating the stored expiry rather than deleting the
+        row, so the TokenStore protocol stays a two-method interface and a
+        concurrent reader sees "expired" rather than "absent" — both lead to
+        the same renew-or-regenerate path.
+        """
+        current = self._store.get_token(self.provider)
+        if current is None:
+            return
+        self._store.save_token(
+            self.provider,
+            StoredToken(
+                access_token=current.access_token,
+                expires_at=self._now() - RENEW_MARGIN,
+            ),
+        )
+
     # -- network calls (patched wholesale in tests) --------------------------
 
     def _request(self, method: str, url: str, path: str, doing: str, **kwargs: Any) -> Any:
@@ -276,8 +301,13 @@ class DhanTokenManager:
         token = payload.get("accessToken") or payload.get("access_token")
         if not token:
             raise DhanAuthError(
-                f"Dhan response contained no access token while {doing}. "
-                "The API shape may have changed; check the DhanHQ v2 auth docs."
+                f"Dhan accepted the request while {doing} but returned no "
+                "access token. The usual cause is a TOTP code Dhan has "
+                "already consumed: it answers a reused code with HTTP 200 and "
+                "an empty token rather than an error. Wait for the next "
+                "30-second code and retry. If it persists across several "
+                "fresh codes, check the system clock (TOTP tolerates ~30s of "
+                "skew) and that API access is enabled at web.dhan.co."
             )
         return StoredToken(
             access_token=token,

@@ -66,6 +66,15 @@ REQUIRED_PAYLOAD_KEYS = ("open", "high", "low", "close", "volume", "timestamp")
 class TokenProvider(Protocol):
     def get_access_token(self) -> str: ...
 
+    def invalidate(self) -> None:
+        """Throw away the cached token so the next read mints a fresh one.
+
+        Part of the contract because expiry is not the only way a token dies:
+        a server can reject one before its stated expiry, and only the caller
+        seeing the 401 knows that happened.
+        """
+        ...
+
 
 class InstrumentResolver(Protocol):
     def resolve(self, symbol: str) -> tuple[str, str, str]:
@@ -204,9 +213,9 @@ class DhanProvider:
         whose body holds credentials - so transport errors are converted here
         and the original is dropped entirely.
         """
-        # One token read per request, not one per attempt: a 401 is a
-        # non-retryable 4xx here, so re-reading between attempts cannot help -
-        # it only adds a token-store round-trip.
+        # One token read per request, not one per attempt. The exception is a
+        # 401, handled below: a stale cached token is the one 4xx that DOES
+        # improve on retry, once the token has been thrown away first.
         headers = {
             # Per the chart-API docs: no client-id header here
             # (that belongs to the auth endpoints).
@@ -216,6 +225,11 @@ class DhanProvider:
         }
 
         last_error: str | None = None
+        # A 401 buys exactly one retry, and only after invalidating the token.
+        # Once, because a second 401 on a freshly minted token is a real
+        # credentials or subscription problem, and retrying that just delays a
+        # clear error while burning TOTP codes.
+        token_retry_used = False
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             response = None
             transport_error: str | None = None
@@ -248,7 +262,39 @@ class DhanProvider:
                     # `from None` only sets __suppress_context__, leaving a
                     # requests exception reachable via __context__.
                     raise ProviderError(f"Dhan returned non-JSON while {doing}")
-                # 4xx other than rate limiting will not improve on retry.
+                # A 401 usually means the cached token died before its stated
+                # expiry — Dhan has been observed rejecting one hours early.
+                # The clock-based check in get_access_token cannot see that, so
+                # without this the same dead token is replayed until a human
+                # deletes it, and every symbol in a backfill fails identically.
+                if status == 401 and not token_retry_used:
+                    # ...but not when Dhan says the problem is the Data APIs
+                    # subscription. That is also a 401, and minting a fresh
+                    # token for it burns a TOTP code to reach the identical
+                    # error one attempt later.
+                    subscription_problem = False
+                    try:
+                        detail = response.json()
+                    except ValueError:
+                        detail = None
+                    if isinstance(detail, dict):
+                        subscription_problem = (
+                            detail.get("errorCode") == "DH-902"
+                            or "Data API" in (detail.get("errorMessage") or "")
+                        )
+                    if not subscription_problem:
+                        token_retry_used = True
+                        self._tokens.invalidate()
+                        # A NEW dict rather than mutating in place: the sent
+                        # headers are part of what a request was, and rewriting
+                        # them retroactively rewrites history for anything
+                        # holding a reference (a recorder, a retry log).
+                        headers = {**headers,
+                                   "access-token": self._tokens.get_access_token()}
+                        last_error = "HTTP 401 (token refreshed, retrying once)"
+                        continue
+
+                # Other 4xx will not improve on retry.
                 if status < 500 and status != 429:
                     hint = ""
                     try:
