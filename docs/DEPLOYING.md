@@ -1,156 +1,300 @@
-# Deploying the workbench
+# Deploying the workbench — step by step
 
-Two things need to run:
+This guide assumes you have never used Railway and have never deployed
+anything. Every step says exactly what to click.
 
-| What | How often | Why |
-|---|---|---|
-| **The dashboard** | always on | The website: build strategies, run backtests, read results |
-| **The paper engine** | every 15 min, 09:32–15:17 IST, Mon–Fri | Evaluates the just-closed candle and simulates fills |
+**What you are about to do:** put this app on the internet so it runs on a
+server instead of your laptop, with its own web address you can open from your
+phone. Two pieces go up: the **dashboard** (the website) and the **paper
+engine** (a small job that wakes up every 15 minutes during market hours).
 
-Both run from this one repository. Railway hosts both.
+**Roughly 20 minutes.**
 
----
-
-## Why not Vercel
-
-Vercel runs serverless functions with a short execution limit and no
-long-lived process. Streamlit is a persistent Python server that holds a
-websocket open to the browser for the life of a session. They are
-incompatible — this is not a configuration problem.
-
-Putting the dashboard on Vercel would mean rewriting the UI as a Next.js
-front end plus a separate Python API hosted elsewhere. That is weeks of work
-for no capability this system does not already have.
-
-## Why not GitHub Actions for the schedule
-
-GitHub Actions ran the paper engine until now, and it is why the workflow was
-disabled after intermittent failures.
-
-GitHub does not guarantee scheduled workflows run on time. Under load they are
-delayed — sometimes 20 minutes or more — and can be dropped entirely. For a
-strategy evaluating 15-minute candles, a delayed run silently misses candles,
-and the engine cannot tell the difference between "nothing happened" and "I
-was never asked". A scheduler that keeps time is not optional here.
-
-Railway's cron runs on a real schedule, and puts the app and the job in the
-same place, with the same environment variables and one log to read.
+**It costs money.** Railway no longer has a permanently free tier. You get a
+small trial credit, then it is about $5/month for something this size. You
+will have to add a card. If you would rather not, skip to
+[Not ready to pay?](#not-ready-to-pay) at the bottom — you lose nothing about
+testing strategies.
 
 ---
 
-## One-time setup
+## Before you start: open your `.env` file
 
-### 1. Create the project
+Everything you need is already in this one file. You will copy from it.
 
-Connect this GitHub repository to a new Railway project. Railway detects
-Python and installs `requirements.txt` automatically.
+1. Open File Explorer and go to `C:\Users\Aniket\Personal projects\Trading tool`
+2. You may not see `.env` — Windows hides files starting with a dot. In File
+   Explorer, click the **View** menu → tick **Hidden items**.
+3. Right-click `.env` → **Open with** → **Notepad**.
 
-### 2. Environment variables
+You should see eight lines like `SUPABASE_URL=https://...`. Leave this window
+open. Do not paste its contents anywhere public — it holds your database and
+broker keys.
 
-Set these on the Railway service (Variables tab):
+> **If `.env` does not exist**, you are in the wrong folder, or setup was never
+> completed. Stop here and say so.
 
-| Variable | Value | Why |
-|---|---|---|
-| `SUPABASE_URL` | your project URL | Database |
-| `SUPABASE_SERVICE_ROLE_KEY` | the service-role key | **Full database access.** Required for the dashboard to create strategies and for the engine to write trades |
-| `APP_PASSWORD` | a password you choose | **Required.** See the warning below |
-| `DHAN_CLIENT_ID` | from Dhan | Market data |
-| `DHAN_API_KEY` | from Dhan | |
-| `DHAN_API_SECRET` | from Dhan | |
-| `DHAN_TOTP_SECRET` | from Dhan | Automated token renewal |
-| `DHAN_PIN` | your Dhan PIN | |
+### One value you have to invent
 
-> ### ⚠️ `APP_PASSWORD` is not optional on a host
->
-> The dashboard carries the **service-role** database key, because creating
-> strategies and toggling them live requires it. Anyone who reaches the URL
-> without a gate could create or delete strategies, flip one live, and read
-> every trade you have made.
->
-> The app refuses to render on a detected host when `APP_PASSWORD` is unset,
-> and says so. Do not work around that.
->
-> It is a single shared password, suitable for one operator. It is not user
-> accounts, and is not suitable for handing to several people.
+You also need a password for the dashboard, which is not in `.env` yet.
 
-### 3. The web service
-
-Railway reads the `Procfile`:
-
-```
-web: streamlit run dashboard.py --server.port $PORT ...
-```
-
-`$PORT` is injected by Railway; binding to `0.0.0.0` is what makes the
-container reachable. Generate a domain under Settings → Networking.
-
-### 4. The paper engine as a cron job
-
-Add a **second service** in the same Railway project, from the same repo:
-
-- **Start command:** `python paper_engine.py`
-- **Cron schedule:** `2,17,32,47 4-9 * * 1-5`
-
-That is every 15 minutes from 09:32 to 15:17 IST, Monday to Friday. Railway
-cron is UTC, and IST is UTC+5:30 — hence `4-9` rather than `9-15`.
-
-The engine gates itself as well: outside market hours, on a weekend, or on an
-NSE holiday it writes a `run_audit` row with `status=skipped` and exits 0.
-A skipped run is the normal result outside trading hours, not a failure.
-
-Copy the same environment variables to this service. `APP_PASSWORD` is not
-needed here — there is no web surface.
-
----
-
-## Verifying a deployment
-
-1. Open the domain. You should get a password prompt, not a dashboard.
-2. Sign in. The header should read **✏️ Edit mode**; "View only" means the
-   service-role key is missing or wrong.
-3. Open **System**. It reports which data provider is configured and whether
-   recent runs succeeded.
-4. Trigger the cron service manually once from Railway. Outside market hours,
-   expect a `skipped` run — that is correct behaviour, not an error.
-
-## Costs
-
-Railway bills by usage. A dashboard this size plus a job that runs a few
-minutes a day is small, but check current pricing before committing — this
-document may be out of date. Supabase's free tier covers roughly 500 MB, which
-is about NIFTY100 at the 5-minute base; NIFTY500 needs the paid plan.
-
-## Running a long backtest
-
-A 50-symbol backtest takes several minutes. Two ways to run one:
-
-* **From the dashboard** — the Backtest page's *Run a backtest* button. Fine
-  for a handful of symbols; a large universe will hold that browser session
-  open while it works.
-* **As a Railway one-off command** — better for a big run, because it does not
-  tie up the web service:
-
-  ```
-  python backtest.py --strategy MY-STRATEGY --years 2
-  ```
-
-  Run it from the Railway service shell, or add a temporary service with that
-  start command and no schedule.
-
-The old `backtest.yml` GitHub Action did this too, and was removed along with
-the cron workflow. It worked, but it meant a second copy of every secret in a
-second place — and secrets drifting out of sync was already a source of
-failures here. One environment is easier to keep correct than two.
-
-## What still runs locally
-
-Nothing has to. Backfilling and universe refreshes are occasional commands you
-can run from your laptop:
+Pick something long — you will type it rarely. To have the computer make one,
+open PowerShell in the project folder and run:
 
 ```bash
-.venv\Scripts\python.exe backfill.py --symbols NSE:TCS,NSE:INFY --years 2
-.venv\Scripts\python.exe scripts/refresh_universes.py
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(24))"
 ```
 
-Both write to the same Supabase project the deployment reads, so a backfill
-from your laptop is immediately visible in the hosted dashboard.
+Copy the line it prints and keep it somewhere safe (a password manager). This
+is what you will type to open your dashboard.
+
+---
+
+## Step 1 — Create a Railway account
+
+1. Open **https://railway.app** in your browser.
+2. Click **Login** (top right).
+3. Choose **Login with GitHub**.
+4. GitHub asks you to authorise Railway. Click the green **Authorize Railway**
+   button.
+5. You land on the Railway dashboard — a mostly empty page saying you have no
+   projects.
+
+---
+
+## Step 2 — Create the project from your GitHub repo
+
+1. Click the **New Project** button (a purple button, usually centre or top
+   right).
+2. A menu appears. Click **Deploy from GitHub repo**.
+3. The first time, Railway asks for permission to see your repositories. Click
+   **Configure GitHub App**. A GitHub page opens.
+   - Choose **Only select repositories**
+   - In the dropdown, pick **nse-paper-trading-pipeline**
+   - Click **Save** / **Install**
+   - You return to Railway
+4. Back on Railway, click **nse-paper-trading-pipeline** in the list.
+5. Railway may ask "Deploy Now?" — click **Deploy**.
+
+A box appears representing your app and it starts building. **It will fail or
+crash-loop at this point. That is expected** — it has no database keys yet.
+That is Step 3.
+
+> **What "building" means:** Railway is reading your code, installing Python
+> and everything in `requirements.txt`. Takes 2–4 minutes the first time.
+
+---
+
+## Step 3 — Give it the keys (the important step)
+
+1. Click the box representing your service (labelled
+   `nse-paper-trading-pipeline`).
+2. A panel opens. Click the **Variables** tab along the top.
+3. Look for **Raw Editor** — usually a small link or button on the right of
+   that tab. Click it. This lets you paste everything at once instead of
+   typing eight separate rows.
+4. Switch to Notepad, select **all** the text in `.env`
+   (Ctrl+A), copy it (Ctrl+C).
+5. Back in Railway's Raw Editor box, paste (Ctrl+V).
+6. **Now add one more line at the bottom**, using the password you generated:
+
+   ```
+   APP_PASSWORD=the-password-you-generated
+   ```
+
+7. Click **Save** / **Update Variables**.
+
+Railway restarts the app automatically with the new values.
+
+> **If you cannot find Raw Editor**, add them one at a time instead: click
+> **New Variable**, type the name in the first box (e.g. `SUPABASE_URL`), the
+> value in the second, then repeat. You need all eight from `.env` plus
+> `APP_PASSWORD`.
+
+> **`APP_PASSWORD` is not optional.** The dashboard carries a key with full
+> access to your database. Without a password, anyone who stumbles on the web
+> address could delete your strategies or set one trading live. The app knows
+> this: deployed without a password it refuses to open and tells you so.
+
+---
+
+## Step 4 — Get your web address
+
+1. Still in the service panel, click the **Settings** tab.
+2. Scroll to **Networking** (sometimes called **Domains**).
+3. Click **Generate Domain**.
+4. If it asks which port, **accept whatever it suggests**. The app is written
+   to listen on whichever port Railway hands it, so the detected value is the
+   right one. Only if it refuses to detect anything, type `8080`.
+5. A web address appears, something like
+   `nse-paper-trading-pipeline-production.up.railway.app`. Click it.
+
+**You should see a password box, not the dashboard.** Type your
+`APP_PASSWORD` and click **Sign in**.
+
+You are now looking at your trading workbench, running on the internet.
+
+> **Seeing an error page instead?** Give it 2–3 minutes — it may still be
+> building. Then see [When something is wrong](#when-something-is-wrong).
+
+---
+
+## Step 5 — Add the paper trading job
+
+The dashboard is up, but nothing yet wakes up during market hours to check
+your strategies. That is a **second service** in the same project.
+
+1. Click your project name (top left) to go back to the project view.
+2. Click **New** (or the **+** button) → **GitHub Repo** → pick
+   **nse-paper-trading-pipeline** again.
+
+   Yes, the same repository twice. One box runs the website; the other runs
+   the scheduled job. Same code, different jobs.
+
+3. Click the new box, then the **Settings** tab.
+4. Find **Start Command** and enter exactly:
+
+   ```
+   python paper_engine.py
+   ```
+
+5. Find **Cron Schedule** and enter exactly:
+
+   ```
+   2,17,32,47 4-9 * * 1-5
+   ```
+
+   That means every 15 minutes from 09:32 to 15:17 India time, Monday to
+   Friday. It looks like `4-9` rather than `9-15` because Railway works in UTC
+   and India is 5½ hours ahead.
+
+6. Click the **Variables** tab for **this** service and paste your `.env`
+   contents again, exactly as in Step 3.
+
+   `APP_PASSWORD` is not needed here — this service has no web page.
+
+> **Why the engine cannot just run all the time:** it is designed to wake, look
+> at the candle that just closed, act, and exit. Running constantly would
+> cost more and do nothing extra.
+
+---
+
+## Step 6 — Check everything actually works
+
+### The dashboard
+
+1. Open your web address, sign in.
+2. Top right should say **✏️ Edit mode**.
+   - If it says **👁 View only**, `SUPABASE_SERVICE_ROLE_KEY` did not copy
+     correctly. Redo Step 3.
+3. Click **Strategies** in the left sidebar. You should see your grid with
+   `NIFTY50-EMA-RSI-60m`.
+4. Click **System** in the sidebar. It reports which data provider is
+   configured and whether recent runs worked.
+
+### The scheduled job
+
+1. Go to the project view, click the **second** box (the cron one).
+2. Click the **Deployments** tab → **Deploy** / **Run Now** to trigger it once
+   by hand.
+3. Click **View Logs**.
+
+**Outside market hours you should see it say it skipped, and exit
+successfully.** That is correct. The engine refuses to trade outside 09:15–
+15:30 IST, at weekends, and on NSE holidays. A skipped run is a healthy run.
+
+---
+
+## When something is wrong
+
+### The page says "This deployment has no APP_PASSWORD set"
+
+Working exactly as intended. Go back to Step 3 and add `APP_PASSWORD`.
+
+### "Application failed to respond" / 502
+
+Usually still building, or it crashed at startup.
+
+1. Click the service → **Deployments** → **View Logs**
+2. Read the last 20 lines. The most common causes:
+   - `SUPABASE_URL is not set` → variables did not save; redo Step 3
+   - `ModuleNotFoundError` → the build did not finish; click **Redeploy**
+
+### The password box appears but my password is refused
+
+The value probably picked up a stray space or a quote mark. In Railway's
+Variables tab, click `APP_PASSWORD`, delete the value, retype it carefully
+with no quotes and no spaces around it, and save.
+
+### It says "View only" and I cannot create strategies
+
+`SUPABASE_SERVICE_ROLE_KEY` is missing or wrong. It is a very long string
+starting with `eyJ`. Make sure the whole thing copied — it is easy to miss the
+end.
+
+### The cron job runs but nothing happens
+
+Expected outside market hours. Check the logs say **skipped**. If it is a
+weekday between 09:32 and 15:17 IST and it still skips, open **System** in the
+dashboard — it will say whether the NSE holiday calendar thinks today is a
+holiday.
+
+---
+
+## Not ready to pay?
+
+Deployment is only needed for **paper trading on a schedule**. Everything else
+works on your laptop for free:
+
+```bash
+.\.venv\Scripts\streamlit.exe run dashboard.py
+```
+
+That opens the same dashboard at `http://localhost:8501`. You can build
+strategies, run backtests across NIFTY50, and read every result. The only
+thing you lose is the engine waking up by itself during market hours.
+
+Given you do not yet have a strategy that survives its own robustness rules,
+this is a perfectly reasonable place to stay for now.
+
+---
+
+## What this costs
+
+| | |
+|---|---|
+| Railway | ~$5/month for both services, billed by usage. Check current pricing — this may be out of date |
+| Supabase | Free up to ~500 MB. NIFTY50 uses ~215 MB, NIFTY100 ~429 MB. NIFTY500 (~2.1 GB) needs the paid plan |
+| Dhan Data APIs | ~₹499+GST/month, which you already pay |
+
+---
+
+## Two background facts (not steps)
+
+**Why not Vercel.** Vercel runs short-lived serverless functions. This
+dashboard is a Streamlit server that stays running and holds a live connection
+to your browser. They are incompatible — moving to Vercel would mean rewriting
+the whole interface in a different language for no new capability.
+
+**Why GitHub Actions was removed.** It used to run the paper engine every 15
+minutes, and it is why that workflow kept failing. GitHub does not promise
+scheduled jobs run on time; under load they arrive late or not at all. An
+engine reading 15-minute candles cannot tell "nothing happened" from "nobody
+woke me", so a late run silently skips signals. Railway's scheduler keeps time.
+
+---
+
+## What still runs from your laptop
+
+Occasional maintenance, not day-to-day:
+
+```bash
+# Fetch price history for more symbols
+.\.venv\Scripts\python.exe backfill.py --symbols NSE:TCS,NSE:INFY --years 2
+
+# Refresh index membership after a rebalance (about twice a year)
+.\.venv\Scripts\python.exe scripts/refresh_universes.py
+```
+
+Both write to the same Supabase database the deployment reads, so anything you
+backfill locally shows up in the hosted dashboard straight away.
