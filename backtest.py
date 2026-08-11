@@ -51,6 +51,15 @@ import pandas as pd
 
 import indicators
 import signals
+from backtest_types import SimResult, SimTrade, SkippedEntry
+from metrics import (
+    MAX_DRAWDOWN_PCT,
+    MIN_PROFITABLE_SYMBOLS,
+    MIN_TRADES,
+    ComboMetrics,
+    compute_metrics,
+    evaluate_kill_rules,
+)
 from risk_levels import build_atr_series, level_from_spec
 from config import IST, UTC, Settings, get_settings
 from data_provider import create_data_client, describe_provider
@@ -65,9 +74,6 @@ from strategy_schema import (
 )
 
 # --- Kill-rule thresholds ---------------------------------------------------
-MIN_TRADES = 30
-MAX_DRAWDOWN_PCT = 20.0
-MIN_PROFITABLE_SYMBOLS = 3  # capped at the strategy's instrument count
 
 CSV_OUTPUT_DIR = Path("backtest_results")
 
@@ -79,44 +85,6 @@ CSV_OUTPUT_DIR = Path("backtest_results")
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class SimTrade:
-    """One completed simulated round-trip inside a backtest."""
-
-    entry_signal_ts: datetime
-    entry_fill_ts: datetime
-    exit_signal_ts: datetime      # for SL/target hits: the candle that hit them
-    exit_fill_ts: datetime
-    position_type: str
-    quantity: int
-    intended_entry_price: float
-    entry_price: float            # after slippage
-    intended_exit_price: float
-    exit_price: float             # after slippage
-    exit_reason: str              # 'signal' | 'stop_loss' | 'target' | 'end_of_data'
-    gross_pnl: float
-    costs: float
-    net_pnl: float
-
-
-@dataclass(frozen=True)
-class SkippedEntry:
-    """An entry signal that could not become a trade.
-
-    Recorded rather than dropped: a signal that never became a position is a
-    real fact about the strategy, and a silently-dropped one would make the
-    strategy look more selective than it is.
-    """
-
-    signal_ts: pd.Timestamp
-    price: float
-    reason: str          # 'notional_below_price'
-
-
-@dataclass(frozen=True)
-class SimResult:
-    trades: list[SimTrade]
-    skipped: list[SkippedEntry]
 
 
 def _make_trade(
@@ -403,85 +371,6 @@ def simulate(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ComboMetrics:
-    """Per strategy-x-instrument result, shaped for the backtest_results table."""
-
-    total_trades: int
-    winning_trades: int
-    net_pnl: float
-    win_rate_pct: float
-    profit_factor: float | None   # None when there are no losing trades
-    max_drawdown_pct: float
-    longest_losing_streak: int
-
-
-def compute_metrics(trades: list[SimTrade]) -> ComboMetrics:
-    if not trades:
-        return ComboMetrics(0, 0, 0.0, 0.0, None, 0.0, 0)
-
-    pnls = [t.net_pnl for t in trades]
-    wins = [p for p in pnls if p > 0]
-    losses = [p for p in pnls if p < 0]
-
-    profit_factor = round(sum(wins) / abs(sum(losses)), 4) if losses else None
-
-    # Equity curve of cumulative net P&L, walked trade by trade. The % base
-    # is the LARGEST entry notional — roughly the capital you would need to
-    # run this combination — which keeps the number transparent rather than
-    # depending on an arbitrary "starting capital" input.
-    capital_base = max(t.entry_price * t.quantity for t in trades)
-    equity = peak = 0.0
-    max_dd = 0.0
-    for p in pnls:
-        equity += p
-        peak = max(peak, equity)
-        max_dd = max(max_dd, peak - equity)
-
-    streak = longest = 0
-    for p in pnls:
-        streak = streak + 1 if p < 0 else 0
-        longest = max(longest, streak)
-
-    return ComboMetrics(
-        total_trades=len(trades),
-        winning_trades=len(wins),
-        net_pnl=round(sum(pnls), 4),
-        win_rate_pct=round(100.0 * len(wins) / len(trades), 2),
-        profit_factor=profit_factor,
-        max_drawdown_pct=round(100.0 * max_dd / capital_base, 2) if capital_base else 0.0,
-        longest_losing_streak=longest,
-    )
-
-
-def evaluate_kill_rules(
-    metrics: ComboMetrics, profitable_symbols: int, total_symbols: int
-) -> tuple[bool, dict[str, Any]]:
-    """Return (passed_all, flags). Flags carry required-vs-actual for display."""
-    required_symbols = min(MIN_PROFITABLE_SYMBOLS, total_symbols)
-    flags = {
-        "min_trades": {
-            "required": MIN_TRADES,
-            "actual": metrics.total_trades,
-            "passed": metrics.total_trades >= MIN_TRADES,
-        },
-        "net_positive_after_costs": {
-            "required": "> 0",
-            "actual": metrics.net_pnl,
-            "passed": metrics.net_pnl > 0,
-        },
-        "drawdown_within_cap": {
-            "required_max_pct": MAX_DRAWDOWN_PCT,
-            "actual_pct": metrics.max_drawdown_pct,
-            "passed": metrics.max_drawdown_pct <= MAX_DRAWDOWN_PCT,
-        },
-        "symbol_robustness": {
-            "required_profitable_symbols": required_symbols,
-            "actual_profitable_symbols": profitable_symbols,
-            "passed": profitable_symbols >= required_symbols,
-        },
-    }
-    return all(f["passed"] for f in flags.values()), flags
 
 
 # ---------------------------------------------------------------------------
