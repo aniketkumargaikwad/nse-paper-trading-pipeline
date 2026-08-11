@@ -712,15 +712,37 @@ def main(argv: list[str] | None = None) -> int:
             strategies = probe.list_strategies()
         if not strategies:
             strategies = load_strategies()
-        strategies = [s for s in strategies if s.enabled]
         if args.strategy:
-            strategies = [s for s in strategies if s.name == args.strategy]
-            if not strategies:
-                print(f"ERROR: no enabled strategy named {args.strategy!r}", file=sys.stderr)
+            # Naming a strategy is an explicit request, so it runs even when
+            # paused. Backtesting a paused strategy is the DOCUMENTED workflow
+            # — the Strategies page says "Saved (paused). Backtest it first,
+            # then switch it Live" — and filtering by enabled first made that
+            # impossible, reporting the strategy as though it did not exist.
+            named = [s for s in strategies if s.name == args.strategy]
+            if not named:
+                available = ", ".join(sorted(s.name for s in strategies)) or "(none)"
+                print(
+                    f"ERROR: no strategy named {args.strategy!r}. "
+                    f"Available: {available}",
+                    file=sys.stderr,
+                )
                 return 1
-        if not strategies:
-            print("ERROR: no enabled strategies in strategies.yaml", file=sys.stderr)
-            return 1
+            strategies = named
+            if not strategies[0].enabled:
+                print(
+                    f"NOTE: {args.strategy!r} is paused. Backtesting it anyway "
+                    "— that is what pausing is for. It will not paper-trade "
+                    "until you switch it Live."
+                )
+        else:
+            strategies = [s for s in strategies if s.enabled]
+            if not strategies:
+                print(
+                    "ERROR: no enabled strategies. Enable one, or name it "
+                    "explicitly with --strategy to test it while paused.",
+                    file=sys.stderr,
+                )
+                return 1
 
         store = None if args.no_db else SupabaseStore.connect(settings)
         # Only the Kite provider needs a database connection to read the
