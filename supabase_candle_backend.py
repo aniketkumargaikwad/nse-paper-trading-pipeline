@@ -22,7 +22,7 @@ Row shaping is exposed as pure module-level functions (`candles_to_rows`,
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Sequence
 
 import pandas as pd
@@ -200,6 +200,73 @@ class SupabaseCandleBackend:
             except APIError as exc:
                 raise self._wrap(exc, "writing instruments") from exc
         return len(unique_rows)
+
+    # -- symbol groups (universes) ------------------------------------------
+
+    def known_symbols(self) -> dict[str, int]:
+        """Every symbol in the instruments table, mapped to its id.
+
+        PAGED, and that is load-bearing: PostgREST caps an unpaged select at
+        1000 rows, while this table holds ~5,200. An unpaged read returned a
+        silently truncated set, which made universe resolution report real
+        constituents as "not found in instruments" — the exact class of
+        quietly-wrong data this codebase refuses elsewhere.
+        """
+        known: dict[str, int] = {}
+        start = 0
+        while True:
+            try:
+                resp = (
+                    self._table("instruments")
+                    .select("symbol,id")
+                    .order("id")
+                    .range(start, start + READ_PAGE_SIZE - 1)
+                    .execute()
+                )
+            except APIError as exc:
+                raise self._wrap(exc, "listing instruments") from exc
+            page = resp.data
+            known.update({row["symbol"]: int(row["id"]) for row in page})
+            if len(page) < READ_PAGE_SIZE:
+                return known
+            start += READ_PAGE_SIZE
+
+    def upsert_symbol_group(
+        self, name: str, *, source: str, as_of: date, description: str | None = None
+    ) -> int:
+        """Create or update a universe row; returns its id."""
+        row: dict[str, Any] = {
+            "name": name,
+            "source": source,
+            "constituents_as_of": as_of.isoformat(),
+            "is_system": source == "nse",
+        }
+        if description is not None:
+            row["description"] = description
+        try:
+            self._table("symbol_groups").upsert(row, on_conflict="name").execute()
+            resp = self._table("symbol_groups").select("id").eq("name", name).execute()
+        except APIError as exc:
+            raise self._wrap(exc, f"saving universe {name}") from exc
+        if not resp.data:
+            raise RuntimeError(f"symbol_group {name!r} vanished immediately after upsert")
+        return int(resp.data[0]["id"])
+
+    def replace_group_members(self, group_id: int, instrument_ids: list[int]) -> None:
+        """Set a universe membership to exactly `instrument_ids`.
+
+        Delete-then-insert rather than upsert: an index rebalance REMOVES
+        names, and an upsert would leave dropped constituents in the group
+        forever — quietly backtesting a universe that no longer exists.
+        """
+        try:
+            self._table("symbol_group_members").delete().eq("group_id", group_id).execute()
+            if instrument_ids:
+                self._table("symbol_group_members").insert(
+                    [{"group_id": group_id, "instrument_id": i} for i in instrument_ids]
+                ).execute()
+        except APIError as exc:
+            raise self._wrap(exc, f"writing members of group {group_id}") from exc
 
     # -- candles ------------------------------------------------------------
 
