@@ -16,6 +16,10 @@ htmlcov/
 backtest_results/
 *.csv
 !sample_data/*.csv
+# Universe snapshots are committed ON PURPOSE, not local artifacts: they are
+# the fallback that keeps universes resolving when NSE blocks its endpoints,
+# and the record of how old a membership was when a backtest used it.
+!data/universes/*.csv
 
 # --- OS / editor noise ------------------------------------------------------
 .DS_Store
