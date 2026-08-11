@@ -169,7 +169,34 @@ def fetch_table(
     return pd.DataFrame(rows)
 
 
-EMPTY_TABLES = ("trades", "positions", "run_audit", "strategies", "backtest_results")
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_optional_table(
+    _client, table: str, order_by: str | None = None, limit: int = 5000
+) -> pd.DataFrame:
+    """Like fetch_table, but an ABSENT table returns empty instead of raising.
+
+    Used for tables added by a later migration. Without this, a dashboard whose
+    database has not had the newest SQL applied would fail to load EVERY page,
+    which turns "one feature is unavailable" into "nothing works at all" - a
+    wildly disproportionate failure for a missing optional table.
+
+    Only a missing-relation error is swallowed. A bad key, a network failure or
+    anything else still raises, because those are real problems the existing
+    error handling explains properly.
+    """
+    try:
+        return fetch_table(_client, table, order_by=order_by, limit=limit)
+    except Exception as exc:
+        message = str(exc).lower()
+        if "does not exist" in message or "not find the table" in message:
+            return pd.DataFrame()
+        raise
+
+
+EMPTY_TABLES = (
+    "trades", "positions", "run_audit", "strategies", "backtest_results",
+    "backtest_runs",
+)
 
 
 def load_all(ctx: AppContext) -> dict[str, pd.DataFrame]:
@@ -187,6 +214,9 @@ def load_all(ctx: AppContext) -> dict[str, pd.DataFrame]:
             "run_audit": fetch_table(c, "run_audit", order_by="run_started_at", limit=200),
             "strategies": fetch_table(c, "strategies", order_by="name", desc=False),
             "backtest_results": fetch_table(c, "backtest_results", order_by="created_at"),
+            # Optional: added by sql/004. A database without it should lose
+            # the verdict panel, not the whole dashboard.
+            "backtest_runs": fetch_optional_table(c, "backtest_runs", order_by="created_at"),
         }
     except Exception as exc:
         message = str(exc)

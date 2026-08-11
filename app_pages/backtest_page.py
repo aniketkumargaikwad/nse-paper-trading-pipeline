@@ -10,21 +10,142 @@ import pandas as pd
 import streamlit as st
 
 from app_common import AppContext, empty_state, load_all, page_header, to_ist
+from metrics import MIN_PROFITABLE_SYMBOL_PCT
 
 KILL_RULE_LABELS = {
     "min_trades": "Enough trades (≥30)",
     "net_positive_after_costs": "Profitable after costs",
     "drawdown_within_cap": "Drawdown ≤ 20%",
-    "symbol_robustness": "Works on ≥3 symbols",
+    # Phase 2 made this a proportion. A fixed count of 3 was a 60% bar across
+    # five hand-picked symbols, but only a 6% bar on NIFTY50 — it would have
+    # passed a strategy losing money on 47 of 50 stocks.
+    "symbol_robustness": f"Profitable on ≥{MIN_PROFITABLE_SYMBOL_PCT:g}% of symbols",
 }
+
+
+
+def _render_verdict(runs: pd.DataFrame, batch_id) -> None:
+    """The strategy-level verdict for one batch.
+
+    Per-symbol rows answer "what happened on each stock". This answers the
+    question the universe was for: did the edge hold broadly, or did one lucky
+    name carry it? Those two disagree exactly when it matters most.
+    """
+    st.subheader("Strategy verdict")
+
+    if runs.empty:
+        st.info(
+            "No strategy-level verdict for this run.\n\n"
+            "If this is the first run since upgrading, apply "
+            "`sql/004_backtest_runs.sql` in the Supabase SQL editor and run the "
+            "backtest again. Per-instrument results below are unaffected."
+        )
+        return
+
+    mine = runs[runs["batch_id"] == batch_id]
+    if mine.empty:
+        st.info(
+            "This run predates the strategy-level verdict. Re-run the backtest "
+            "to get one; the per-instrument results below are unaffected."
+        )
+        return
+
+    for _, r in mine.iterrows():
+        passed = bool(r["passed_kill_rules"])
+        scope = (
+            f"universe **{r['universe_name']}** (list dated {r['constituents_as_of']})"
+            if r.get("universe_name")
+            else "an explicit instrument list"
+        )
+        resolved, requested = int(r["symbols_resolved"]), int(r["symbols_requested"])
+
+        with st.container(border=True):
+            st.markdown(
+                f"### {'✅' if passed else '❌'} {r['strategy_name']}"
+                f"  ·  {r['timeframe']}"
+            )
+            st.caption(f"Tested over {scope} — {resolved} of {requested} symbols.")
+
+            if resolved < requested:
+                missing = r.get("symbols_missing") or []
+                if isinstance(missing, str):
+                    missing = json.loads(missing)
+                st.warning(
+                    f"**{requested - resolved} symbol(s) produced no candles** "
+                    f"and are NOT in these numbers: {', '.join(missing[:10])}"
+                    + (" …" if len(missing) > 10 else "")
+                )
+
+            a, b, c, d = st.columns(4)
+            a.metric("Net P&L", f"₹{float(r['net_pnl']):,.0f}")
+            b.metric(
+                "Symbols profitable",
+                f"{int(r['symbols_profitable'])} / {resolved}",
+                help=(
+                    "The dispersion check. A big net P&L earned on very few "
+                    "symbols usually means one outlier carried the result."
+                ),
+            )
+            c.metric("Trades", int(r["total_trades"]))
+            d.metric("Max drawdown", f"{float(r['max_drawdown_pct']):.1f}%")
+
+            e, f_, g, h = st.columns(4)
+            e.metric(
+                "Sharpe (daily)", _fmt(r["sharpe_daily"]),
+                help=(
+                    "Return per unit of risk, annualised from daily P&L. "
+                    "Deliberately conservative: it assumes every symbol could "
+                    "hold a position at once, so it reads low rather than "
+                    "flattering. Blank means not measurable from this data."
+                ),
+            )
+            f_.metric("Sortino (daily)", _fmt(r["sortino_daily"]),
+                      help="Like Sharpe, but only counts downside volatility.")
+            g.metric("Expectancy / trade", f"₹{float(r['expectancy_per_trade']):,.0f}",
+                     help="Average net P&L per trade, after costs.")
+            h.metric("Median symbol", f"₹{float(r['median_symbol_pnl']):,.0f}",
+                     help="The typical stock's result — unmoved by one outlier.")
+
+            best, worst = r.get("best_symbol"), r.get("worst_symbol")
+            if best and worst:
+                st.caption(
+                    f"Best: **{best}** ₹{float(r['best_symbol_pnl']):,.0f}  ·  "
+                    f"Worst: **{worst}** ₹{float(r['worst_symbol_pnl']):,.0f}"
+                )
+
+            if int(r.get("entries_skipped") or 0):
+                st.caption(
+                    f"⚠️ {int(r['entries_skipped'])} entry signal(s) were skipped "
+                    "because the rupees-per-trade setting was below the share "
+                    "price. Those signals produced no trade."
+                )
+
+            if r.get("universe_name"):
+                st.caption(
+                    "ℹ️ Index membership is **today's**, applied to past data. "
+                    "Stocks join an index after they have already risen, so a "
+                    "result like this is flattered by survivorship."
+                )
+
+
+def _fmt(value) -> str:
+    """Blank for a null metric. A null means 'not measurable from this data' —
+    showing 0.00 would present an absent measurement as a measured zero."""
+    return "—" if value is None or pd.isna(value) else f"{float(value):.2f}"
 
 
 def _run_backtest_ui(ctx: AppContext, strategies: pd.DataFrame) -> None:
     """Launch backtest.py as a subprocess and stream its output."""
     st.markdown(
         "Runs the batch backtester against historical data and stores the "
-        "results below. Free-data limits apply: **15m/30m reach back only "
-        "~58 days**, so use **60m or day** for evidence you can trust."
+        "results below."
+    )
+    st.caption(
+        "How far back a run can reach depends on your data provider. Dhan "
+        "serves ~5 years of intraday history from the local candle store; the "
+        "free Yahoo feed serves only ~58 days of 15m/30m, in which case use "
+        "**60m or day** for evidence you can trust. The run prints a warning "
+        "when it has to shorten the window."
     )
     c1, c2 = st.columns([1, 2])
     years = c1.number_input("Years of history", 0.5, 10.0, value=2.0, step=0.5)
@@ -77,6 +198,7 @@ def render(ctx: AppContext) -> None:
             _run_backtest_ui(ctx, strategies)
 
     with tab_results:
+        runs = data.get("backtest_runs", pd.DataFrame())
         if results.empty:
             empty_state(
                 "No backtest results yet",
@@ -115,6 +237,8 @@ def render(ctx: AppContext) -> None:
                 "Common causes: too few trades (short free-data history on 15m), "
                 "or the flat ₹30 cost swallowing a small target (raise quantity)."
             )
+
+        _render_verdict(runs, chosen_batch)
 
         st.subheader("Per instrument")
         show = batch[[
