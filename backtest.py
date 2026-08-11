@@ -173,6 +173,12 @@ def simulate_with_skips(
     slip = slippage_pct / 100.0
     is_long = strategy.position_type == "long"
 
+    # Each candle's IST wall-clock time, computed once. Session rules are
+    # expressed in IST because that is how a trader thinks about the NSE day,
+    # while the frame itself is UTC.
+    session = strategy.session
+    ist_times = [ts.astimezone(IST).time() for ts in index]
+
     # Precompute every ATR series this strategy's risk config needs, ONCE,
     # rather than recomputing it per candle inside the loop below. A period
     # that exceeds the available history is a hard error here rather than a
@@ -237,7 +243,10 @@ def simulate_with_skips(
             close_position(i, opens[i], "signal")
         elif not in_pos and pending_entry_from is not None:
             fill_day = index[i].astimezone(IST).date()
-            if entries_by_day.get(fill_day, 0) < strategy.max_cycles_per_day:
+            if (
+                entries_by_day.get(fill_day, 0) < strategy.max_cycles_per_day
+                and session.allows_entry_at(ist_times[i])
+            ):
                 e_signal_ts = index[pending_entry_from]
                 e_fill_ts = index[i]
                 e_intended = opens[i]
@@ -329,6 +338,14 @@ def simulate_with_skips(
         # `i` as the "signal candle" for any ATR trailing spec — safe
         # because candle i is now fully closed, unlike the entry case where
         # ATR is read at the signal candle rather than the fill candle.
+        # ---- Square-off, checked AFTER the stop and target so it stays last
+        # in the engine's worst-case ordering: if a candle both hit the stop
+        # and reached square-off time, the stop is the worse outcome and the
+        # one that would really have fired first. Filling at this candle's
+        # open matches how every other exit here is priced.
+        if in_pos and session.square_off and ist_times[i] >= session.square_off:
+            close_position(i, opens[i], "square_off")
+
         if in_pos and strategy.risk.trailing_stop is not None:
             best_price = max(best_price, highs[i]) if is_long else min(best_price, lows[i])
             candidate = level_from_spec(

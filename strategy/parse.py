@@ -142,6 +142,25 @@ class SessionConfig:
     no_entry_after: time | None = None
     square_off: time | None = None
 
+    def allows_entry_at(self, fill_time: time) -> bool:
+        """May an entry FILL on a candle starting at `fill_time` (IST)?
+
+        Lives here rather than in either engine because both must apply the
+        identical rule — a strategy must not pass a backtest under one
+        interpretation and then trade under another.
+
+        `square_off` blocks entries from its time onward: a position opened
+        at or after square-off would be closed on the very candle it opened,
+        which is not a trade, just a pair of costs.
+        """
+        if self.no_entry_before and fill_time < self.no_entry_before:
+            return False
+        if self.no_entry_after and fill_time > self.no_entry_after:
+            return False
+        if self.square_off and fill_time >= self.square_off:
+            return False
+        return True
+
 
 @dataclass(frozen=True)
 class Strategy:

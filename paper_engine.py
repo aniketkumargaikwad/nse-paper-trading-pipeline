@@ -56,7 +56,7 @@ import signals
 # engine must compute a stop/target level identically, or the same strategy
 # could show a profitable backtest and a different live behaviour. Both the
 # hard-error-on-insufficient-history rule and the ATR-at-the-signal-candle
-# rule live in ONE place (backtest._level_from_spec) for exactly that reason.
+# rule live in ONE place (risk_levels) for exactly that reason.
 from risk_levels import RiskLevelError, build_atr_series, stop_and_target
 from config import IST, TIMEFRAME_MINUTES, UTC, Settings, get_settings
 from data_provider import create_data_client, describe_provider
@@ -246,6 +246,13 @@ def _process_combo(
             )
             return
         hit = _check_stop_target(position, closed.iloc[-1])
+        # Square-off is checked only when the stop and target did not fire, so
+        # it stays last in the same worst-case ordering the backtester uses:
+        # if a candle both hit the stop and reached square-off time, the stop
+        # is the worse outcome and the one that would really have fired first.
+        if hit is None and strategy.session.square_off is not None:
+            if last_ts.astimezone(IST).time() >= strategy.session.square_off:
+                hit = (float(closed["open"].iloc[-1]), "square_off")
         if hit is not None:
             intended, reason = hit
             trade = _build_trade(
@@ -333,6 +340,19 @@ def _process_combo(
         summary.skipped.append(
             f"{combo}: entry signal ignored — max_cycles_per_day "
             f"({strategy.max_cycles_per_day}) already used"
+        )
+        return
+
+    # Session rules bound the FILL candle, not the signal candle — the fill is
+    # when the position actually opens. Identical rule to the backtester's, so
+    # a strategy cannot pass a backtest under one interpretation and trade
+    # under another.
+    fill_time = next_open_ts.astimezone(IST).time()
+    if not strategy.session.allows_entry_at(fill_time):
+        summary.skipped.append(
+            f"{combo}: entry signal ignored — a fill at "
+            f"{fill_time:%H:%M} IST falls outside this strategy's session "
+            f"rules (no_entry_before/no_entry_after/square_off)"
         )
         return
 

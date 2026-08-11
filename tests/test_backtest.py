@@ -784,3 +784,114 @@ def test_each_trade_carries_its_own_quantity():
 
     assert len(trades) == 2
     assert [t.quantity for t in trades] == [100, 50]
+
+
+# ---------------------------------------------------------------------------
+# Session rules: entry window and intraday square-off.
+#
+# Square-off is the one that closes a real correctness gap — without it a
+# 15-minute strategy with a 0.7% stop can hold overnight, so the backtest
+# quietly includes gap risk the stop never protected against.
+# ---------------------------------------------------------------------------
+
+
+def session_strategy(*, session: dict, entry_above=105.0, exit_below=1.0):
+    doc = {
+        "version": 2,
+        "strategies": [{
+            "name": "sess-test", "enabled": True, "position_type": "long",
+            "timeframe": "15m", "instruments": ["NSE:RELIANCE"],
+            "entry": {"all": [{"indicator": "close", "operator": ">", "value": entry_above}]},
+            "exit": {"any": [{"indicator": "close", "operator": "<", "value": exit_below}]},
+            "risk": {
+                "stop_loss": {"type": "percent", "value": 40.0},
+                "target": {"type": "percent", "value": 40.0},
+            },
+            "sizing": {"type": "fixed_quantity", "quantity": 1},
+            "session": session,
+            "max_cycles_per_day": 10,
+        }],
+    }
+    return parse_strategies(doc)[0]
+
+
+def flat_day(n: int, start_hhmm=(9, 15)):
+    """n candles of identical, signal-firing price from a given IST start."""
+    start = datetime(2026, 7, 16, *start_hhmm, tzinfo=IST)
+    return make_df([(110, 110, 110, 110)] * n, start=start)
+
+
+def ist_hhmm(ts) -> str:
+    return ts.astimezone(IST).strftime("%H:%M")
+
+
+def test_no_entry_before_blocks_the_early_fill():
+    # 09:15 signal would fill 09:30; the window pushes the first fill to 10:00.
+    df = flat_day(8)                       # 09:15 .. 11:00
+    strat = session_strategy(session={"no_entry_before": "10:00"})
+    trades = simulate(df, strat, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert trades, "an entry should eventually fill once the window opens"
+    assert ist_hhmm(trades[0].entry_fill_ts) == "10:00"
+
+
+def test_no_entry_after_blocks_the_late_fill():
+    # Every candle signals, but all fills land after the cutoff.
+    df = make_df([(110, 110, 110, 110)] * 4,
+                 start=datetime(2026, 7, 16, 14, 30, tzinfo=IST))
+    strat = session_strategy(session={"no_entry_after": "14:00"})
+    assert simulate(df, strat, slippage_pct=0.0, cost_per_trade_inr=0.0) == []
+
+
+def test_the_window_applies_to_the_fill_candle_not_the_signal_candle():
+    """A 09:45 signal fills at 10:00 and is allowed by no_entry_before 10:00."""
+    df = flat_day(6)                       # 09:15 .. 10:30
+    strat = session_strategy(session={"no_entry_before": "10:00"})
+    trades = simulate(df, strat, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert ist_hhmm(trades[0].entry_signal_ts) == "09:45"   # signal before
+    assert ist_hhmm(trades[0].entry_fill_ts) == "10:00"     # fill at the bound
+
+
+def test_square_off_closes_at_the_first_candle_at_or_after_it():
+    # 09:15 .. 15:30; entry fills 09:30 and nothing else would ever exit it.
+    df = flat_day(25)
+    strat = session_strategy(session={"square_off": "15:15"})
+    trades = simulate(df, strat, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert trades[0].exit_reason == "square_off"
+    assert ist_hhmm(trades[0].exit_fill_ts) == "15:15"
+
+
+def test_square_off_means_no_position_survives_the_day():
+    df = flat_day(25)
+    strat = session_strategy(session={"square_off": "15:15"})
+    for t in simulate(df, strat, slippage_pct=0.0, cost_per_trade_inr=0.0):
+        assert t.entry_fill_ts.astimezone(IST).date() == t.exit_fill_ts.astimezone(IST).date()
+
+
+def test_square_off_also_blocks_a_late_entry():
+    """A position opened at or after square-off is not a trade, just costs."""
+    df = make_df([(110, 110, 110, 110)] * 4,
+                 start=datetime(2026, 7, 16, 15, 0, tzinfo=IST))
+    strat = session_strategy(session={"square_off": "15:15"})
+    trades = simulate(df, strat, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert all(ist_hhmm(t.entry_fill_ts) < "15:15" for t in trades)
+
+
+def test_no_session_block_leaves_previous_behaviour_unchanged():
+    df = flat_day(25)
+    with_none = session_strategy(session={})
+    trades = simulate(df, with_none, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert all(t.exit_reason != "square_off" for t in trades)
+
+
+def test_a_stop_on_the_square_off_candle_still_wins():
+    """Worst-case ordering: the stop would really have fired first."""
+    start = datetime(2026, 7, 16, 14, 45, tzinfo=IST)
+    # 14:45 signal -> 15:00 fill @110; 15:15 candle craters through the stop.
+    df = make_df([
+        (110, 110, 110, 110),
+        (110, 110, 110, 110),
+        (110, 110, 10, 10),
+    ], start=start)
+    strat = session_strategy(session={"square_off": "15:15"})
+    trades = simulate(df, strat, slippage_pct=0.0, cost_per_trade_inr=0.0)
+    assert trades[0].exit_reason == "stop_loss"
