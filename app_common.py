@@ -80,6 +80,73 @@ def get_config_value(name: str) -> str:
     return os.environ.get(name, "").strip()
 
 
+def require_login() -> bool:
+    """Password-gate the app when APP_PASSWORD is set. Returns True to proceed.
+
+    Edit mode is granted by the SERVICE-ROLE Supabase key, which is full
+    access to the database. A deployed dashboard therefore has to carry that
+    key to be useful at all - and without a gate, anyone who finds the URL
+    could create strategies, flip them live, and read every trade.
+
+    So the rule is: if APP_PASSWORD is set, ask for it. Local runs usually
+    have no APP_PASSWORD and are unaffected, which keeps development friction
+    at zero; a HOSTED deployment must set one, and warns loudly if it did not.
+
+    This is a single shared password, not user accounts. It suits one operator
+    with one dashboard, which is what this is. It is not suitable for handing
+    out to several people with different permissions.
+    """
+    expected = get_config_value("APP_PASSWORD")
+
+    if not expected:
+        # No password configured. Fine locally; dangerous anywhere public, so
+        # say so rather than failing open in silence.
+        if _looks_hosted():
+            st.error(
+                "**This deployment has no APP_PASSWORD set.**\n\n"
+                "The dashboard holds a service-role database key, so anyone "
+                "with this URL could create or delete strategies. Set an "
+                "`APP_PASSWORD` environment variable on the host and redeploy."
+            )
+            return False
+        return True
+
+    if st.session_state.get("_authenticated"):
+        return True
+
+    st.markdown("### 📈 Trading Workbench")
+    st.caption("Enter the dashboard password to continue.")
+    with st.form("login"):
+        supplied = st.text_input("Password", type="password")
+        if st.form_submit_button("Sign in", type="primary"):
+            # compare_digest avoids leaking the answer through response timing.
+            if secrets_compare(supplied, expected):
+                st.session_state["_authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    return False
+
+
+def secrets_compare(a: str, b: str) -> bool:
+    """Constant-time string comparison."""
+    import hmac
+
+    return hmac.compare_digest(str(a), str(b))
+
+
+def _looks_hosted() -> bool:
+    """Best-effort: are we running on a host rather than someone's laptop?
+
+    Deliberately errs toward "hosted" only on clear signals, so a local run is
+    never blocked by a false positive.
+    """
+    return any(
+        os.environ.get(name)
+        for name in ("RAILWAY_ENVIRONMENT", "RENDER", "FLY_APP_NAME", "DYNO")
+    )
+
+
 @st.cache_resource(show_spinner=False)
 def _make_client(url: str, key: str):
     from supabase import create_client

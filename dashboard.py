@@ -47,7 +47,12 @@ def _app() -> None:  # pragma: no cover — exercised by `streamlit run`
         initial_sidebar_state="expanded",
     )
 
-    from app_common import get_context
+    from app_common import get_context, require_login
+
+    # Before ANY data is fetched or rendered: a deployed dashboard carries
+    # a service-role key, so the gate has to come first.
+    if not require_login():
+        st.stop()
 
     ctx = get_context()
     if ctx is None:
