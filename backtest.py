@@ -58,13 +58,17 @@ from metrics import (
     MIN_TRADES,
     ComboMetrics,
     compute_metrics,
+    dispersion_metrics,
     evaluate_kill_rules,
+    pooled_metrics,
+    risk_metrics,
 )
 from risk_levels import build_atr_series, level_from_spec
 from config import IST, UTC, Settings, get_settings
 from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
 from kite_client import KiteClientError, TokenExpiredError
+from universes import UniverseError
 from strategy_schema import (
     Strategy,
     StopSpec,
@@ -373,6 +377,150 @@ def simulate(
 
 
 
+@dataclass(frozen=True)
+class ResolvedSymbols:
+    """What a strategy will actually be tested over.
+
+    Carries the universe name and the constituent-list date so the run record
+    can state what the result was computed over and how old that membership
+    was. Index membership is TODAY's applied to past data, so results are
+    flattered by survivorship - that caveat has to travel with the number.
+    """
+
+    symbols: tuple[str, ...]
+    universe_name: str | None
+    constituents_as_of: str | None
+
+
+def resolve_strategy_symbols(strategy: Strategy, store: Any) -> ResolvedSymbols:
+    """Turn a strategy's universe or instrument list into symbols to test.
+
+    A universe resolving to nothing is a HARD ERROR. Returning an empty list
+    would produce a run that reports success having tested no stocks at all -
+    indistinguishable from a strategy that simply found no signals, which is
+    exactly the silent nothing this engine used to produce for every universe
+    strategy.
+
+    Symbols come back sorted so two runs of the same universe are ordered
+    identically and their results can be compared line by line.
+    """
+    if not strategy.universe:
+        return ResolvedSymbols(
+            symbols=tuple(sorted(strategy.instruments)),
+            universe_name=None,
+            constituents_as_of=None,
+        )
+
+    if store is None:
+        raise UniverseError(
+            f"strategy {strategy.name!r} uses universe {strategy.universe!r}, "
+            "but universes live in the database and --no-db skips it. Drop "
+            "--no-db, or test the strategy with an explicit instruments: list."
+        )
+
+    symbols, as_of = store.universe_members(strategy.universe)
+    if not symbols:
+        raise UniverseError(
+            f"strategy {strategy.name!r} uses universe "
+            f"{strategy.universe!r}, which resolved to zero symbols. Refusing "
+            "to run: the result would report success having tested nothing. "
+            "Populate it with scripts/refresh_universes.py."
+        )
+    return ResolvedSymbols(
+        symbols=tuple(sorted(symbols)),
+        universe_name=strategy.universe,
+        constituents_as_of=as_of,
+    )
+
+
+def build_run_row(
+    *,
+    batch_id: uuid.UUID,
+    strategy: Strategy,
+    resolved: "ResolvedSymbols",
+    per_symbol: dict[str, list[SimTrade]],
+    start_date: str,
+    end_date: str,
+    trading_days: int,
+    entries_skipped: int,
+    missing: set[str],
+) -> dict[str, Any]:
+    """One strategy-level row: the pooled verdict plus how it was distributed.
+
+    Capital base is notional_per_trade x symbols traded - the worst case under
+    per-symbol independent sizing, since any symbol could hold a position at
+    any time. It biases the daily Sharpe LOW rather than flattering, which is
+    the correct direction for a number a deploy decision rests on.
+    """
+    traded = [s for s in resolved.symbols if s not in missing]
+
+    if strategy.sizing.type == "notional":
+        capital_base = float(strategy.sizing.notional_per_trade) * max(len(traded), 1)
+    else:
+        all_trades = [t for ts in per_symbol.values() for t in ts]
+        capital_base = (
+            max(t.entry_price * t.quantity for t in all_trades) if all_trades else 0.0
+        )
+
+    pooled = pooled_metrics(per_symbol, capital_base=capital_base)
+    spread = dispersion_metrics(per_symbol)
+    risk = risk_metrics(
+        per_symbol, capital_base=capital_base, trading_days=trading_days
+    )
+
+    combo = ComboMetrics(
+        total_trades=pooled.total_trades,
+        winning_trades=pooled.winning_trades,
+        net_pnl=pooled.net_pnl,
+        win_rate_pct=pooled.win_rate_pct,
+        profit_factor=pooled.profit_factor,
+        max_drawdown_pct=pooled.max_drawdown_pct,
+        longest_losing_streak=pooled.longest_losing_streak,
+    )
+    passed, flags = evaluate_kill_rules(
+        combo, spread.symbols_profitable, spread.symbols_traded
+    )
+
+    return {
+        "batch_id": str(batch_id),
+        "strategy_name": strategy.name,
+        "timeframe": strategy.timeframe,
+        "start_date": start_date,
+        "end_date": end_date,
+        "universe_name": resolved.universe_name,
+        "constituents_as_of": resolved.constituents_as_of,
+        # Requested is what the universe listed; resolved is what actually
+        # produced candles. Reporting only the resolved count would quietly
+        # present a 47-symbol result as a NIFTY50 one.
+        "symbols_requested": len(resolved.symbols),
+        "symbols_resolved": len(traded),
+        "symbols": traded,
+        "symbols_missing": sorted(missing),
+        "total_trades": pooled.total_trades,
+        "winning_trades": pooled.winning_trades,
+        "net_pnl": pooled.net_pnl,
+        "win_rate_pct": pooled.win_rate_pct,
+        "profit_factor": pooled.profit_factor,
+        "max_drawdown_pct": pooled.max_drawdown_pct,
+        "longest_losing_streak": pooled.longest_losing_streak,
+        "entries_skipped": entries_skipped,
+        "symbols_profitable": spread.symbols_profitable,
+        "median_symbol_pnl": spread.median_symbol_pnl,
+        "best_symbol": spread.best_symbol,
+        "best_symbol_pnl": spread.best_symbol_pnl,
+        "worst_symbol": spread.worst_symbol,
+        "worst_symbol_pnl": spread.worst_symbol_pnl,
+        "capital_base": round(capital_base, 4),
+        "sharpe_daily": risk.sharpe_daily,
+        "sortino_daily": risk.sortino_daily,
+        "cagr_pct": risk.cagr_pct,
+        "expectancy_per_trade": risk.expectancy_per_trade,
+        "system_quality_number": risk.system_quality_number,
+        "passed_kill_rules": passed,
+        "kill_rule_flags": flags,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Orchestration (I/O)
 # ---------------------------------------------------------------------------
@@ -386,11 +534,12 @@ def run_backtest(
     strategies: list[Strategy],
     years: float,
     now_utc: datetime | None = None,
-) -> tuple[uuid.UUID, list[dict[str, Any]]]:
+) -> tuple[uuid.UUID, list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch, simulate, and score every strategy x instrument combination.
 
-    Returns (batch_id, result_rows). Rows are shaped exactly like the
-    backtest_results table so they can be inserted or written to CSV as-is.
+    Returns (batch_id, result_rows, run_rows). result_rows are shaped like
+    the backtest_results table (one per strategy x instrument); run_rows
+    like backtest_runs (one per strategy, the pooled verdict).
     A fetch failure on one instrument skips that combination with a warning
     instead of killing the whole batch.
     """
@@ -399,10 +548,18 @@ def run_backtest(
     batch_id = uuid.uuid4()
     today_ist = now.astimezone(IST).date()
 
-    all_instruments = sorted({i for s in strategies for i in s.instruments})
+    # Resolved BEFORE any fetching, so an unknown or empty universe fails
+    # immediately rather than after minutes of downloading.
+    resolved_by_strategy = {
+        s.name: resolve_strategy_symbols(s, store) for s in strategies
+    }
+    all_instruments = sorted(
+        {sym for r in resolved_by_strategy.values() for sym in r.symbols}
+    )
     tokens = client.resolve_instrument_tokens(all_instruments, today_ist)
 
     rows: list[dict[str, Any]] = []
+    run_rows: list[dict[str, Any]] = []
     requested_days = math.ceil(years * 365.25)
     for strategy in strategies:
         print(f"\n=== {strategy.name} ({strategy.timeframe}, {strategy.position_type}) ===")
@@ -423,8 +580,19 @@ def run_backtest(
             )
 
         per_symbol: dict[str, tuple[ComboMetrics, pd.DataFrame]] = {}
+        trades_by_symbol: dict[str, list[SimTrade]] = {}
+        missing: set[str] = set()
+        entries_skipped = 0
+        trading_dates: set = set()
 
-        for instrument in strategy.instruments:
+        resolved = resolved_by_strategy[strategy.name]
+        if resolved.universe_name:
+            print(
+                f"  universe {resolved.universe_name}: "
+                f"{len(resolved.symbols)} symbols "
+                f"(list dated {resolved.constituents_as_of})"
+            )
+        for instrument in resolved.symbols:
             try:
                 df = client.fetch_historical_candles(
                     tokens[instrument], strategy.timeframe, from_utc, now,
@@ -432,9 +600,11 @@ def run_backtest(
                 )
             except KiteClientError as exc:
                 print(f"  WARN  {instrument}: fetch failed, skipping — {exc}", file=sys.stderr)
+                missing.add(instrument)
                 continue
             if df.empty:
                 print(f"  WARN  {instrument}: no candles returned, skipping", file=sys.stderr)
+                missing.add(instrument)
                 continue
             result = simulate_with_skips(
                 df, strategy,
@@ -443,6 +613,9 @@ def run_backtest(
             )
             metrics = compute_metrics(result.trades)
             per_symbol[instrument] = (metrics, df)
+            trades_by_symbol[instrument] = result.trades
+            entries_skipped += len(result.skipped)
+            trading_dates.update(ts.astimezone(IST).date() for ts in df.index)
             print(
                 f"  {instrument:<16} trades={metrics.total_trades:>4} "
                 f"net=₹{metrics.net_pnl:>10.2f} win%={metrics.win_rate_pct:>5.1f} "
@@ -456,7 +629,7 @@ def run_backtest(
 
         profitable = sum(1 for m, _ in per_symbol.values() if m.net_pnl > 0)
         for instrument, (metrics, df) in per_symbol.items():
-            passed, flags = evaluate_kill_rules(metrics, profitable, len(strategy.instruments))
+            passed, flags = evaluate_kill_rules(metrics, profitable, len(resolved.symbols))
             rows.append(
                 {
                     "batch_id": str(batch_id),
@@ -476,7 +649,30 @@ def run_backtest(
                     "kill_rule_flags": flags,
                 }
             )
-    return batch_id, rows
+        if per_symbol:
+            frames = [df for _, df in per_symbol.values()]
+            run_row = build_run_row(
+                batch_id=batch_id,
+                strategy=strategy,
+                resolved=resolved,
+                per_symbol=trades_by_symbol,
+                start_date=min(f.index[0] for f in frames).astimezone(IST).date().isoformat(),
+                end_date=max(f.index[-1] for f in frames).astimezone(IST).date().isoformat(),
+                trading_days=len(trading_dates),
+                entries_skipped=entries_skipped,
+                missing=missing,
+            )
+            run_rows.append(run_row)
+            sharpe = run_row["sharpe_daily"]
+            print(
+                f"  VERDICT  net=₹{run_row['net_pnl']:,.0f}  "
+                f"profitable on {run_row['symbols_profitable']}/"
+                f"{run_row['symbols_resolved']} symbols  "
+                f"sharpe={sharpe if sharpe is not None else 'n/a'}  "
+                f"{'PASSED' if run_row['passed_kill_rules'] else 'FAILED'} kill rules"
+            )
+
+    return batch_id, rows, run_rows
 
 
 def write_csv(batch_id: uuid.UUID, rows: list[dict[str, Any]], now_utc: datetime) -> Path:
@@ -536,7 +732,7 @@ def main(argv: list[str] | None = None) -> int:
         client = create_data_client(settings, token_store, started.astimezone(IST).date())
         print(f"data provider: {describe_provider(settings)}")
 
-        batch_id, rows = run_backtest(
+        batch_id, rows, run_rows = run_backtest(
             settings=settings, store=store, client=client,
             strategies=strategies, years=args.years,
         )
@@ -547,12 +743,15 @@ def main(argv: list[str] | None = None) -> int:
         if store is not None:
             inserted = store.insert_backtest_results(rows)
             print(f"Supabase: inserted {inserted} backtest_results rows (batch {batch_id})")
+            inserted_runs = store.insert_backtest_runs(run_rows)
+            print(f"Supabase: inserted {inserted_runs} backtest_runs row(s)")
             store.write_run_audit(
                 run_type="backtest", status="ok",
                 run_started_at=started, run_finished_at=datetime.now(tz=UTC),
                 reason=f"batch {batch_id}",
                 details={
                     "combinations": len(rows),
+                    "strategies": len(run_rows),
                     "passed_kill_rules": sum(1 for r in rows if r["passed_kill_rules"]),
                     "years": args.years,
                 },

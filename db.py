@@ -33,6 +33,7 @@ from postgrest.exceptions import APIError
 from supabase import Client, create_client
 
 from config import UTC, Settings
+from universes import UniverseError
 from strategy_schema import (
     CURRENT_VERSION,
     MigrationError,
@@ -303,6 +304,57 @@ class SupabaseStore:
         except APIError as exc:
             raise self._wrap(exc, "listing universes") from exc
         return {row["name"] for row in resp.data}
+
+    def universe_members(self, name: str) -> tuple[tuple[str, ...], str | None]:
+        """(symbols, constituents_as_of) for a named universe.
+
+        PAGED, and that is load-bearing: PostgREST caps an unpaged select at
+        1000 rows, and NIFTY500 has more members than that would return. An
+        unpaged read would silently shrink the universe being tested and
+        present the result as if it covered the whole index.
+        """
+        try:
+            groups = (
+                self._table("symbol_groups")
+                .select("id,constituents_as_of")
+                .eq("name", name)
+                .execute()
+            )
+        except APIError as exc:
+            raise self._wrap(exc, f"reading universe {name}") from exc
+        if not groups.data:
+            known = ", ".join(sorted(self.known_universe_names())) or "(none)"
+            raise UniverseError(
+                f"unknown universe {name!r}. Available: {known}. "
+                "Create it with scripts/refresh_universes.py."
+            )
+        group_id = groups.data[0]["id"]
+        as_of = groups.data[0].get("constituents_as_of")
+
+        instrument_ids: list[int] = []
+        start = 0
+        while True:
+            page = (
+                self._table("symbol_group_members")
+                .select("instrument_id")
+                .eq("group_id", group_id)
+                .order("instrument_id")
+                .range(start, start + 999)
+                .execute()
+            ).data
+            instrument_ids += [r["instrument_id"] for r in page]
+            if len(page) < 1000:
+                break
+            start += 1000
+
+        symbols: list[str] = []
+        for i in range(0, len(instrument_ids), 200):
+            chunk = instrument_ids[i:i + 200]
+            rows = (
+                self._table("instruments").select("symbol").in_("id", chunk).execute()
+            ).data
+            symbols += [r["symbol"] for r in rows]
+        return tuple(sorted(symbols)), as_of
 
     def save_strategy_document(
         self, doc: Mapping[str, Any], *, raw_source: str | None = None
@@ -637,6 +689,17 @@ class SupabaseStore:
             raise self._wrap(exc, "updating the instrument cache") from exc
 
     # -- backtest results -----------------------------------------------------------
+
+    def insert_backtest_runs(self, rows: Iterable[Mapping[str, Any]]) -> int:
+        """Bulk-insert strategy-level run rows (shaped by backtest.py)."""
+        payload = [dict(r) for r in rows]
+        if not payload:
+            return 0
+        try:
+            self._table("backtest_runs").insert(payload).execute()
+        except APIError as exc:
+            raise self._wrap(exc, "inserting backtest runs") from exc
+        return len(payload)
 
     def insert_backtest_results(self, rows: Iterable[Mapping[str, Any]]) -> int:
         """Bulk-insert backtest result rows (shaped by backtest.py). Returns count."""
