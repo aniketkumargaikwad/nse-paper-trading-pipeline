@@ -211,6 +211,48 @@ successfully.** That is correct. The engine refuses to trade outside 09:15–
 
 Working exactly as intended. Go back to Step 3 and add `APP_PASSWORD`.
 
+### "This site can't be reached" / `DNS_PROBE_FINISHED_NXDOMAIN`
+
+**Your app is almost certainly fine.** This error means your computer could
+not look up the address at all — it never reached the server, so nothing about
+the deployment is implicated. If Railway shows the service as **Online**, it
+is running.
+
+Indian ISP resolvers (Jio, Airtel) are often slow to pick up newly created
+subdomains, which is exactly what a fresh Railway domain is.
+
+Confirm it, then fix it:
+
+1. **Flush the local cache.** PowerShell as Administrator:
+
+   ```
+   ipconfig /flushdns
+   ```
+
+2. **Test on your phone with WiFi OFF**, using mobile data. If it loads there
+   but not on your PC, the deployment is proven good and the problem is your
+   home network's DNS.
+
+3. **Point your PC at a public DNS.** Settings → Network & Internet → your
+   network → Hardware properties → DNS server assignment → **Edit** → switch
+   Automatic to **Manual** → turn IPv4 on → Preferred `1.1.1.1`, Alternate
+   `8.8.8.8` → Save. Flush again.
+
+To check whether the server is really up regardless of your DNS, from
+PowerShell:
+
+```
+curl.exe -s -o NUL -w "%{http_code}" https://YOUR-DOMAIN.up.railway.app
+```
+
+`200` means the app is serving and only your name lookup was broken.
+
+### Two domains appeared
+
+Clicking **Generate Domain** twice creates two. Keep the one that shows a
+**Port** underneath it and delete the other with the bin icon — a domain with
+no port mapping cannot route to the app.
+
 ### "Application failed to respond" / 502
 
 Usually still building, or it crashed at startup.
