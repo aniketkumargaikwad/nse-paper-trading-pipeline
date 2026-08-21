@@ -103,39 +103,38 @@ That is Step 3.
    ```
 
 7. **Change one line before saving.** If your `.env` contains
-   `CANDLE_STORE=parquet`, edit it here to read:
+   `CANDLE_STORE=parquet`, add this line beneath it:
 
    ```
-   CANDLE_STORE=supabase
+   CANDLE_ROOT=supabase://candles
    ```
 
-   This is the one setting that must differ between your laptop and the
-   server. Why is explained just below.
+   On your laptop the price history sits in a folder. On the server it has to
+   come from Supabase Storage instead. Why is explained just below.
 
 8. Click **Save** / **Update Variables**.
 
 Railway restarts the app automatically with the new values.
 
-> ### Why `CANDLE_STORE` differs on the server
+> ### Why the server needs `CANDLE_ROOT`
 >
-> Parquet is much faster on your laptop — about 34x — but it stores price
-> history as files on disk, and Railway wipes its filesystem on every deploy.
-> Those files are also deliberately kept out of the repository (they are
-> regenerable data, not code), so they never reach the server at all.
+> Price history is stored as compressed files rather than database rows —
+> about 5x smaller and dramatically faster to read.
 >
-> A server set to `parquet` would therefore find nothing and re-download
-> millions of price bars from Dhan on every single deploy. The app now refuses
-> to start in that state and tells you why, rather than doing it quietly.
+> On your laptop those files live in a folder (`data/candles`). That cannot
+> work on the server: Railway wipes its filesystem on every deploy, and the
+> files are deliberately kept out of the repository because they are
+> regenerable data, not code. A server pointed at a folder would find nothing
+> and re-download millions of price bars on every deploy. The app refuses to
+> start in that state rather than doing it quietly.
 >
-> Your price history is still in Supabase — the Parquet migration copied it
-> rather than moving it — so `supabase` works on the server today.
+> `supabase://candles` points it at **Supabase Storage** instead — a different
+> quota from your database (1 GB of files alongside 500 MB of rows on the free
+> plan), on the account you already have. Your history is about 68 MB, so it
+> fits comfortably and stops competing with your database for space.
 >
-> To get Parquet's speed on the server too, the files need to live in object
-> storage (Cloudflare R2) with `CANDLE_ROOT=s3://...`. That is not set up yet,
-> and is not needed for anything to work.
->
-> Different values in the two places is normal and correct: the same code and
-> the same data, read from wherever each machine can reach it.
+> Measured on the same symbol: 1.3 seconds from Supabase Storage against 10.2
+> seconds reading the same candles as database rows.
 
 > **If you cannot find Raw Editor**, add them one at a time instead: click
 > **New Variable**, type the name in the first box (e.g. `SUPABASE_URL`), the
