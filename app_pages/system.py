@@ -27,7 +27,26 @@ def render(ctx: AppContext) -> None:
         "publicly reachable app."
     )
 
-    provider = "unknown"
+    # Read the CONFIGURATION rather than inferring from an audit row. The
+    # previous version searched run_audit for a "provider" key that only the
+    # paper engine ever wrote - and the paper engine had never run - so this
+    # reported "unknown" permanently regardless of how the app was set up.
+    # What provider the app is configured to use is a fact available right
+    # now; it should not depend on something having run.
+    from config import get_settings
+
+    try:
+        settings = get_settings()
+        configured = settings.data_provider
+        store_mode = settings.candle_store
+    except Exception:                                   # noqa: BLE001
+        configured, store_mode = "unknown", "unknown"
+
+    c2.metric("Data provider", configured)
+
+    # What the last run ACTUALLY used, which can differ from configuration if
+    # the engine runs elsewhere (a scheduled job with its own environment).
+    last_used = None
     if not audits.empty:
         for _, row in audits.iterrows():
             details = row.get("details")
@@ -37,14 +56,16 @@ def render(ctx: AppContext) -> None:
                 except ValueError:
                     details = None
             if isinstance(details, dict) and details.get("provider"):
-                provider = details["provider"]
+                last_used = details["provider"]
                 break
-    c2.metric("Data provider", provider)
-    c2.caption(
-        "yfinance = free (no keys, no daily login). kite = paid Kite Connect."
-        if provider != "unknown" else
-        "Shown after the engine's next successful run."
-    )
+
+    if last_used and last_used != configured:
+        c2.caption(
+            f"⚠️ configured here, but the last run used **{last_used}** — the "
+            "engine may have a different environment."
+        )
+    else:
+        c2.caption(f"candles: {store_mode}")
 
     c3.metric("Supabase", "connected")
     c3.caption(ctx.url.replace("https://", ""))

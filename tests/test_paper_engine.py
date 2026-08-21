@@ -535,3 +535,52 @@ def test_entry_with_trailing_stop_is_refused_not_silently_ignored() -> None:
     assert summary.entries == 0
     assert len(store.positions) == 0
     assert any("trailing_stop" in note for note in summary.skipped)
+
+
+# ---------------------------------------------------------------------------
+# An uncovered year is NOT a year without holidays.
+#
+# nse_holidays.yaml listed only 2026. From 1 Jan 2027 every NSE holiday would
+# have read as an ordinary trading day, and the engine would have recorded
+# fills on days the market never opened. NSE publishes its calendar annually
+# and many dates are lunar, so they cannot be derived - refusing is the only
+# honest option.
+# ---------------------------------------------------------------------------
+
+
+def test_an_uncovered_year_is_refused_not_assumed_open() -> None:
+    from market_calendar import covered_years, session_gate
+
+    years = covered_years(str(REPO_ROOT / "nse_holidays.yaml"))
+    wednesday_2099 = datetime(2099, 6, 10, 11, 0, tzinfo=IST)
+    run, reason = session_gate(wednesday_2099, frozenset(), years)
+    assert run is False
+    assert "2099" in reason
+    assert "nse_holidays.yaml" in reason
+
+
+def test_a_covered_year_still_trades_normally() -> None:
+    from market_calendar import covered_years, load_holidays, session_gate
+
+    path = str(REPO_ROOT / "nse_holidays.yaml")
+    years = covered_years(path)
+    assert 2026 in years, "the shipped file should cover 2026"
+    ordinary = datetime(2026, 6, 10, 11, 0, tzinfo=IST)
+    run, reason = session_gate(ordinary, load_holidays(path), years)
+    assert run is True and reason == "ok"
+
+
+def test_omitting_known_years_keeps_the_old_behaviour() -> None:
+    """Existing callers must not change meaning just because the parameter
+    exists; only passing it opts into the stricter check."""
+    from market_calendar import session_gate
+
+    ordinary = datetime(2099, 6, 10, 11, 0, tzinfo=IST)
+    run, _ = session_gate(ordinary, frozenset())
+    assert run is True
+
+
+def test_covered_years_survives_a_missing_file() -> None:
+    from market_calendar import covered_years
+
+    assert covered_years("does-not-exist.yaml") == frozenset()

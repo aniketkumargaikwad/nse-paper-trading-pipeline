@@ -829,6 +829,10 @@ def main(argv: list[str] | None = None) -> int:
                 run_started_at=started, run_finished_at=datetime.now(tz=UTC),
                 reason=f"batch {batch_id}",
                 details={
+                    # Which provider produced these candles. Without it a
+                    # stored result cannot say where its data came from.
+                    "provider": settings.data_provider,
+                    "candle_store": settings.candle_store,
                     "combinations": len(rows),
                     "strategies": len(run_rows),
                     "passed_kill_rules": sum(1 for r in rows if r["passed_kill_rules"]),

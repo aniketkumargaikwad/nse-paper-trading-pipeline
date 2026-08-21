@@ -26,6 +26,30 @@ class CalendarError(RuntimeError):
     """Raised when the holiday file is missing or malformed."""
 
 
+def covered_years(path: str = DEFAULT_HOLIDAYS_FILE) -> frozenset[int]:
+    """Years the holiday file declares, whether or not they list any dates.
+
+    Load-bearing: an absent year is NOT a year without holidays. Treating it
+    as one is how an engine ends up trading on Diwali.
+    """
+    import yaml as _yaml
+
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = _yaml.safe_load(fh)
+    except FileNotFoundError:
+        return frozenset()
+    if not isinstance(data, dict) or "holidays" not in data:
+        return frozenset()
+    years = set()
+    for year in (data["holidays"] or {}):
+        try:
+            years.add(int(year))
+        except (TypeError, ValueError):
+            continue
+    return frozenset(years)
+
+
 def load_holidays(path: str = DEFAULT_HOLIDAYS_FILE) -> frozenset[date]:
     """Load the holiday list, validating shape and types loudly."""
     file = Path(path)
@@ -68,11 +92,20 @@ def is_trading_day(d: date, holidays: frozenset[date]) -> bool:
     return d.weekday() < 5 and d not in holidays
 
 
-def session_gate(now_ist: datetime, holidays: frozenset[date]) -> tuple[bool, str]:
+def session_gate(
+    now_ist: datetime,
+    holidays: frozenset[date],
+    known_years: frozenset[int] | None = None,
+) -> tuple[bool, str]:
     """Should the engine run right now? Returns (run, human-readable reason).
 
     The reason string is what lands in the run_audit row on skips, so it is
     written for the user reading the dashboard, not for code.
+
+    `known_years` is which years the holiday file covers. Pass it and a date
+    in an uncovered year is refused rather than assumed to be a trading day.
+    Omitting it keeps the old, more dangerous behaviour and exists only so
+    existing callers and tests are not broken by this change.
     """
     if now_ist.tzinfo is None:
         raise ValueError("session_gate needs an aware IST datetime")
@@ -84,6 +117,19 @@ def session_gate(now_ist: datetime, holidays: frozenset[date]) -> tuple[bool, st
         return False, "market closed: Sunday"
     if today in holidays:
         return False, f"market closed: NSE holiday ({today.isoformat()})"
+
+    # An uncovered year is not a year without holidays. NSE publishes its
+    # calendar annually and many dates are lunar, so they cannot be derived -
+    # and a missing year previously read as "no holidays at all", which would
+    # have the engine trading on Diwali and recording fills that never
+    # happened. Refusing costs one skipped session; the alternative silently
+    # corrupts the paper-trading record.
+    if known_years is not None and today.year not in known_years:
+        return False, (
+            f"refusing to trade: no NSE holiday calendar for {today.year}. "
+            f"Add a '{today.year}:' block to nse_holidays.yaml from the "
+            "official NSE holiday list, then re-run."
+        )
 
     t = now_ist.time()
     if t < ENGINE_WINDOW_START:

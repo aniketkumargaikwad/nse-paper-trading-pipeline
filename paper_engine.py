@@ -68,7 +68,7 @@ from kite_client import (
     drop_forming_candle,
     lookback_start_utc,
 )
-from market_calendar import load_holidays, session_gate
+from market_calendar import covered_years, load_holidays, session_gate
 from strategy_schema import Strategy, load_strategy_documents, resolve_quantity
 
 
@@ -457,7 +457,7 @@ def main() -> int:
 
     # --- Gate first: outside market hours this must no-op cleanly (exit 0)
     # even if half the configuration is missing.
-    should_run, reason = session_gate(now_ist, load_holidays())
+    should_run, reason = session_gate(now_ist, load_holidays(), covered_years())
     if not should_run:
         print(f"SKIPPED: {reason}")
         try:  # best effort — a skip must still exit 0 if Supabase is down
