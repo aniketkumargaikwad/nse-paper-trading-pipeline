@@ -64,7 +64,7 @@ from metrics import (
     risk_metrics,
 )
 from risk_levels import build_atr_series, level_from_spec
-from config import IST, UTC, Settings, get_settings
+from config import IST, SUPPORTED_TIMEFRAMES, UTC, Settings, get_settings
 from costs import CostModel, FlatCostModel
 from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
@@ -472,6 +472,7 @@ def build_run_row(
     entries_skipped: int,
     missing: set[str],
     strategy_version_id: int | None = None,
+    timeframe: str | None = None,
 ) -> dict[str, Any]:
     """One strategy-level row: the pooled verdict plus how it was distributed.
 
@@ -513,7 +514,7 @@ def build_run_row(
         "batch_id": str(batch_id),
         "strategy_name": strategy.name,
         "strategy_version_id": strategy_version_id,
-        "timeframe": strategy.timeframe,
+        "timeframe": timeframe or strategy.timeframe,
         "start_date": start_date,
         "end_date": end_date,
         "universe_name": resolved.universe_name,
@@ -565,6 +566,7 @@ def run_backtest(
     now_utc: datetime | None = None,
     from_utc: datetime | None = None,
     to_utc: datetime | None = None,
+    timeframes: list[str] | None = None,
 ) -> tuple[uuid.UUID, list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch, simulate, and score every strategy x instrument combination.
 
@@ -608,18 +610,26 @@ def run_backtest(
     rows: list[dict[str, Any]] = []
     run_rows: list[dict[str, Any]] = []
     requested_days = math.ceil(years * 365.25)
-    for strategy in strategies:
-        print(f"\n=== {strategy.name} ({strategy.timeframe}, {strategy.position_type}) ===")
+    # One (strategy, timeframe) pair per iteration. Without --timeframes this
+    # is exactly the strategy's own, so behaviour is unchanged.
+    pairs = [
+        (st, tf)
+        for st in strategies
+        for tf in (timeframes or [st.timeframe])
+    ]
+
+    for strategy, timeframe in pairs:
+        print(f"\n=== {strategy.name} ({timeframe}, {strategy.position_type}) ===")
 
         # Warn (but still run) when the provider cannot serve the requested
         # window — e.g. the free yfinance feed caps 15m history at ~60 days.
         # Running anyway is deliberate: the kill rules below will flag a thin
         # sample via min_trades, so nothing is hidden or silently trusted.
-        max_days = getattr(client, "max_history_days", lambda _tf: None)(strategy.timeframe)
+        max_days = getattr(client, "max_history_days", lambda _tf: None)(timeframe)
         if max_days is not None and requested_days > max_days:
             print(
                 f"  NOTE: you asked for ~{requested_days} days but this data "
-                f"provider only serves ~{max_days} days of {strategy.timeframe} "
+                f"provider only serves ~{max_days} days of {timeframe} "
                 f"candles. Backtesting the shorter window instead — treat the "
                 f"result as WEAK evidence.\n"
                 f"        For deeper history, test the same rules on the 60m "
@@ -642,7 +652,7 @@ def run_backtest(
         for instrument in resolved.symbols:
             try:
                 df = client.fetch_historical_candles(
-                    tokens[instrument], strategy.timeframe, from_utc, now,
+                    tokens[instrument], timeframe, from_utc, now,
                     closed_only=True, now_utc=now,
                 )
             except KiteClientError as exc:
@@ -684,7 +694,7 @@ def run_backtest(
                     "strategy_name": strategy.name,
                     "strategy_version_id": version_by_strategy.get(strategy.name),
                     "instrument": instrument,
-                    "timeframe": strategy.timeframe,
+                    "timeframe": timeframe,
                     "start_date": df.index[0].astimezone(IST).date().isoformat(),
                     "end_date": df.index[-1].astimezone(IST).date().isoformat(),
                     "total_trades": metrics.total_trades,
@@ -711,6 +721,7 @@ def run_backtest(
                 entries_skipped=entries_skipped,
                 missing=missing,
                 strategy_version_id=version_by_strategy.get(strategy.name),
+                timeframe=timeframe,
             )
             run_rows.append(run_row)
             sharpe = run_row["sharpe_daily"]
@@ -752,6 +763,14 @@ def main(argv: list[str] | None = None) -> int:
         help="end date YYYY-MM-DD (IST). Requires --from",
     )
     parser.add_argument("--strategy", help="run only this strategy name")
+    # A strategy declares ONE timeframe, but "does this edge hold on 5m as well
+    # as 60m?" is a question about the RUN, not the strategy. Overriding here
+    # avoids duplicating a strategy per timeframe, which would give each copy
+    # its own version history and make them impossible to compare.
+    parser.add_argument(
+        "--timeframes",
+        help="comma-separated timeframes to test instead of the strategy's own",
+    )
     parser.add_argument("--no-db", action="store_true", help="skip Supabase writes (CSV only)")
     args = parser.parse_args(argv)
 
@@ -782,6 +801,19 @@ def main(argv: list[str] | None = None) -> int:
             print("ERROR: --from must be before --to.", file=sys.stderr)
             return 1
         print(f"window: {args.from_date} -> {args.to_date} IST (explicit)")
+
+    timeframes = None
+    if args.timeframes:
+        timeframes = [t.strip() for t in args.timeframes.split(",") if t.strip()]
+        unknown = [t for t in timeframes if t not in SUPPORTED_TIMEFRAMES]
+        if unknown:
+            print(
+                f"ERROR: unsupported timeframe(s): {', '.join(unknown)}. "
+                f"Allowed: {', '.join(SUPPORTED_TIMEFRAMES)}",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"timeframes: {', '.join(timeframes)}")
 
     started = datetime.now(tz=UTC)
     try:
@@ -847,6 +879,7 @@ def main(argv: list[str] | None = None) -> int:
             settings=settings, store=store, client=client,
             strategies=strategies, years=args.years,
             from_utc=window_from, to_utc=window_to,
+            timeframes=timeframes,
         )
 
         csv_path = write_csv(batch_id, rows, started)
