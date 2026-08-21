@@ -23,6 +23,16 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
+
+# The docs tell you to put SUPABASE_URL and a key in .env, and every CLI reads
+# them from there because importing config loads it. The dashboard imported no
+# such thing, so a correctly configured .env produced "Not configured yet" and
+# the only working local setup was one nobody was told about.
+#
+# override=False: a real environment variable (Railway, Streamlit Cloud) still
+# wins over a stray .env that happened to ship in the image.
+load_dotenv(override=False)
 
 IST = ZoneInfo("Asia/Kolkata")
 UTC = ZoneInfo("UTC")
@@ -70,7 +80,12 @@ def _secrets_file_exists() -> bool:
 
 
 def get_config_value(name: str) -> str:
-    """Streamlit secrets first, then environment (.env for local runs)."""
+    """Streamlit secrets first, then the environment.
+
+    The environment includes anything in a local `.env`, loaded when this
+    module is imported. Secrets come first so a hosted deployment's settings
+    always beat a file that happened to travel with the code.
+    """
     if _secrets_file_exists():
         try:
             if name in st.secrets:

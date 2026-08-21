@@ -481,6 +481,7 @@ def build_run_row(
     missing: set[str],
     strategy_version_id: int | None = None,
     timeframe: str | None = None,
+    cost_model_description: str | None = None,
 ) -> dict[str, Any]:
     """One strategy-level row: the pooled verdict plus how it was distributed.
 
@@ -525,6 +526,11 @@ def build_run_row(
         "timeframe": timeframe or strategy.timeframe,
         "start_date": start_date,
         "end_date": end_date,
+        # What the numbers assumed about charges. Costs are chosen by an
+        # environment variable, so without this a run made under flat Rs30 and
+        # one made under itemised charges look identical in the table while
+        # differing by more than the edge being measured.
+        "cost_model": cost_model_description,
         "universe_name": resolved.universe_name,
         "constituents_as_of": resolved.constituents_as_of,
         # Requested is what the universe listed; resolved is what actually
@@ -759,6 +765,9 @@ def run_backtest(
                 missing=missing,
                 strategy_version_id=version_by_strategy.get(strategy.name),
                 timeframe=timeframe,
+                cost_model_description=(
+                    cost_model.describe() if cost_model is not None else None
+                ),
             )
             run_rows.append(run_row)
 

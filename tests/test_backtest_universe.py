@@ -253,3 +253,36 @@ def test_pairs_expand_across_strategies_and_timeframes():
     # Without an override, exactly one pair per strategy - unchanged behaviour.
     pairs = [(st, tf) for st in strategies for tf in (None or [st.timeframe])]
     assert [tf for _, tf in pairs] == ["15m"]
+
+
+def test_the_run_row_records_the_cost_assumption():
+    """Two runs differing only in cost model must not look identical.
+
+    Costs are chosen by an environment variable. A flat Rs30 round trip and
+    itemised charges differ by more than the edge most strategies claim, so a
+    comparison between two runs is meaningless unless each says what it
+    charged.
+    """
+    row = build_run_row(
+        batch_id=uuid.uuid4(),
+        strategy=strategy_with(universe="NIFTY2"),
+        resolved=resolved_with(["NSE:A"], "NIFTY2", "2026-08-11"),
+        per_symbol={"NSE:A": []},
+        start_date="2024-08-09", end_date="2026-08-07",
+        trading_days=250, entries_skipped=0, missing=set(),
+        cost_model_description="flat Rs30 per round trip",
+    )
+    assert row["cost_model"] == "flat Rs30 per round trip"
+
+
+def test_a_run_row_without_a_cost_model_says_so_rather_than_guessing():
+    """None, not a default string: an unrecorded assumption is not a known one."""
+    row = build_run_row(
+        batch_id=uuid.uuid4(),
+        strategy=strategy_with(universe="NIFTY2"),
+        resolved=resolved_with(["NSE:A"], "NIFTY2", "2026-08-11"),
+        per_symbol={"NSE:A": []},
+        start_date="2024-08-09", end_date="2026-08-07",
+        trading_days=250, entries_skipped=0, missing=set(),
+    )
+    assert row["cost_model"] is None

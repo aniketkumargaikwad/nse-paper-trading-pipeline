@@ -183,6 +183,121 @@ def _render_equity(ctx: AppContext, batch_id) -> None:
         )
 
 
+
+def _render_compare(ctx: AppContext, runs: pd.DataFrame) -> None:
+    """Two or more runs of the same strategy, side by side.
+
+    The question this answers is "did the change help", and it is the only
+    question a research tool exists to answer. Answering it wrongly is easy:
+    two runs over different windows, or under different cost assumptions, are
+    not a comparison at all, so anything that differs beyond the strategy
+    itself is called out rather than left for the reader to notice.
+    """
+    if runs.empty:
+        st.info(
+            "Comparison needs the strategy-level verdict table. Apply "
+            "`sql/004_backtest_runs.sql`, then run a backtest."
+        )
+        return
+
+    df = runs.copy()
+    df["created_at_ist"] = to_ist(df["created_at"])
+    df["label"] = (
+        df["created_at_ist"].dt.strftime("%d %b %H:%M")
+        + "  ·  " + df["timeframe"].astype(str)
+        + "  ·  " + df["start_date"].astype(str) + " to " + df["end_date"].astype(str)
+    )
+
+    names = sorted(df["strategy_name"].unique())
+    strategy = st.selectbox("Strategy", names, key="cmp_strategy")
+    mine = df[df["strategy_name"] == strategy].sort_values(
+        "created_at_ist", ascending=False
+    )
+
+    if len(mine) < 2:
+        st.info(
+            f"Only one run of **{strategy}** so far. Run it again — over a "
+            "different window, timeframe or set of rules — and the two land "
+            "here side by side."
+        )
+        return
+
+    picked = st.multiselect(
+        "Runs to compare",
+        list(mine.index),
+        default=list(mine.index[:2]),
+        format_func=lambda i: mine.loc[i, "label"],
+        key="cmp_runs",
+    )
+    if len(picked) < 2:
+        st.caption("Pick at least two runs.")
+        return
+
+    chosen = mine.loc[picked]
+
+    # Anything that differs beyond the strategy makes the comparison unequal.
+    for column, what in (
+        ("start_date", "start date"),
+        ("end_date", "end date"),
+        ("cost_model", "cost model"),
+        ("universe_name", "universe"),
+    ):
+        if column in chosen and chosen[column].nunique(dropna=False) > 1:
+            values = sorted({str(v) for v in chosen[column]})
+            st.warning(
+                f"**These runs used a different {what}** "
+                f"({', '.join(values)}). The difference in results is not "
+                "only the strategy."
+            )
+
+    table = pd.DataFrame({
+        "Run": [mine.loc[i, "label"] for i in picked],
+        "Symbols": [f"{int(chosen.loc[i, 'symbols_resolved'])}" for i in picked],
+        "Trades": [int(chosen.loc[i, "total_trades"]) for i in picked],
+        "Net ₹": [float(chosen.loc[i, "net_pnl"]) for i in picked],
+        "Sharpe": [_fmt(chosen.loc[i, "sharpe_daily"]) for i in picked],
+        "Max DD %": [float(chosen.loc[i, "max_drawdown_pct"]) for i in picked],
+        "Profitable": [
+            f"{int(chosen.loc[i, 'symbols_profitable'])}/"
+            f"{int(chosen.loc[i, 'symbols_resolved'])}"
+            for i in picked
+        ],
+        "Passed": [bool(chosen.loc[i, "passed_kill_rules"]) for i in picked],
+    })
+    st.dataframe(
+        table, use_container_width=True, hide_index=True,
+        column_config={
+            "Passed": st.column_config.CheckboxColumn(disabled=True),
+            "Net ₹": st.column_config.NumberColumn(format="%.0f"),
+        },
+    )
+
+    curves = []
+    for i in picked:
+        curve = fetch_equity_curve(ctx.client, chosen.loc[i, "batch_id"])
+        if curve.empty:
+            continue
+        curve = curve[curve["strategy_name"] == strategy].copy()
+        curve["day"] = pd.to_datetime(curve["day"])
+        curve["run"] = mine.loc[i, "label"]
+        curves.append(curve[["day", "equity", "run"]])
+
+    if not curves:
+        return
+
+    both = pd.concat(curves)
+    both["equity"] = both["equity"].astype(float)
+    st.line_chart(
+        both.pivot_table(index="day", columns="run", values="equity", aggfunc="last"),
+        height=280,
+    )
+    st.caption(
+        "Cumulative net P&L. Where the runs cover different dates the lines "
+        "start at different points, which is itself the warning above drawn "
+        "rather than written."
+    )
+
+
 def _fmt(value) -> str:
     """Blank for a null metric. A null means 'not measurable from this data' —
     showing 0.00 would present an absent measurement as a measured zero."""
@@ -239,7 +354,12 @@ def render(ctx: AppContext) -> None:
     data = load_all(ctx)
     results, strategies = data["backtest_results"], data["strategies"]
 
-    tab_results, tab_run = st.tabs(["📈 Results", "▶️ Run a backtest"])
+    tab_results, tab_compare, tab_run = st.tabs(
+        ["📈 Results", "⚖️ Compare runs", "▶️ Run a backtest"]
+    )
+
+    with tab_compare:
+        _render_compare(ctx, data.get("backtest_runs", pd.DataFrame()))
 
     with tab_run:
         if not ctx.can_edit:

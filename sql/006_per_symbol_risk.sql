@@ -28,6 +28,13 @@ comment on column backtest_results.sharpe_daily is
     'Per-symbol, same definition as the run-level figure. Null means not '
     'measurable from this symbol''s data - never a measured zero.';
 
+-- What the run assumed about charges. Costs are chosen by an environment
+-- variable, so without this a run made under a flat Rs30 charge and one made
+-- under itemised charges are indistinguishable in the table while differing
+-- by more than the edge being measured — which makes comparing them a lie.
+alter table backtest_runs
+    add column if not exists cost_model text;
+
 -- The equity curve, stored once per run rather than recomputed on every view.
 -- Everything visual (equity, drawdown, monthly heatmap) derives from it, and
 -- recomputing means re-reading every trade each time a chart is drawn.
