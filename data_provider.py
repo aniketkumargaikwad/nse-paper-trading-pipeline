@@ -74,5 +74,9 @@ def describe_provider(settings: Settings) -> str:
     if settings.data_provider == "yfinance":
         return "yfinance (free; 15m/30m history limited to ~60 days)"
     if settings.data_provider == "dhan":
-        return "dhan (free; 5 years of 5-minute history, cached in Supabase)"
+        # Names the actual candle store: saying "cached in Supabase" while
+        # running on parquet is a small lie that makes a slow run look
+        # inexplicable.
+        where = getattr(settings, "candle_store", "supabase")
+        return f"dhan (5 years of 5-minute history, cached in {where})"
     return "kite (Kite Connect; requires the daily login token)"

@@ -104,7 +104,41 @@ def create_candle_backend(client: Any):
 
     from parquet_candle_backend import ParquetCandleBackend
 
+    _assert_candle_root_usable(settings.candle_root)
     return ParquetCandleBackend(inner, settings.candle_root)
+
+
+def _assert_candle_root_usable(root: str) -> None:
+    """Refuse to start in parquet mode with nothing to read.
+
+    The failure this prevents is quiet and expensive. A local candle_root does
+    not survive a deploy - Railway wipes the filesystem, and the files are
+    gitignored because they are regenerable data - so a hosted app configured
+    for parquet finds an empty directory, reports no cached candles, and
+    refetches millions of bars from the provider on EVERY deploy.
+
+    Nothing about that looks like an error: coverage still says the data
+    exists, the run just takes hours and hammers the API. Better to refuse at
+    startup and say why.
+    """
+    import os
+
+    if "://" in root:
+        return          # object storage: existence is the store's problem
+    if os.path.isdir(root) and any(os.scandir(root)):
+        return
+
+    raise RuntimeError(
+        f"CANDLE_STORE=parquet but {root!r} is missing or empty. "
+        "Nothing would be read from it, so every backtest would refetch "
+        "its history from the provider. "
+        "\n\n"
+        "Locally: run scripts/migrate_candles_to_parquet.py first. "
+        "\n"
+        "On a host: a local path does not survive a deploy. Either set "
+        "CANDLE_ROOT to object storage (s3://... for Cloudflare R2), or "
+        "set CANDLE_STORE=supabase, which still holds the candles."
+    )
 
 
 def create_dhan_data_client(client: Any) -> CandleStoreDataClient:
