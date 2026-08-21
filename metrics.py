@@ -343,3 +343,34 @@ def risk_metrics(
         system_quality_number=sqn,
         trading_days=trading_days,
     )
+
+
+def equity_curve(
+    per_symbol: dict[str, list[SimTrade]], trading_days: int = 0
+) -> list[dict[str, Any]]:
+    """Daily realised P&L and cumulative equity, oldest first.
+
+    Days the strategy was flat are INCLUDED with zero P&L between the first and
+    last day it traded. A curve that skipped them would compress time, making
+    a strategy that traded twice in a year look as active as one that traded
+    daily - and every risk figure read off that curve would flatter it.
+
+    Realised only, matching daily_pnl_series: an open position contributes
+    nothing until it closes.
+    """
+    daily = daily_pnl_series(per_symbol)
+    if not daily:
+        return []
+
+    from datetime import timedelta
+
+    first, last = min(daily), max(daily)
+    out: list[dict[str, Any]] = []
+    equity = 0.0
+    day = first
+    while day <= last:
+        pnl = round(daily.get(day, 0.0), 4)
+        equity = round(equity + pnl, 4)
+        out.append({"day": day.isoformat(), "daily_pnl": pnl, "equity": equity})
+        day = day + timedelta(days=1)
+    return out

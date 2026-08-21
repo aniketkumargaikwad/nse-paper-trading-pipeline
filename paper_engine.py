@@ -58,7 +58,14 @@ import signals
 # hard-error-on-insufficient-history rule and the ATR-at-the-signal-candle
 # rule live in ONE place (risk_levels) for exactly that reason.
 from risk_levels import RiskLevelError, build_atr_series, stop_and_target
-from config import IST, TIMEFRAME_MINUTES, UTC, Settings, get_settings
+from config import (
+    IST,
+    TIMEFRAME_MINUTES,
+    UTC,
+    Settings,
+    get_settings,
+    use_utf8_stdout,
+)
 from data_provider import create_data_client, describe_provider
 from db import ClosedTrade, OpenPosition, SupabaseStore
 from kite_client import (
@@ -452,6 +459,7 @@ def run_once(
 
 
 def main() -> int:
+    use_utf8_stdout()
     started = datetime.now(tz=UTC)
     now_ist = started.astimezone(IST)
 

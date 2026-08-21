@@ -9,7 +9,14 @@ import sys
 import pandas as pd
 import streamlit as st
 
-from app_common import AppContext, empty_state, load_all, page_header, to_ist
+from app_common import (
+    AppContext,
+    empty_state,
+    fetch_equity_curve,
+    load_all,
+    page_header,
+    to_ist,
+)
 from metrics import MIN_PROFITABLE_SYMBOL_PCT
 
 KILL_RULE_LABELS = {
@@ -128,6 +135,54 @@ def _render_verdict(runs: pd.DataFrame, batch_id) -> None:
                 )
 
 
+
+def _render_equity(ctx: AppContext, batch_id) -> None:
+    """Equity over time, and the drawdown underneath it.
+
+    A single net P&L figure hides the path taken to reach it. Two strategies
+    ending the year at the same number - one grinding upward, one recovering
+    from a 40% hole - are not the same strategy, and only the curve tells them
+    apart.
+
+    The drawdown panel is shown with the curve rather than as a headline
+    number, because "worst drawdown 18%" says nothing about whether that was
+    one bad week or a year spent underwater.
+    """
+    curve = fetch_equity_curve(ctx.client, batch_id)
+    if curve.empty:
+        return
+
+    st.subheader("Equity curve")
+
+    curve = curve.copy()
+    curve["day"] = pd.to_datetime(curve["day"])
+    curve["equity"] = curve["equity"].astype(float)
+    curve["series"] = curve["strategy_name"] + " · " + curve["timeframe"]
+
+    equity = curve.pivot_table(
+        index="day", columns="series", values="equity", aggfunc="last"
+    ).sort_index()
+    st.line_chart(equity, height=260)
+    st.caption(
+        "Cumulative net P&L after costs, in rupees. Realised only: an open "
+        "position adds nothing until it closes, so the line steps rather than "
+        "drifts. Flat stretches are days the strategy did not trade."
+    )
+
+    # Underwater: distance below the running peak, as a share of that peak.
+    # Anchored to the peak rather than to capital, so it answers "how much of
+    # what I had made did I give back", which is what a person actually feels.
+    peak = equity.cummax()
+    underwater = ((equity - peak) / peak.abs().replace(0, pd.NA)) * 100.0
+    if underwater.notna().any().any():
+        st.area_chart(underwater.fillna(0.0), height=160)
+        st.caption(
+            "Drawdown from the running peak, in percent. Zero means the "
+            "strategy is at a new high; the width of a dip is how long it "
+            "stayed below its previous best."
+        )
+
+
 def _fmt(value) -> str:
     """Blank for a null metric. A null means 'not measurable from this data' —
     showing 0.00 would present an absent measurement as a measured zero."""
@@ -241,16 +296,25 @@ def render(ctx: AppContext) -> None:
         _render_verdict(runs, chosen_batch)
 
         st.subheader("Per instrument")
-        show = batch[[
+        columns = [
             "strategy_name", "instrument", "timeframe", "total_trades",
             "win_rate_pct", "net_pnl", "profit_factor", "max_drawdown_pct",
-            "longest_losing_streak", "passed_kill_rules",
-        ]].rename(columns={
+            "longest_losing_streak",
+        ]
+        # Added by sql/006, and absent from rows written before it. Ranking a
+        # universe on net P&L alone cannot separate a steady contributor from
+        # one lucky trade, which is what these two columns are for.
+        columns += [c for c in ("sharpe_daily", "expectancy_per_trade") if c in batch]
+        columns.append("passed_kill_rules")
+        show = batch[columns].rename(columns={
             "strategy_name": "Strategy", "instrument": "Instrument",
             "timeframe": "TF", "total_trades": "Trades",
             "win_rate_pct": "Win %", "net_pnl": "Net ₹",
             "profit_factor": "Profit factor", "max_drawdown_pct": "Max DD %",
-            "longest_losing_streak": "Worst streak", "passed_kill_rules": "Passed",
+            "longest_losing_streak": "Worst streak",
+            "sharpe_daily": "Sharpe",
+            "expectancy_per_trade": "Expectancy ₹",
+            "passed_kill_rules": "Passed",
         })
         st.dataframe(
             show.sort_values("Net ₹", ascending=False),

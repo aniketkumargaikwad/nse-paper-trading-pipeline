@@ -17,6 +17,7 @@ Design notes
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from datetime import time
 from zoneinfo import ZoneInfo
@@ -110,6 +111,30 @@ SUPPORTED_TIMEFRAMES: tuple[str, ...] = tuple(TIMEFRAME_MINUTES)
 #     longer than anything we could resample from intraday data.
 BASE_TIMEFRAME = "5m"
 STORED_TIMEFRAMES: tuple[str, ...] = (BASE_TIMEFRAME, "day")
+
+
+
+def use_utf8_stdout() -> None:
+    """Let the CLIs print rupee signs on a console that cannot encode them.
+
+    Windows consoles frequently default to cp1252, where a single Rs symbol in
+    a progress line raises UnicodeEncodeError. That aborted a run that had
+    already done all of its work - minutes of fetching and simulation thrown
+    away at a print statement, with an error message that says nothing about
+    the actual problem.
+
+    Called explicitly by entry points rather than on import, so importing this
+    module never reaches out and mutates global state.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                # A redirected or already-closed stream. Printing is not worth
+                # failing over, which is the whole point of this function.
+                pass
 
 
 def source_timeframe_for(timeframe: str) -> str:

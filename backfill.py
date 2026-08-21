@@ -22,7 +22,7 @@ import math
 import sys
 from datetime import datetime, timedelta
 
-from config import IST, STORED_TIMEFRAMES, UTC, get_settings
+from config import IST, STORED_TIMEFRAMES, UTC, get_settings, use_utf8_stdout
 from instruments import SYMBOL_RE
 
 
@@ -106,6 +106,7 @@ def refresh_instruments(client) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    use_utf8_stdout()
     args = build_parser().parse_args(argv)
 
     # Check "nothing to do" BEFORE connecting: you should not need

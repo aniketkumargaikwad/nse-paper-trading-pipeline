@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, urlparse
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import KiteException, TokenException
 
-from config import IST, UTC, get_settings
+from config import IST, UTC, get_settings, use_utf8_stdout
 from db import DatabaseError, SupabaseStore
 
 # Zerodha's interactive login endpoint (Kite Connect v3).
@@ -124,6 +124,7 @@ def check_today(store: SupabaseStore, api_key: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    use_utf8_stdout()
     parser = argparse.ArgumentParser(description="Daily Kite login (paper pipeline).")
     parser.add_argument(
         "--check", action="store_true",

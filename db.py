@@ -23,6 +23,7 @@ import json
 
 import yaml
 import os
+import re
 import sys
 import uuid
 from dataclasses import asdict, dataclass
@@ -200,6 +201,18 @@ class SaveResult:
     @property
     def is_valid(self) -> bool:
         return self.status == "valid"
+
+
+def _is_missing_table(exc: Exception) -> bool:
+    """Whether an error means the table has not been created yet.
+
+    PostgREST words this two ways: a plain Postgres 'relation ... does not
+    exist' and its own PGRST205 'Could not find the table ... in the schema
+    cache'. A guard that knew only the first one let a missing table abort a
+    finished backtest, which is precisely what the guard existed to prevent.
+    """
+    message = str(exc).lower()
+    return "does not exist" in message or "not find the table" in message
 
 
 class SupabaseStore:
@@ -971,15 +984,65 @@ class SupabaseStore:
 
     # -- backtest results -----------------------------------------------------------
 
+    # PostgREST reports an unknown column as PGRST204 and rejects the whole
+    # batch. A fifty-symbol run takes minutes, so losing it because one
+    # migration has not been applied yet is the expensive failure - the
+    # columns that DO exist are worth keeping.
+    _MISSING_COLUMN = re.compile(r"Could not find the '([^']+)' column")
+
+    def _insert_dropping_unknown_columns(
+        self, table: str, payload: list[dict[str, Any]], what: str
+    ) -> int:
+        dropped: list[str] = []
+        while True:
+            try:
+                self._table(table).insert(payload).execute()
+            except APIError as exc:
+                match = self._MISSING_COLUMN.search(str(exc))
+                if match and any(match.group(1) in row for row in payload):
+                    column = match.group(1)
+                    dropped.append(column)
+                    for row in payload:
+                        row.pop(column, None)
+                    continue
+                raise self._wrap(exc, what) from exc
+            if dropped:
+                print(
+                    f"  note: {table} is missing {', '.join(dropped)} - stored "
+                    "without them. Apply the newest file in sql/ to record them."
+                )
+            return len(payload)
+
     def insert_backtest_runs(self, rows: Iterable[Mapping[str, Any]]) -> int:
         """Bulk-insert strategy-level run rows (shaped by backtest.py)."""
         payload = [to_native(dict(r)) for r in rows]
         if not payload:
             return 0
+        return self._insert_dropping_unknown_columns(
+            "backtest_runs", payload, "inserting backtest runs"
+        )
+
+    def insert_backtest_equity(self, rows: Iterable[Mapping[str, Any]]) -> int:
+        """Bulk-insert daily equity points.
+
+        Degrades to 0 when the table is absent, so a database without sql/006
+        still completes a backtest - the curve is unavailable, the run is not
+        lost. Chunked because a multi-year run produces thousands of rows.
+        """
+        payload = [to_native(dict(r)) for r in rows]
+        if not payload:
+            return 0
         try:
-            self._table("backtest_runs").insert(payload).execute()
+            for i in range(0, len(payload), 500):
+                self._table("backtest_equity").insert(payload[i:i + 500]).execute()
         except APIError as exc:
-            raise self._wrap(exc, "inserting backtest runs") from exc
+            if _is_missing_table(exc):
+                print(
+                    "  note: no backtest_equity table - the run is stored, the "
+                    "equity chart is not. Apply the newest file in sql/."
+                )
+                return 0
+            raise self._wrap(exc, "inserting backtest equity") from exc
         return len(payload)
 
     def insert_backtest_results(self, rows: Iterable[Mapping[str, Any]]) -> int:
@@ -987,11 +1050,9 @@ class SupabaseStore:
         payload = [to_native(dict(r)) for r in rows]
         if not payload:
             return 0
-        try:
-            self._table("backtest_results").insert(payload).execute()
-        except APIError as exc:
-            raise self._wrap(exc, "inserting backtest results") from exc
-        return len(payload)
+        return self._insert_dropping_unknown_columns(
+            "backtest_results", payload, "inserting backtest results"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1003,10 +1064,45 @@ _ALL_TABLES = (
     "run_audit", "instrument_cache", "backtest_results",
 )
 
+# Which sql/ file is applied, told by one thing each of them creates.
+#
+# Postgres itself is the only honest record: the files in sql/ say what SHOULD
+# exist, and a database is only as migrated as someone remembered to paste.
+# DDL cannot be run through the PostgREST client, so every migration is a
+# manual step - and a manual step needs a way to check it happened.
+#
+# (file, what it adds, probe table, probe column or None for the table itself)
+_MIGRATIONS: tuple[tuple[str, str, str, str | None], ...] = (
+    ("001_init.sql", "core tables", "strategies", None),
+    ("002_data_foundation.sql", "candle store and instruments", "candles", None),
+    ("003_strategy_v2_universes.sql", "universes and drafts", "symbol_groups", None),
+    ("004_backtest_runs.sql", "strategy-level verdict", "backtest_runs", None),
+    ("005_strategy_versions.sql", "immutable strategy versions", "strategy_versions", None),
+    ("006_per_symbol_risk.sql", "per-symbol risk and equity curve",
+     "backtest_results", "sharpe_daily"),
+)
+
+
+def _migration_status(store: "SupabaseStore") -> list[tuple[str, str, bool]]:
+    """(file, what it adds, applied) for every migration, in order."""
+    out = []
+    for filename, adds, table, column in _MIGRATIONS:
+        try:
+            store._table(table).select(column or "*").limit(1).execute()
+            applied = True
+        except APIError as exc:
+            # Anything other than "not there yet" is a real problem, and the
+            # caller's own error handling explains it better than a bare False.
+            if not _is_missing_table(exc) and "does not exist" not in str(exc).lower():
+                raise
+            applied = False
+        out.append((filename, adds, applied))
+    return out
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Check that Supabase is reachable and sql/001_init.sql was applied."
+        description="Check that Supabase is reachable and every sql/ migration is applied."
     )
     parser.add_argument(
         "--write", action="store_true",
@@ -1037,6 +1133,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    print("\nMigrations:")
+    pending = []
+    for filename, adds, applied in _migration_status(store):
+        print(f"  {'OK   ' if applied else 'TODO '} sql/{filename}  ({adds})")
+        if not applied:
+            pending.append((filename, adds))
+
     if args.write:
         now = datetime.now(tz=UTC)
         store.write_run_audit(
@@ -1046,6 +1149,19 @@ def main(argv: list[str] | None = None) -> int:
             details={"note": str(uuid.uuid4())},
         )
         print("  OK    wrote one run_audit row (run_type=selftest)")
+
+    if pending:
+        print(
+            "\n"
+            + "\n".join(
+                f"NOT APPLIED: sql/{f} - {adds} is unavailable until it is."
+                for f, adds in pending
+            )
+            + "\n\nOpen the Supabase SQL editor, paste the file's whole "
+            "contents, click Run. Everything else above is working; the "
+            "pipeline degrades around a missing migration rather than failing."
+        )
+        return 1
 
     print("\nAll checks passed. Supabase is ready.")
     return 0

@@ -260,6 +260,35 @@ def fetch_optional_table(
         raise
 
 
+
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_equity_curve(_client, batch_id: str) -> pd.DataFrame:
+    """The daily equity points for ONE run, oldest first.
+
+    Fetched per run rather than with load_all: a multi-year run stores a point
+    per calendar day, so loading every run's curve on every page view would
+    dwarf every other read the dashboard makes to draw one chart.
+
+    Returns empty when sql/006 has not been applied, so the chart disappears
+    and nothing else does.
+    """
+    try:
+        resp = (
+            _client.table("backtest_equity")
+            .select("*")
+            .eq("batch_id", str(batch_id))
+            .order("day", desc=False)
+            .limit(20000)
+            .execute()
+        )
+    except Exception as exc:                       # noqa: BLE001
+        message = str(exc).lower()
+        if "does not exist" in message or "not find the table" in message:
+            return pd.DataFrame()
+        raise
+    return pd.DataFrame(resp.data)
+
+
 EMPTY_TABLES = (
     "trades", "positions", "run_audit", "strategies", "backtest_results",
     "backtest_runs",

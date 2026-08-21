@@ -59,12 +59,20 @@ from metrics import (
     ComboMetrics,
     compute_metrics,
     dispersion_metrics,
+    equity_curve,
     evaluate_kill_rules,
     pooled_metrics,
     risk_metrics,
 )
 from risk_levels import build_atr_series, level_from_spec
-from config import IST, SUPPORTED_TIMEFRAMES, UTC, Settings, get_settings
+from config import (
+    IST,
+    SUPPORTED_TIMEFRAMES,
+    UTC,
+    Settings,
+    get_settings,
+    use_utf8_stdout,
+)
 from costs import CostModel, FlatCostModel
 from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
@@ -567,10 +575,10 @@ def run_backtest(
     from_utc: datetime | None = None,
     to_utc: datetime | None = None,
     timeframes: list[str] | None = None,
-) -> tuple[uuid.UUID, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[uuid.UUID, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch, simulate, and score every strategy x instrument combination.
 
-    Returns (batch_id, result_rows, run_rows). result_rows are shaped like
+    Returns (batch_id, result_rows, run_rows, equity_rows). result_rows are shaped like
     the backtest_results table (one per strategy x instrument); run_rows
     like backtest_runs (one per strategy, the pooled verdict).
     A fetch failure on one instrument skips that combination with a warning
@@ -609,6 +617,7 @@ def run_backtest(
 
     rows: list[dict[str, Any]] = []
     run_rows: list[dict[str, Any]] = []
+    equity_rows: list[dict[str, Any]] = []
     requested_days = math.ceil(years * 365.25)
     # One (strategy, timeframe) pair per iteration. Without --timeframes this
     # is exactly the strategy's own, so behaviour is unchanged.
@@ -640,6 +649,7 @@ def run_backtest(
         trades_by_symbol: dict[str, list[SimTrade]] = {}
         missing: set[str] = set()
         entries_skipped = 0
+        skips_by_symbol: dict[str, int] = {}
         trading_dates: set = set()
 
         resolved = resolved_by_strategy[strategy.name]
@@ -673,6 +683,7 @@ def run_backtest(
             per_symbol[instrument] = (metrics, df)
             trades_by_symbol[instrument] = result.trades
             entries_skipped += len(result.skipped)
+            skips_by_symbol[instrument] = len(result.skipped)
             trading_dates.update(ts.astimezone(IST).date() for ts in df.index)
             print(
                 f"  {instrument:<16} trades={metrics.total_trades:>4} "
@@ -687,6 +698,22 @@ def run_backtest(
 
         profitable = sum(1 for m, _ in per_symbol.values() if m.net_pnl > 0)
         for instrument, (metrics, df) in per_symbol.items():
+            # One symbol's capital base is its own notional, not the
+            # universe's: dividing a single stock's P&L by the whole
+            # universe's capital would understate it by the symbol count.
+            if strategy.sizing.type == "notional":
+                symbol_capital = float(strategy.sizing.notional_per_trade)
+            else:
+                trades_here = trades_by_symbol.get(instrument, [])
+                symbol_capital = (
+                    max(t.entry_price * t.quantity for t in trades_here)
+                    if trades_here else 0.0
+                )
+            symbol_risk = risk_metrics(
+                {instrument: trades_by_symbol.get(instrument, [])},
+                capital_base=symbol_capital,
+                trading_days=len(trading_dates),
+            )
             passed, flags = evaluate_kill_rules(metrics, profitable, len(resolved.symbols))
             rows.append(
                 {
@@ -704,6 +731,16 @@ def run_backtest(
                     "profit_factor": metrics.profit_factor,
                     "max_drawdown_pct": metrics.max_drawdown_pct,
                     "longest_losing_streak": metrics.longest_losing_streak,
+                    # Reuses the run-level function on one symbol, so a symbol
+                    # row and the run row cannot disagree about what "Sharpe"
+                    # means.
+                    "sharpe_daily": symbol_risk.sharpe_daily,
+                    "sortino_daily": symbol_risk.sortino_daily,
+                    "cagr_pct": symbol_risk.cagr_pct,
+                    "expectancy_per_trade": symbol_risk.expectancy_per_trade,
+                    "system_quality_number": symbol_risk.system_quality_number,
+                    "capital_base": round(symbol_capital, 4),
+                    "entries_skipped": skips_by_symbol.get(instrument, 0),
                     "passed_kill_rules": passed,
                     "kill_rule_flags": flags,
                 }
@@ -724,6 +761,15 @@ def run_backtest(
                 timeframe=timeframe,
             )
             run_rows.append(run_row)
+
+            # Stored once per run so charts never re-read every trade.
+            for point in equity_curve(trades_by_symbol):
+                equity_rows.append({
+                    "batch_id": str(batch_id),
+                    "strategy_name": strategy.name,
+                    "timeframe": timeframe,
+                    **point,
+                })
             sharpe = run_row["sharpe_daily"]
             print(
                 f"  VERDICT  net=₹{run_row['net_pnl']:,.0f}  "
@@ -733,7 +779,7 @@ def run_backtest(
                 f"{'PASSED' if run_row['passed_kill_rules'] else 'FAILED'} kill rules"
             )
 
-    return batch_id, rows, run_rows
+    return batch_id, rows, run_rows, equity_rows
 
 
 def write_csv(batch_id: uuid.UUID, rows: list[dict[str, Any]], now_utc: datetime) -> Path:
@@ -749,6 +795,7 @@ def write_csv(batch_id: uuid.UUID, rows: list[dict[str, Any]], now_utc: datetime
 
 
 def main(argv: list[str] | None = None) -> int:
+    use_utf8_stdout()
     parser = argparse.ArgumentParser(description="Batch backtester (paper research only).")
     parser.add_argument("--years", type=float, default=2.0, help="years of history (default 2)")
     # Absolute dates are what make a run REPRODUCIBLE. --years is measured from
@@ -875,7 +922,7 @@ def main(argv: list[str] | None = None) -> int:
         client = create_data_client(settings, token_store, started.astimezone(IST).date())
         print(f"data provider: {describe_provider(settings)}")
 
-        batch_id, rows, run_rows = run_backtest(
+        batch_id, rows, run_rows, equity_rows = run_backtest(
             settings=settings, store=store, client=client,
             strategies=strategies, years=args.years,
             from_utc=window_from, to_utc=window_to,
@@ -890,6 +937,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Supabase: inserted {inserted} backtest_results rows (batch {batch_id})")
             inserted_runs = store.insert_backtest_runs(run_rows)
             print(f"Supabase: inserted {inserted_runs} backtest_runs row(s)")
+            inserted_equity = store.insert_backtest_equity(equity_rows)
+            if inserted_equity:
+                print(f"Supabase: inserted {inserted_equity} equity point(s)")
             store.write_run_audit(
                 run_type="backtest", status="ok",
                 run_started_at=started, run_finished_at=datetime.now(tz=UTC),

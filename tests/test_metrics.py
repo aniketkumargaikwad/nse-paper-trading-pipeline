@@ -22,6 +22,7 @@ from metrics import (  # noqa: E402
     MIN_PROFITABLE_SYMBOL_PCT,
     ComboMetrics,
     dispersion_metrics,
+    equity_curve,
     evaluate_kill_rules,
     pooled_metrics,
     risk_metrics,
@@ -293,3 +294,44 @@ def test_a_single_symbol_strategy_must_be_profitable_on_it():
     assert flags["symbol_robustness"]["passed"] is True
     _, flags = evaluate_kill_rules(combo(net_pnl=-10.0), 0, 1)
     assert flags["symbol_robustness"]["passed"] is False
+
+
+# ---------------------------------------------------------------------------
+# Equity curve
+# ---------------------------------------------------------------------------
+
+
+def test_equity_curve_accumulates_and_keeps_flat_days():
+    """Three trades on days 1, 1 and 4: the curve must show four days.
+
+    Days 2 and 3 had no trade. They belong on the curve at zero, because a
+    curve that omitted them would show four trading days in the space of two
+    and make the strategy look twice as active as it was.
+    """
+    curve = equity_curve(
+        {
+            "NSE:A": [trade(100.0, exit_day=1), trade(-40.0, exit_day=4)],
+            "NSE:B": [trade(25.0, exit_day=1)],
+        }
+    )
+
+    assert [p["day"] for p in curve] == [
+        "2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04",
+    ]
+    # Day 1 pooled: +100 and +25 on two symbols.
+    assert [p["daily_pnl"] for p in curve] == [125.0, 0.0, 0.0, -40.0]
+    # Cumulative, so the last point equals the sum of every trade.
+    assert [p["equity"] for p in curve] == [125.0, 125.0, 125.0, 85.0]
+    assert curve[-1]["equity"] == pytest.approx(100.0 + 25.0 - 40.0)
+
+
+def test_equity_curve_is_empty_without_trades():
+    assert equity_curve({}) == []
+    assert equity_curve({"NSE:A": []}) == []
+
+
+def test_equity_curve_starts_at_the_first_trade_not_at_zero():
+    """No leading run of empty days: the curve begins when trading did."""
+    curve = equity_curve({"NSE:A": [trade(10.0, exit_day=9)]})
+    assert len(curve) == 1
+    assert curve[0] == {"day": "2026-08-09", "daily_pnl": 10.0, "equity": 10.0}
