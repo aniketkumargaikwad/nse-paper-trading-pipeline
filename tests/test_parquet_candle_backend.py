@@ -158,3 +158,79 @@ def test_it_satisfies_the_candle_backend_protocol():
     from candle_store import CandleBackend
 
     assert isinstance(ParquetCandleBackend(InnerSpy(), "/tmp/x"), CandleBackend)
+
+
+# ---------------------------------------------------------------------------
+# Reading must ASK which years exist, not probe a range.
+#
+# The first version iterated range(from.year, to.year + 1). A migration passes
+# 2000-2100, so one read became 101 lookups - invisible on local disk, where a
+# missing file fails instantly, and crippling over a network: 31.9s against
+# Supabase Storage, versus 1.3s once it listed instead.
+# ---------------------------------------------------------------------------
+
+
+class CountingStore:
+    """Wraps local files and counts reads, to prove misses are not attempted."""
+
+    def __init__(self, root):
+        from parquet_candle_backend import LocalFiles
+
+        self._inner = LocalFiles()
+        self.reads = 0
+
+    def read(self, path):
+        self.reads += 1
+        return self._inner.read(path)
+
+    def write(self, path, data):
+        self._inner.write(path, data)
+
+    def years(self, prefix):
+        return self._inner.years(prefix)
+
+
+def test_a_wide_range_does_not_probe_every_year(tmp_path):
+    counting = CountingStore(str(tmp_path))
+    backend = ParquetCandleBackend(InnerSpy(), str(tmp_path), store=counting)
+
+    start = datetime(2026, 3, 2, 3, 45, tzinfo=UTC)
+    backend.write_candles(42, "5m", frame(start, 20))
+    counting.reads = 0
+
+    wide_from = datetime(2000, 1, 1, tzinfo=UTC)
+    wide_to = datetime(2100, 1, 1, tzinfo=UTC)
+    got = backend.read_candles(42, "5m", wide_from, wide_to)
+
+    assert len(got) == 20
+    assert counting.reads == 1, (
+        f"one stored year should mean one read, not {counting.reads} - a range "
+        "scan would attempt 101"
+    )
+
+
+def test_only_the_requested_years_are_read(tmp_path):
+    counting = CountingStore(str(tmp_path))
+    backend = ParquetCandleBackend(InnerSpy(), str(tmp_path), store=counting)
+
+    for year in (2024, 2025, 2026):
+        backend.write_candles(
+            42, "5m", frame(datetime(year, 3, 2, 3, 45, tzinfo=UTC), 5)
+        )
+    counting.reads = 0
+
+    got = backend.read_candles(
+        42, "5m",
+        datetime(2025, 1, 1, tzinfo=UTC),
+        datetime(2025, 12, 31, tzinfo=UTC),
+    )
+    assert len(got) == 5
+    assert counting.reads == 1, "stored years outside the window must be skipped"
+
+
+def test_years_are_parsed_from_filenames():
+    from parquet_candle_backend import _years_from_names
+
+    assert _years_from_names(["2024.parquet", "2026.parquet"]) == {2024, 2026}
+    # Anything unexpected is ignored rather than crashing a read.
+    assert _years_from_names(["notes.txt", "abc.parquet", "5m/42/2025.parquet"]) == {2025}

@@ -43,17 +43,91 @@ Cloudflare R2), so moving to object storage is configuration, not code.
 
 from __future__ import annotations
 
+import io
 import os
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 import pandas as pd
 
 from providers.base import OHLCV_COLUMNS, empty_frame
 
+
+class ObjectStore(Protocol):
+    """Where parquet bytes live. Local disk or a remote bucket."""
+
+    def read(self, path: str) -> bytes | None: ...
+    def write(self, path: str, data: bytes) -> None: ...
+    def years(self, prefix: str) -> set[int]: ...
+
+
+class LocalFiles:
+    """Plain files under a directory. Fast, and wiped by every deploy."""
+
+    def read(self, path: str) -> bytes | None:
+        try:
+            with open(path, "rb") as fh:
+                return fh.read()
+        except (FileNotFoundError, OSError):
+            return None
+
+    def write(self, path: str, data: bytes) -> None:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(data)
+
+    def years(self, prefix: str) -> set[int]:
+        try:
+            names = os.listdir(prefix)
+        except (FileNotFoundError, NotADirectoryError, OSError):
+            return set()
+        return _years_from_names(names)
+
+
+class SupabaseStorage:
+    """Objects in a Supabase Storage bucket.
+
+    Storage is a SEPARATE quota from the database - on the free tier, 1 GB of
+    files alongside 500 MB of rows. Candles are the reason the database was
+    filling up, so moving them here relieves the constraint without a new
+    vendor, a new account, or a second bill.
+
+    Slower than local disk (a network hop per file) but far faster than
+    reading the same candles back as database rows, and unlike local disk it
+    survives a deploy.
+    """
+
+    def __init__(self, client: Any, bucket: str) -> None:
+        self._bucket = client.storage.from_(bucket)
+
+    def read(self, path: str) -> bytes | None:
+        try:
+            return self._bucket.download(path)
+        except Exception:      # noqa: BLE001 - absent is a normal outcome
+            return None
+
+    def write(self, path: str, data: bytes) -> None:
+        # upsert: a refetch must be able to correct a stored year.
+        self._bucket.upload(path, data, {"upsert": "true"})
+
+    def years(self, prefix: str) -> set[int]:
+        try:
+            entries = self._bucket.list(prefix)
+        except Exception:      # noqa: BLE001 - an absent prefix is normal
+            return set()
+        return _years_from_names(
+            e.get("name", "") if isinstance(e, dict) else getattr(e, "name", "")
+            for e in entries
+        )
+
 # zstd beats snappy by roughly 30% here at negligible CPU cost, and these files
 # are written rarely and read constantly.
 COMPRESSION = "zstd"
+
+# Roots beginning with this live in a Supabase Storage bucket.
+SUPABASE_SCHEME = "supabase://"
 
 
 class ParquetCandleBackend:
@@ -63,9 +137,17 @@ class ParquetCandleBackend:
     write is passed straight through to it.
     """
 
-    def __init__(self, inner: Any, root: str) -> None:
+    def __init__(self, inner: Any, root: str, store: ObjectStore | None = None) -> None:
         self._inner = inner
         self._root = root.rstrip("/")
+        self._store = store or _store_for(self._root, inner)
+        # A bucket root addresses objects from the bucket root, so the scheme
+        # and bucket name are not part of the object key.
+        self._prefix = "" if self._is_remote else self._root
+
+    @property
+    def _is_remote(self) -> bool:
+        return self._root.startswith(SUPABASE_SCHEME)
 
     # -- delegated, unchanged ------------------------------------------------
 
@@ -83,15 +165,19 @@ class ParquetCandleBackend:
 
     # -- candles -------------------------------------------------------------
 
+    def _dir(self, instrument_id: int, timeframe: str) -> str:
+        leaf = f"{timeframe}/{instrument_id}"
+        return f"{self._prefix}/{leaf}" if self._prefix else leaf
+
     def _path(self, instrument_id: int, timeframe: str, year: int) -> str:
-        return f"{self._root}/{timeframe}/{instrument_id}/{year}.parquet"
+        leaf = f"{timeframe}/{instrument_id}/{year}.parquet"
+        return f"{self._prefix}/{leaf}" if self._prefix else leaf
 
     def _read_year(self, instrument_id: int, timeframe: str, year: int) -> pd.DataFrame:
-        path = self._path(instrument_id, timeframe, year)
-        try:
-            frame = pd.read_parquet(path)
-        except (FileNotFoundError, OSError):
+        raw = self._store.read(self._path(instrument_id, timeframe, year))
+        if raw is None:
             return empty_frame()
+        frame = pd.read_parquet(io.BytesIO(raw))
         if frame.empty:
             return empty_frame()
         frame = frame.set_index("ts")
@@ -107,8 +193,13 @@ class ParquetCandleBackend:
         it: None is "no file at all", empty is "a file exists but holds nothing
         in this range". Collapsing them would let a gap read as absence.
         """
-        years = range(from_utc.year, to_utc.year + 1)
-        parts = [self._read_year(instrument_id, timeframe, y) for y in years]
+        # Ask which years exist rather than probing every year in the range.
+        # A wide request (a migration passes 2000-2100) would otherwise make a
+        # hundred round trips, nearly all misses - invisible on local disk,
+        # where a missing file fails instantly, and crippling over a network.
+        stored = self._store.years(self._dir(instrument_id, timeframe))
+        wanted = stored & set(range(from_utc.year, to_utc.year + 1))
+        parts = [self._read_year(instrument_id, timeframe, y) for y in sorted(wanted)]
         parts = [p for p in parts if not p.empty]
         if not parts:
             return None
@@ -142,15 +233,43 @@ class ParquetCandleBackend:
             if "ts" not in out.columns:
                 out = out.rename(columns={out.columns[0]: "ts"})
 
-            _ensure_parent(path)
-            out.to_parquet(path, compression=COMPRESSION, index=False)
+            buffer = io.BytesIO()
+            out.to_parquet(buffer, compression=COMPRESSION, index=False)
+            self._store.write(path, buffer.getvalue())
 
 
-def _ensure_parent(path: str) -> None:
-    """Create the local directory for `path`. A no-op for remote URLs, where
-    object stores have no directories to create."""
-    if "://" in path:
-        return
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+def _years_from_names(names: Any) -> set[int]:
+    """Years implied by filenames like '2026.parquet'."""
+    out: set[int] = set()
+    for name in names:
+        stem = str(name).rsplit("/", 1)[-1]
+        if stem.endswith(".parquet"):
+            try:
+                out.add(int(stem[: -len(".parquet")]))
+            except ValueError:
+                continue
+    return out
+
+
+def _store_for(root: str, inner: Any) -> ObjectStore:
+    """Pick a store from the root.
+
+    `supabase://bucket` reuses the Supabase client the wrapped backend already
+    holds, so no second set of credentials is introduced for what is the same
+    account.
+    """
+    if root.startswith(SUPABASE_SCHEME):
+        bucket = root[len(SUPABASE_SCHEME):].strip("/").split("/")[0]
+        if not bucket:
+            raise ValueError(
+                f"{root!r} names no bucket. Use supabase://candles."
+            )
+        client = getattr(inner, "_client", None)
+        if client is None:
+            raise ValueError(
+                "a supabase:// candle root needs the Supabase-backed store to "
+                "wrap, because it borrows that client rather than asking for "
+                "separate credentials."
+            )
+        return SupabaseStorage(client, bucket)
+    return LocalFiles()
