@@ -29,7 +29,7 @@ backfill able to catch up to the present.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -40,6 +40,10 @@ from providers.base import empty_frame
 from resample import resample_candles
 
 
+# runtime_checkable so the contract can be ASSERTED, not just described.
+# This is the seam the storage swap depends on (Supabase or Parquet), and
+# an interface nothing verifies is one that drifts.
+@runtime_checkable
 class CandleBackend(Protocol):
     """Persistence for candles, coverage and quality flags."""
 
