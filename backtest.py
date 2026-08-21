@@ -444,6 +444,7 @@ def build_run_row(
     trading_days: int,
     entries_skipped: int,
     missing: set[str],
+    strategy_version_id: int | None = None,
 ) -> dict[str, Any]:
     """One strategy-level row: the pooled verdict plus how it was distributed.
 
@@ -484,6 +485,7 @@ def build_run_row(
     return {
         "batch_id": str(batch_id),
         "strategy_name": strategy.name,
+        "strategy_version_id": strategy_version_id,
         "timeframe": strategy.timeframe,
         "start_date": start_date,
         "end_date": end_date,
@@ -552,6 +554,13 @@ def run_backtest(
     # immediately rather than after minutes of downloading.
     resolved_by_strategy = {
         s.name: resolve_strategy_symbols(s, store) for s in strategies
+    }
+    # Which exact definition is being tested. Recorded on every row so a
+    # result stays reproducible after the strategy is edited - without this a
+    # stored result points at rules that may no longer exist.
+    version_by_strategy = {
+        s.name: (store.current_version_id(s.name) if store is not None else None)
+        for s in strategies
     }
     all_instruments = sorted(
         {sym for r in resolved_by_strategy.values() for sym in r.symbols}
@@ -634,6 +643,7 @@ def run_backtest(
                 {
                     "batch_id": str(batch_id),
                     "strategy_name": strategy.name,
+                    "strategy_version_id": version_by_strategy.get(strategy.name),
                     "instrument": instrument,
                     "timeframe": strategy.timeframe,
                     "start_date": df.index[0].astimezone(IST).date().isoformat(),
@@ -661,6 +671,7 @@ def run_backtest(
                 trading_days=len(trading_dates),
                 entries_skipped=entries_skipped,
                 missing=missing,
+                strategy_version_id=version_by_strategy.get(strategy.name),
             )
             run_rows.append(run_row)
             sharpe = run_row["sharpe_daily"]

@@ -170,6 +170,21 @@ def to_native(value: Any) -> Any:
     return value
 
 
+def canonical_definition_hash(definition: Mapping[str, Any]) -> str:
+    """sha256 over the definition with sorted keys and no whitespace.
+
+    Canonical so that two saves of the same rules produce the same hash
+    regardless of key order or formatting. Without that, re-saving an
+    unchanged strategy would mint a new version every time and the history
+    would fill with noise until "which version did I test?" stopped having a
+    useful answer.
+    """
+    import hashlib
+
+    payload = json.dumps(definition, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class SaveResult:
     """Outcome of saving a strategy: valid and runnable, or a stored draft."""
@@ -178,6 +193,9 @@ class SaveResult:
     status: str                     # 'valid' | 'draft'
     strategy: Strategy | None       # populated only when valid
     errors: tuple[str, ...] = ()
+    version: int | None = None      # None for drafts (nothing to version)
+    version_id: int | None = None
+    created_new_version: bool = False
 
     @property
     def is_valid(self) -> bool:
@@ -457,10 +475,111 @@ class SupabaseStore:
         except APIError as exc:
             raise self._wrap(exc, f"saving strategy {name}") from exc
 
+        version = version_id = None
+        created_new = False
+        if strategy is not None:
+            # Only valid strategies are versioned. A draft has no coherent
+            # definition to snapshot, and versioning one would create a
+            # history entry nothing could ever reproduce.
+            version, version_id, created_new = self._record_version(
+                name, row["definition"], row["format_version"]
+            )
+
         return SaveResult(
             name=name, status=row["status"], strategy=strategy,
-            errors=tuple(errors),
+            errors=tuple(errors), version=version, version_id=version_id,
+            created_new_version=created_new,
         )
+
+    def _record_version(
+        self, name: str, definition: Mapping[str, Any], format_version: int
+    ) -> tuple[int | None, int | None, bool]:
+        """Snapshot a definition, reusing the current version if unchanged.
+
+        Returns (version_number, version_id, created_new). Versions are
+        immutable: this only ever inserts, never updates an existing one.
+
+        Degrades to (None, None, False) if the strategy_versions table is
+        absent, so a database that has not had sql/005 applied keeps saving
+        strategies instead of failing outright - the feature is unavailable,
+        not the app.
+        """
+        digest = canonical_definition_hash(definition)
+        try:
+            existing = (
+                self._table("strategy_versions")
+                .select("id,version,definition_hash")
+                .eq("strategy_name", name)
+                .order("version", desc=True)
+                .execute()
+            ).data
+        except APIError as exc:
+            if "does not exist" in str(exc).lower():
+                return None, None, False
+            raise self._wrap(exc, f"reading versions of {name}") from exc
+
+        for row in existing:
+            if row.get("definition_hash") == digest:
+                # Identical content: reuse rather than duplicate.
+                self._point_current_version(name, row["id"])
+                return int(row["version"]), int(row["id"]), False
+
+        next_version = (max((int(r["version"]) for r in existing), default=0)) + 1
+        try:
+            inserted = (
+                self._table("strategy_versions")
+                .insert({
+                    "strategy_name": name,
+                    "version": next_version,
+                    "definition": to_native(dict(definition)),
+                    "definition_hash": digest,
+                    "format_version": format_version,
+                })
+                .execute()
+            ).data
+        except APIError as exc:
+            raise self._wrap(exc, f"versioning strategy {name}") from exc
+
+        version_id = int(inserted[0]["id"]) if inserted else None
+        if version_id is not None:
+            self._point_current_version(name, version_id)
+        return next_version, version_id, True
+
+    def _point_current_version(self, name: str, version_id: int) -> None:
+        try:
+            self._table("strategies").update(
+                {"current_version_id": version_id}
+            ).eq("name", name).execute()
+        except APIError as exc:
+            raise self._wrap(exc, f"setting current version of {name}") from exc
+
+    def strategy_versions(self, name: str) -> list[dict[str, Any]]:
+        """Every stored version of one strategy, newest first."""
+        try:
+            return (
+                self._table("strategy_versions")
+                .select("id,version,definition,definition_hash,format_version,created_at")
+                .eq("strategy_name", name)
+                .order("version", desc=True)
+                .execute()
+            ).data
+        except APIError as exc:
+            if "does not exist" in str(exc).lower():
+                return []
+            raise self._wrap(exc, f"reading versions of {name}") from exc
+
+    def current_version_id(self, name: str) -> int | None:
+        """The version id a run should record for this strategy."""
+        try:
+            rows = (
+                self._table("strategies").select("current_version_id")
+                .eq("name", name).execute()
+            ).data
+        except APIError as exc:
+            if "does not exist" in str(exc).lower():
+                return None
+            raise self._wrap(exc, f"reading current version of {name}") from exc
+        return rows[0]["current_version_id"] if rows else None
 
     def save_strategy_text(self, text: str) -> SaveResult:
         """Save a strategy pasted as YAML text.

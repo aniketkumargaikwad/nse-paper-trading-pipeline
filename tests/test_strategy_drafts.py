@@ -19,6 +19,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from postgrest.exceptions import APIError  # noqa: E402
+
 from db import DatabaseError, SupabaseStore  # noqa: E402
 
 
@@ -37,42 +39,82 @@ class _Query:
     def __init__(self, table: "_Table"):
         self._table = table
         self._filters: list[tuple[str, object]] = []
+        self._order: tuple[str, bool] | None = None
+        self._pending: list[dict] | None = None   # rows an insert/upsert made
 
     def select(self, *_args, **_kwargs):
         return self
 
-    def order(self, *_args, **_kwargs):
+    def order(self, column, desc=False, **_kwargs):
+        self._order = (column, desc)
         return self
 
     def limit(self, *_args, **_kwargs):
+        return self
+
+    def range(self, *_args, **_kwargs):
         return self
 
     def eq(self, column, value):
         self._filters.append((column, value))
         return self
 
+    def in_(self, column, values):
+        self._filters.append((column, list(values)))
+        return self
+
     def insert(self, rows):
         payload = rows if isinstance(rows, list) else [rows]
+        made = []
         for r in payload:
-            self._table.rows.append(dict(r))
-            self._table.inserts.append(dict(r))
+            row = dict(r)
+            # Real Postgres assigns bigserial ids; code reads them back.
+            row.setdefault("id", self._table.next_id())
+            self._table.rows.append(row)
+            self._table.inserts.append(row)
+            made.append(row)
+        self._pending = made
+        return self
+
+    def update(self, changes):
+        self._pending = []
+        for row in self._table.rows:
+            if all(row.get(c) == v for c, v in self._filters):
+                row.update(changes)
+                self._pending.append(row)
         return self
 
     def upsert(self, row, on_conflict=None):
         rows = row if isinstance(row, list) else [row]
+        made = []
         for r in rows:
             self._table.rows = [
                 x for x in self._table.rows if x.get("name") != r.get("name")
             ]
-            self._table.rows.append(dict(r))
-            self._table.upserts.append(dict(r))
+            new = dict(r)
+            new.setdefault("id", self._table.next_id())
+            self._table.rows.append(new)
+            self._table.upserts.append(new)
+            made.append(new)
+        self._pending = made
         return self
 
     def execute(self):
+        if self._pending is not None:
+            return _Result(self._pending, len(self._pending))
         rows = self._table.rows
         for column, value in self._filters:
-            rows = [r for r in rows if r.get(column) == value]
-        return _Result(sorted(rows, key=lambda r: r.get("name") or ""), len(rows))
+            if isinstance(value, list):
+                rows = [r for r in rows if r.get(column) in value]
+            else:
+                rows = [r for r in rows if r.get(column) == value]
+        if self._order:
+            column, desc = self._order
+            rows = sorted(rows, key=lambda r: (r.get(column) is None, r.get(column)),
+                          reverse=desc)
+        else:
+            rows = sorted(rows, key=lambda r: r.get("name") or "")
+        return _Result(rows, len(rows))
 
 
 class _Table:
@@ -80,6 +122,11 @@ class _Table:
         self.rows: list[dict] = []
         self.upserts: list[dict] = []
         self.inserts: list[dict] = []
+        self._next = 0
+
+    def next_id(self) -> int:
+        self._next += 1
+        return self._next
 
 
 class FakeClient:
@@ -372,3 +419,109 @@ def test_backtest_inserts_survive_numpy_values(store):
         {"strategy_name": "s", "sharpe_daily": np.float64(-5.27),
          "passed_kill_rules": np.bool_(False)},
     ]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Strategy versioning.
+#
+# The problem this solves: strategies were keyed by name and saving overwrote
+# in place, so a stored backtest result pointed at a definition that could be
+# silently rewritten afterwards. That made every result irreproducible, every
+# comparison unsound, and deployment a matter of deploying a NAME rather than
+# a set of rules.
+# ---------------------------------------------------------------------------
+
+
+def test_saving_a_valid_strategy_creates_version_1(store):
+    result = store.save_strategy_document(valid_doc())
+    assert result.version == 1
+    assert result.created_new_version is True
+    assert result.version_id is not None
+
+
+def test_saving_identical_content_does_not_mint_a_new_version(store):
+    """Re-saving unchanged rules must not fill the history with noise, or
+    'which version did I test?' stops having a useful answer."""
+    first = store.save_strategy_document(valid_doc())
+    again = store.save_strategy_document(valid_doc())
+    assert again.version == first.version == 1
+    assert again.created_new_version is False
+    assert len(store.strategy_versions("ok-strategy")) == 1
+
+
+def test_key_order_does_not_count_as_a_change(store):
+    """The hash is over canonical JSON, so formatting cannot fake a change."""
+    doc = valid_doc()
+    store.save_strategy_document(doc)
+    reordered = {k: doc[k] for k in reversed(list(doc))}
+    again = store.save_strategy_document(reordered)
+    assert again.created_new_version is False
+    assert again.version == 1
+
+
+def test_changing_the_rules_creates_version_2(store):
+    store.save_strategy_document(valid_doc())
+    changed = store.save_strategy_document(
+        valid_doc(risk={"stop_loss": {"type": "percent", "value": 2.5},
+                        "target": {"type": "percent", "value": 5.0}})
+    )
+    assert changed.version == 2
+    assert changed.created_new_version is True
+    assert len(store.strategy_versions("ok-strategy")) == 2
+
+
+def test_an_older_version_is_never_altered(store):
+    """Immutability is the whole point: a result referencing v1 must still be
+    able to recover exactly what v1 said, forever."""
+    store.save_strategy_document(valid_doc())
+    v1 = [v for v in store.strategy_versions("ok-strategy") if v["version"] == 1][0]
+    original_stop = v1["definition"]["risk"]["stop_loss"]["value"]
+
+    store.save_strategy_document(
+        valid_doc(risk={"stop_loss": {"type": "percent", "value": 9.9},
+                        "target": {"type": "percent", "value": 12.0}})
+    )
+    v1_again = [v for v in store.strategy_versions("ok-strategy") if v["version"] == 1][0]
+    assert v1_again["definition"]["risk"]["stop_loss"]["value"] == original_stop == 1.0
+
+
+def test_reverting_to_earlier_rules_reuses_that_version(store):
+    """Content-addressed, so going back to v1's rules is v1, not v3."""
+    store.save_strategy_document(valid_doc())                      # v1
+    store.save_strategy_document(valid_doc(max_cycles_per_day=9))  # v2
+    back = store.save_strategy_document(valid_doc())               # == v1
+    assert back.version == 1
+    assert back.created_new_version is False
+    assert len(store.strategy_versions("ok-strategy")) == 2
+
+
+def test_a_draft_is_not_versioned(store):
+    """A draft has no coherent definition to snapshot; versioning one would
+    create history nothing could reproduce."""
+    result = store.save_strategy_document(valid_doc(timeframe="7m"))
+    assert result.status == "draft"
+    assert result.version is None
+    assert result.version_id is None
+    assert store.strategy_versions("ok-strategy") == []
+
+
+def test_the_current_version_pointer_follows_the_latest_save(store):
+    store.save_strategy_document(valid_doc())
+    v2 = store.save_strategy_document(valid_doc(max_cycles_per_day=7))
+    assert store.current_version_id("ok-strategy") == v2.version_id
+
+
+def test_versioning_degrades_gracefully_without_the_migration(store):
+    """A database without sql/005 must keep saving strategies. The feature is
+    unavailable; the app is not."""
+    class NoVersionTable(FakeClient):
+        def table(self, name):
+            if name == "strategy_versions":
+                raise APIError({"message": 'relation "strategy_versions" does not exist'})
+            return super().table(name)
+
+    from db import SupabaseStore
+    degraded = SupabaseStore(NoVersionTable())
+    result = degraded.save_strategy_document(valid_doc())
+    assert result.is_valid          # the save still worked
+    assert result.version is None   # but nothing was versioned
