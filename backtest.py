@@ -536,6 +536,8 @@ def run_backtest(
     strategies: list[Strategy],
     years: float,
     now_utc: datetime | None = None,
+    from_utc: datetime | None = None,
+    to_utc: datetime | None = None,
 ) -> tuple[uuid.UUID, list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch, simulate, and score every strategy x instrument combination.
 
@@ -545,8 +547,12 @@ def run_backtest(
     A fetch failure on one instrument skips that combination with a warning
     instead of killing the whole batch.
     """
-    now = now_utc or datetime.now(tz=UTC)
-    from_utc = now - timedelta(days=math.ceil(years * 365.25))
+    now = to_utc or now_utc or datetime.now(tz=UTC)
+    # An explicit window is what makes a run reproducible. `years` is measured
+    # from TODAY, so the same command a week later silently tests a different
+    # period - which is why two runs of "the same" backtest can disagree.
+    if from_utc is None:
+        from_utc = now - timedelta(days=math.ceil(years * 365.25))
     batch_id = uuid.uuid4()
     today_ist = now.astimezone(IST).date()
 
@@ -701,9 +707,48 @@ def write_csv(batch_id: uuid.UUID, rows: list[dict[str, Any]], now_utc: datetime
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Batch backtester (paper research only).")
     parser.add_argument("--years", type=float, default=2.0, help="years of history (default 2)")
+    # Absolute dates are what make a run REPRODUCIBLE. --years is measured from
+    # today, so the same command a week later tests a different period and
+    # cannot reproduce an earlier result.
+    parser.add_argument(
+        "--from", dest="from_date", default=None,
+        help="start date YYYY-MM-DD (IST). Use with --to to pin an exact window",
+    )
+    parser.add_argument(
+        "--to", dest="to_date", default=None,
+        help="end date YYYY-MM-DD (IST). Requires --from",
+    )
     parser.add_argument("--strategy", help="run only this strategy name")
     parser.add_argument("--no-db", action="store_true", help="skip Supabase writes (CSV only)")
     args = parser.parse_args(argv)
+
+    # Argument validation before any work: connecting to Supabase and loading
+    # strategies only to reject a malformed date wastes time and buries the
+    # real complaint under unrelated setup errors.
+    window_from = window_to = None
+    if args.from_date or args.to_date:
+        if not (args.from_date and args.to_date):
+            print(
+                "ERROR: --from and --to must be given together. A half-open "
+                "window is ambiguous, and guessing the other end is exactly the "
+                "kind of silent assumption that makes a result irreproducible.",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            window_from = datetime.fromisoformat(args.from_date).replace(
+                tzinfo=IST
+            ).astimezone(UTC)
+            window_to = datetime.fromisoformat(args.to_date).replace(
+                tzinfo=IST
+            ).astimezone(UTC)
+        except ValueError as exc:
+            print(f"ERROR: bad date - {exc}. Use YYYY-MM-DD.", file=sys.stderr)
+            return 1
+        if window_from >= window_to:
+            print("ERROR: --from must be before --to.", file=sys.stderr)
+            return 1
+        print(f"window: {args.from_date} -> {args.to_date} IST (explicit)")
 
     started = datetime.now(tz=UTC)
     try:
@@ -768,6 +813,7 @@ def main(argv: list[str] | None = None) -> int:
         batch_id, rows, run_rows = run_backtest(
             settings=settings, store=store, client=client,
             strategies=strategies, years=args.years,
+            from_utc=window_from, to_utc=window_to,
         )
 
         csv_path = write_csv(batch_id, rows, started)
