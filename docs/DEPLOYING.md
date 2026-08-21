@@ -102,9 +102,40 @@ That is Step 3.
    APP_PASSWORD=the-password-you-generated
    ```
 
-7. Click **Save** / **Update Variables**.
+7. **Change one line before saving.** If your `.env` contains
+   `CANDLE_STORE=parquet`, edit it here to read:
+
+   ```
+   CANDLE_STORE=supabase
+   ```
+
+   This is the one setting that must differ between your laptop and the
+   server. Why is explained just below.
+
+8. Click **Save** / **Update Variables**.
 
 Railway restarts the app automatically with the new values.
+
+> ### Why `CANDLE_STORE` differs on the server
+>
+> Parquet is much faster on your laptop — about 34x — but it stores price
+> history as files on disk, and Railway wipes its filesystem on every deploy.
+> Those files are also deliberately kept out of the repository (they are
+> regenerable data, not code), so they never reach the server at all.
+>
+> A server set to `parquet` would therefore find nothing and re-download
+> millions of price bars from Dhan on every single deploy. The app now refuses
+> to start in that state and tells you why, rather than doing it quietly.
+>
+> Your price history is still in Supabase — the Parquet migration copied it
+> rather than moving it — so `supabase` works on the server today.
+>
+> To get Parquet's speed on the server too, the files need to live in object
+> storage (Cloudflare R2) with `CANDLE_ROOT=s3://...`. That is not set up yet,
+> and is not needed for anything to work.
+>
+> Different values in the two places is normal and correct: the same code and
+> the same data, read from wherever each machine can reach it.
 
 > **If you cannot find Raw Editor**, add them one at a time instead: click
 > **New Variable**, type the name in the first box (e.g. `SUPABASE_URL`), the
