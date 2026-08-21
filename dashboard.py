@@ -65,6 +65,7 @@ def _app() -> None:  # pragma: no cover — exercised by `streamlit run`
         strategies,
         system,
         trade_log,
+        universes_page,
     )
 
     # st.navigation renders the sidebar. Each entry wraps a page module so
@@ -80,6 +81,7 @@ def _app() -> None:  # pragma: no cover — exercised by `streamlit run`
     pages = [
         page(overview, "Overview", "📊", "overview", default=True),
         page(strategies, "Strategies", "🧠", "strategies"),
+        page(universes_page, "Universes", "🌐", "universes"),
         page(backtest_page, "Backtest", "🔬", "backtest"),
         page(paper_trading, "Paper trading", "📈", "paper-trading"),
         page(trade_log, "Trade log", "📜", "trade-log"),

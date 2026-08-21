@@ -399,6 +399,143 @@ class SupabaseStore:
             symbols += [r["symbol"] for r in rows]
         return tuple(sorted(symbols)), as_of
 
+    def save_custom_universe(
+        self, name: str, symbols: list[str]
+    ) -> tuple[int, list[str]]:
+        """Create or replace a user-defined universe. Returns (stored, unknown).
+
+        Symbols absent from the instruments table are REPORTED, never silently
+        dropped: a group that quietly holds four of the five names you typed
+        would make every result computed over it subtly wrong, and nothing
+        would say so.
+
+        Membership is replaced rather than merged. Editing a group is how you
+        remove a symbol, and a merge would make removal impossible.
+        """
+        from strategy_schema import UNIVERSE_RE
+
+        name = (name or "").strip().upper()
+        if not UNIVERSE_RE.match(name):
+            raise DatabaseError(
+                f"{name!r} is not a valid universe name. Use capitals, digits "
+                "and underscores, 2 to 40 characters - e.g. MY_BANKS."
+            )
+
+        wanted = []
+        for raw in symbols:
+            symbol = (raw or "").strip().upper()
+            if symbol and symbol not in wanted:
+                wanted.append(symbol)
+        if not wanted:
+            raise DatabaseError(
+                "a universe needs at least one symbol. An empty group would "
+                "produce a zero-trade backtest indistinguishable from a "
+                "strategy that never triggered."
+            )
+
+        known: dict[str, int] = {}
+        for i in range(0, len(wanted), 200):
+            chunk = wanted[i:i + 200]
+            try:
+                rows = (
+                    self._table("instruments").select("id,symbol")
+                    .in_("symbol", chunk).execute()
+                ).data
+            except APIError as exc:
+                raise self._wrap(exc, "resolving universe symbols") from exc
+            known.update({r["symbol"]: int(r["id"]) for r in rows})
+
+        unknown = [s for s in wanted if s not in known]
+        resolved = [s for s in wanted if s in known]
+        if not resolved:
+            raise DatabaseError(
+                f"none of those symbols are in the instruments table: "
+                f"{', '.join(wanted[:10])}. Check the EXCHANGE:SYMBOL spelling, "
+                "or refresh the instrument list with "
+                "backfill.py --refresh-instruments."
+            )
+
+        try:
+            self._table("symbol_groups").upsert(
+                {
+                    "name": name,
+                    "source": "custom",
+                    "is_system": False,
+                    "constituents_as_of": _iso(datetime.now(tz=UTC))[:10],
+                },
+                on_conflict="name",
+            ).execute()
+            group = (
+                self._table("symbol_groups").select("id").eq("name", name).execute()
+            ).data
+            group_id = int(group[0]["id"])
+
+            self._table("symbol_group_members").delete().eq(
+                "group_id", group_id
+            ).execute()
+            self._table("symbol_group_members").insert(
+                [{"group_id": group_id, "instrument_id": known[s]} for s in resolved]
+            ).execute()
+        except APIError as exc:
+            raise self._wrap(exc, f"saving universe {name}") from exc
+
+        return len(resolved), unknown
+
+    def delete_universe(self, name: str) -> None:
+        """Remove a CUSTOM universe. System universes are refused.
+
+        A system universe is rebuilt from NSE by refresh_universes.py, so
+        deleting one here would be undone silently on the next refresh - and
+        would meanwhile break any strategy pointing at it.
+        """
+        try:
+            rows = (
+                self._table("symbol_groups").select("id,source")
+                .eq("name", name).execute()
+            ).data
+        except APIError as exc:
+            raise self._wrap(exc, f"reading universe {name}") from exc
+        if not rows:
+            raise DatabaseError(f"no universe named {name!r}.")
+        if rows[0].get("source") == "nse":
+            raise DatabaseError(
+                f"{name!r} comes from NSE and is refreshed by "
+                "scripts/refresh_universes.py. Deleting it here would be undone "
+                "on the next refresh."
+            )
+        try:
+            self._table("symbol_groups").delete().eq("name", name).execute()
+        except APIError as exc:
+            raise self._wrap(exc, f"deleting universe {name}") from exc
+
+    def list_universes(self) -> list[dict[str, Any]]:
+        """Every universe with its size and provenance."""
+        try:
+            groups = (
+                self._table("symbol_groups")
+                .select("id,name,source,constituents_as_of").execute()
+            ).data
+        except APIError as exc:
+            raise self._wrap(exc, "listing universes") from exc
+
+        out = []
+        for g in groups:
+            try:
+                count = (
+                    self._table("symbol_group_members")
+                    .select("instrument_id", count="exact")
+                    .eq("group_id", g["id"]).limit(1).execute()
+                ).count or 0
+            except APIError:
+                count = 0
+            out.append({
+                "name": g["name"],
+                "source": g.get("source") or "custom",
+                "as_of": g.get("constituents_as_of"),
+                "members": count,
+            })
+        return sorted(out, key=lambda r: (r["source"] != "custom", r["name"]))
+
     def save_strategy_document(
         self, doc: Mapping[str, Any], *, raw_source: str | None = None
     ) -> SaveResult:
