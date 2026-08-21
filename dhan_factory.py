@@ -81,9 +81,30 @@ def create_candle_store(client: Any):
     from supabase_candle_backend import SupabaseCandleBackend
 
     return CandleStore(
-        backend=SupabaseCandleBackend(client),
+        backend=create_candle_backend(client),
         provider=create_dhan_provider(client),
     )
+
+
+def create_candle_backend(client: Any):
+    """The configured candle backend.
+
+    Defaults to Supabase so nothing changes without a deliberate choice. With
+    CANDLE_STORE=parquet, candles move to columnar files while instrument
+    lookup, coverage and quality flags still go to Supabase - the Parquet
+    backend wraps rather than replaces it.
+    """
+    from config import get_settings
+    from supabase_candle_backend import SupabaseCandleBackend
+
+    settings = get_settings()
+    inner = SupabaseCandleBackend(client)
+    if settings.candle_store != "parquet":
+        return inner
+
+    from parquet_candle_backend import ParquetCandleBackend
+
+    return ParquetCandleBackend(inner, settings.candle_root)
 
 
 def create_dhan_data_client(client: Any) -> CandleStoreDataClient:
