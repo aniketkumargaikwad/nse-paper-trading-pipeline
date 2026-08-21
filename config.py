@@ -47,6 +47,12 @@ DEFAULT_SLIPPAGE_PCT = 0.05        # 0.05% adverse move applied to every fill
 # Where candle bars are stored. 'supabase' keeps them as rows (the original
 # behaviour); 'parquet' writes columnar files and is 5.6x smaller and ~34x
 # faster to read, measured on real data. Metadata stays in Supabase either way.
+# 'flat' charges a fixed rupee amount per round trip; 'itemised' models real
+# Indian intraday charges, which scale with turnover. Flat is the default so
+# existing results stay reproducible - see costs.py for why flat is wrong at
+# every trade size but one.
+DEFAULT_COST_MODEL = "flat"
+
 DEFAULT_CANDLE_STORE = "supabase"
 # Local path or an fsspec URL - "s3://bucket/prefix" for Cloudflare R2 - so
 # moving to object storage is configuration rather than code. A local path is
@@ -167,6 +173,7 @@ class Settings:
     supabase_url: str
     supabase_service_role_key: str
     data_provider: str = DEFAULT_DATA_PROVIDER
+    cost_model: str = DEFAULT_COST_MODEL
     candle_store: str = DEFAULT_CANDLE_STORE
     candle_root: str = DEFAULT_CANDLE_ROOT
     # Kite credentials are only required when data_provider == 'kite'; they
@@ -258,6 +265,7 @@ def get_settings(require_supabase: bool = True) -> Settings:
         data_provider=provider,
         kite_api_key=kite_key,
         kite_api_secret=kite_secret,
+        cost_model=os.environ.get("COST_MODEL", DEFAULT_COST_MODEL).strip().lower(),
         candle_store=os.environ.get("CANDLE_STORE", DEFAULT_CANDLE_STORE).strip().lower(),
         candle_root=os.environ.get("CANDLE_ROOT", DEFAULT_CANDLE_ROOT).strip(),
         slippage_pct=_read_float_env("SLIPPAGE_PCT", DEFAULT_SLIPPAGE_PCT),

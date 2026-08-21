@@ -65,6 +65,7 @@ from metrics import (
 )
 from risk_levels import build_atr_series, level_from_spec
 from config import IST, UTC, Settings, get_settings
+from costs import CostModel, FlatCostModel
 from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
 from kite_client import KiteClientError, TokenExpiredError
@@ -98,11 +99,20 @@ def _make_trade(
     intended_entry: float, entry_price: float,
     intended_exit: float, exit_price: float,
     exit_reason: str, cost_per_trade_inr: float,
+    cost_model: Any = None,
 ) -> SimTrade:
     if position_type == "long":
         gross = (exit_price - entry_price) * quantity
     else:  # short: profit when price falls
         gross = (entry_price - exit_price) * quantity
+
+    # An itemised model prices this trade's OWN turnover; the flat fallback
+    # ignores it. Defaulting to flat keeps every existing result reproducible.
+    costs = (
+        cost_model.round_trip(entry_price, exit_price, quantity)
+        if cost_model is not None
+        else cost_per_trade_inr
+    )
     return SimTrade(
         entry_signal_ts=entry_signal_ts, entry_fill_ts=entry_fill_ts,
         exit_signal_ts=exit_signal_ts, exit_fill_ts=exit_fill_ts,
@@ -111,8 +121,8 @@ def _make_trade(
         intended_exit_price=intended_exit, exit_price=exit_price,
         exit_reason=exit_reason,
         gross_pnl=round(gross, 4),
-        costs=cost_per_trade_inr,
-        net_pnl=round(gross - cost_per_trade_inr, 4),
+        costs=costs,
+        net_pnl=round(gross - costs, 4),
     )
 
 
@@ -122,6 +132,7 @@ def simulate_with_skips(
     *,
     slippage_pct: float,
     cost_per_trade_inr: float,
+    cost_model: Any = None,
 ) -> SimResult:
     """Replay one instrument's candle history under the fill-realism model.
 
@@ -204,6 +215,7 @@ def simulate_with_skips(
                 intended_entry=e_intended, entry_price=e_price,
                 intended_exit=intended, exit_price=exit_fill(intended),
                 exit_reason=reason, cost_per_trade_inr=cost_per_trade_inr,
+                cost_model=cost_model,
             )
         )
         in_pos = False
@@ -361,12 +373,14 @@ def simulate(
     *,
     slippage_pct: float,
     cost_per_trade_inr: float,
+    cost_model: Any = None,
 ) -> list[SimTrade]:
     """Completed trades only. See simulate_with_skips for skipped entries."""
     return simulate_with_skips(
         df, strategy,
         slippage_pct=slippage_pct,
         cost_per_trade_inr=cost_per_trade_inr,
+        cost_model=cost_model,
     ).trades
 
 
@@ -431,6 +445,19 @@ def resolve_strategy_symbols(strategy: Strategy, store: Any) -> ResolvedSymbols:
         universe_name=strategy.universe,
         constituents_as_of=as_of,
     )
+
+
+def build_cost_model(settings: Settings):
+    """The configured cost model.
+
+    Defaults to the FLAT charge, so existing results stay reproducible and
+    nobody's numbers move without a deliberate choice. COST_MODEL=itemised
+    switches to real Indian intraday charges, which scale with turnover -
+    at Rs 100,000 notional they are roughly Rs 83, not Rs 30.
+    """
+    if getattr(settings, "cost_model", "flat") == "itemised":
+        return CostModel()
+    return FlatCostModel(settings.cost_per_trade_inr)
 
 
 def build_run_row(
@@ -573,6 +600,11 @@ def run_backtest(
     )
     tokens = client.resolve_instrument_tokens(all_instruments, today_ist)
 
+    # Built once: two backtests with different cost assumptions are not
+    # comparable, so the model is fixed for the whole run and reported on it.
+    cost_model = build_cost_model(settings)
+    print(f"costs: {cost_model.describe()}")
+
     rows: list[dict[str, Any]] = []
     run_rows: list[dict[str, Any]] = []
     requested_days = math.ceil(years * 365.25)
@@ -625,6 +657,7 @@ def run_backtest(
                 df, strategy,
                 slippage_pct=settings.slippage_pct,
                 cost_per_trade_inr=settings.cost_per_trade_inr,
+                cost_model=cost_model,
             )
             metrics = compute_metrics(result.trades)
             per_symbol[instrument] = (metrics, df)
