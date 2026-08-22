@@ -25,6 +25,8 @@ import numpy as np
 import pandas as pd
 
 import indicators
+from config import TIMEFRAME_MINUTES
+from resample import aggregate_for_reference
 from risk_levels import atr_periods_for
 from strategy_schema import Condition, ConditionGroup, Operand, Strategy
 
@@ -38,21 +40,92 @@ _Cache = dict
 
 
 def _cache_key(op: Operand) -> tuple:
-    return (op.indicator, tuple(sorted(op.params.items())), op.source, op.output)
+    return (
+        op.indicator, tuple(sorted(op.params.items())),
+        op.source, op.output, op.offset, op.timeframe,
+    )
 
 
 def operand_series(df: pd.DataFrame, op: Operand, cache: _Cache | None = None) -> pd.Series:
-    """Materialize one operand (indicator or raw series) as a float Series."""
+    """Materialize one operand (indicator or raw series) as a float Series.
+
+    An operand with `offset: N` reads N closed bars back. The shift is applied
+    AFTER the indicator is computed, which is the only order that gives the
+    indicator its full history: shifting the input first would compute, say,
+    RSI over a series with a hole punched in the front of it.
+
+    Shifting forward can only ever expose older data, so this direction is
+    incapable of leaking the future no matter what N is. The parser refuses
+    negative offsets separately.
+    """
     if cache is not None:
         key = _cache_key(op)
         if key in cache:
             return cache[key]
 
-    series = _compute_operand(df, op)
+    if op.timeframe is None:
+        series = _compute_operand(df, op)
+        if op.offset:
+            series = series.shift(op.offset)
+    else:
+        series = _higher_timeframe_series(df, op)
 
     if cache is not None:
         cache[_cache_key(op)] = series
     return series
+
+
+def _higher_timeframe_series(df: pd.DataFrame, op: Operand) -> pd.Series:
+    """Evaluate an operand on a higher timeframe, aligned without look-ahead.
+
+    THE RULE: a higher-timeframe bar is visible to a strategy bar only once it
+    has fully closed. During today's session the newest CLOSED daily bar is
+    yesterday's, so `{indicator: high, timeframe: day}` means yesterday's high
+    on every bar of today — and it stays yesterday's high all day, rather than
+    turning into today's on the closing bar.
+
+    That last point is why the comparison is against the strategy bar's START
+    rather than its close. On the final 15m bar of a session the daily bar
+    closes at the same instant, so an "at or before close" rule would let that
+    one bar of the day see today's daily high while the other twenty-four saw
+    yesterday's. Nothing about that is look-ahead, but a rule that means
+    something different on one bar per day is a trap: a breakout condition
+    would quietly change what it tests at 15:15. Comparing against the start
+    gives up a sliver of information to keep the rule identical on every bar.
+
+    Using the start also means this never needs to know the strategy's own
+    bar length — the frame it is handed is enough.
+    """
+    higher = aggregate_for_reference(df, op.timeframe)
+    if higher.empty:
+        return pd.Series(np.nan, index=df.index, dtype="float64")
+
+    # Aggregating to the timeframe the strategy already runs on is the
+    # identity, and identity must stay a no-op: shifting here would silently
+    # make `timeframe: 15m` on a 15m strategy mean "the previous bar".
+    if len(higher.index) == len(df.index) and higher.index.equals(df.index):
+        series = _compute_operand(df, op)
+        return series.shift(op.offset) if op.offset else series
+
+    values = _compute_operand(higher, op)
+    if op.offset:
+        # Shifted on the HIGHER timeframe, so `offset: 1` under
+        # `timeframe: day` steps back a day, not a candle.
+        values = values.shift(op.offset)
+
+    # Bars are stamped at their start, so a bar's close is start + its length.
+    closes = higher.index + pd.Timedelta(minutes=TIMEFRAME_MINUTES[op.timeframe])
+
+    left = pd.DataFrame({"_at": df.index})
+    right = pd.DataFrame(
+        {"_at": closes, "_v": values.to_numpy()}
+    ).sort_values("_at")
+    merged = pd.merge_asof(
+        left, right, on="_at", direction="backward", allow_exact_matches=True
+    )
+    return pd.Series(
+        merged["_v"].to_numpy(), index=df.index, dtype="float64"
+    )
 
 
 def _compute_operand(df: pd.DataFrame, op: Operand) -> pd.Series:
@@ -188,15 +261,38 @@ def min_candles_required(strategy: Strategy) -> int:
     that would turn a perfectly good strategy into a hard error every run
     for a reason that isn't obvious from the strategy definition itself.
     """
-    lookbacks = [_operand_lookback(op) for op in _walk_operands(strategy)]
+    # The 5x is a CONVERGENCE allowance, so it multiplies the indicator's own
+    # period and nothing else. An `offset` needs its bars literally — reading
+    # RSI(14) three bars back wants three more bars, not fifteen — so it is
+    # added after the multiplier rather than inside it.
+    #
+    # An operand on a higher timeframe is counted in ITS bars, then converted
+    # to the strategy's. A daily EMA(20) under a 15m entry needs twenty DAYS,
+    # which is about 500 fifteen-minute candles, not twenty. Get this wrong
+    # and the filter is NaN for the whole run: the strategy never fires, and
+    # reports a clean "no trades" rather than an error.
+    own_minutes = TIMEFRAME_MINUTES[strategy.timeframe]
+    needs = [
+        (5 * _indicator_lookback(op) + op.offset)
+        * (TIMEFRAME_MINUTES[op.timeframe or strategy.timeframe] // own_minutes)
+        for op in _walk_operands(strategy)
+    ]
     # Sourced from risk_levels rather than re-listed here: that module is
     # what actually builds these series, and a second list would drift the
     # moment a new risk field is added (trailing_stop already proved it).
-    lookbacks += [period + 1 for period in atr_periods_for(strategy)]
-    return 5 * max(lookbacks) + 10
+    needs += [5 * (period + 1) for period in atr_periods_for(strategy)]
+    return max(needs) + 10
 
 
 def _operand_lookback(op: Operand) -> int:
+    # An offset consumes real bars on top of whatever the indicator needs:
+    # reading RSI(14) three bars back cannot produce a value until bar 17.
+    # Leaving it out would let the engine act on the first bar where the
+    # operand is still NaN.
+    return _indicator_lookback(op) + op.offset
+
+
+def _indicator_lookback(op: Operand) -> int:
     name = op.indicator
     if name in ("close", "open", "high", "low", "volume"):
         return 1

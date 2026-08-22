@@ -50,6 +50,41 @@ DEFAULT_OUTPUT: dict[str, str] = {
 # "volume SMA" is expressed: {indicator: sma, source: volume, ...}).
 SOURCE_ALLOWED_FOR: frozenset[str] = frozenset({"ema", "sma"})
 
+# How many closed bars back an operand may look. `offset: 1` is the previous
+# bar, which is what "breaks yesterday's high" needs on a daily strategy and
+# what "higher than the last bar" needs on any timeframe.
+#
+# There is no negative offset and there never can be: a negative offset reads
+# a bar that has not closed, which is look-ahead bias expressed as
+# configuration. The parser rejects it rather than trusting anyone to
+# remember.
+#
+# The cap is a typo guard, not a real limit. An offset beyond it is far more
+# likely a period pasted into the wrong key than a genuine intent to read
+# four years back — and every extra bar of offset costs a bar of warm-up
+# before the strategy can fire at all.
+MAX_OFFSET = 500
+
+# v3 expression namespaces. Kept HERE, in the pure vocabulary module, because
+# two places knowing the list is how `daily.high` ends up evaluating fine and
+# failing validation — which is exactly what happened before this moved.
+#
+# prefix -> the timeframe it aggregates to.
+HIGHER_TIMEFRAME_PREFIXES: dict[str, str] = {
+    "prev_day": "day",
+    "daily": "day",
+    "hourly": "60m",
+}
+
+# Non-timeframe dotted prefixes an expression may use.
+CANDLE_FIELDS: frozenset[str] = frozenset({
+    "is_bullish", "is_bearish", "body", "range", "upper_wick", "lower_wick",
+})
+
+POSITION_FIELDS: frozenset[str] = frozenset({
+    "is_open", "is_long", "is_short", "bars_held", "entry_price", "pnl_pct",
+})
+
 COMPARISON_OPERATORS: frozenset[str] = frozenset({">", "<", ">=", "<="})
 CROSS_OPERATORS: frozenset[str] = frozenset({"crosses_above", "crosses_below"})
 ALL_OPERATORS: frozenset[str] = COMPARISON_OPERATORS | CROSS_OPERATORS

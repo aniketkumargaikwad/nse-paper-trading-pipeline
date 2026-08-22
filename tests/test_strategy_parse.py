@@ -541,3 +541,146 @@ def test_well_formed_universe_names_are_accepted(good_name):
     del doc["instruments"]
     doc["universe"] = good_name
     assert parse_strategy_dict(doc).universe == good_name
+
+
+# ---------------------------------------------------------------------------
+# Previous-period references (`offset`)
+# ---------------------------------------------------------------------------
+
+
+def test_offset_is_parsed_onto_the_operand() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "offset": 1,
+                             "operator": ">", "value": 100}]}
+    assert parse_strategy_dict(doc).entry.items[0].left.offset == 1
+
+
+def test_offset_defaults_to_zero() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "operator": ">", "value": 100}]}
+    assert parse_strategy_dict(doc).entry.items[0].left.offset == 0
+
+
+def test_offset_is_parsed_on_a_compare_to_operand() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{
+        "indicator": "close", "operator": ">",
+        "compare_to": {"indicator": "high", "offset": 1},
+    }]}
+    assert parse_strategy_dict(doc).entry.items[0].right.offset == 1
+
+
+def test_negative_offset_is_rejected() -> None:
+    """A negative offset reads the FUTURE. It must be impossible to write."""
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "offset": -1,
+                             "operator": ">", "value": 100}]}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "offset" in str(exc.value)
+
+
+def test_non_integer_offset_is_rejected() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "offset": 1.5,
+                             "operator": ">", "value": 100}]}
+    with pytest.raises(StrategyConfigError):
+        parse_strategy_dict(doc)
+
+
+def test_boolean_offset_is_rejected() -> None:
+    """bool subclasses int; `offset: true` must not become offset=1."""
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "offset": True,
+                             "operator": ">", "value": 100}]}
+    with pytest.raises(StrategyConfigError):
+        parse_strategy_dict(doc)
+
+
+def test_absurd_offset_is_rejected() -> None:
+    """An offset larger than any plausible lookback is a typo, not a strategy."""
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "offset": 100000,
+                             "operator": ">", "value": 100}]}
+    with pytest.raises(StrategyConfigError):
+        parse_strategy_dict(doc)
+
+
+def test_offset_round_trips_through_raw() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "offset": 2,
+                             "operator": ">", "value": 100}]}
+    raw = strategy_to_raw(parse_strategy_dict(doc))
+    assert raw["entry"]["all"][0]["offset"] == 2
+    assert parse_strategy_dict(raw).entry.items[0].left.offset == 2
+
+
+def test_zero_offset_is_not_emitted_in_raw() -> None:
+    """The default stays invisible, so existing documents are unchanged."""
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "operator": ">", "value": 100}]}
+    raw = strategy_to_raw(parse_strategy_dict(doc))
+    assert "offset" not in raw["entry"]["all"][0]
+
+
+# ---------------------------------------------------------------------------
+# Higher-timeframe references (`timeframe` on an operand)
+# ---------------------------------------------------------------------------
+
+
+def test_operand_timeframe_is_parsed() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "timeframe": "day",
+                             "operator": ">", "value": 100}]}
+    assert parse_strategy_dict(doc).entry.items[0].left.timeframe == "day"
+
+
+def test_operand_timeframe_defaults_to_none() -> None:
+    doc = valid_v2()
+    assert parse_strategy_dict(doc).entry.items[0].left.timeframe is None
+
+
+def test_lower_operand_timeframe_is_rejected() -> None:
+    """A 15m strategy cannot read 5m bars: the frame it is handed does not
+    contain them, and inventing them would be fabricating data."""
+    doc = valid_v2()          # timeframe: 15m
+    doc["entry"] = {"all": [{"indicator": "high", "timeframe": "5m",
+                             "operator": ">", "value": 100}]}
+    with pytest.raises(StrategyConfigError) as exc:
+        parse_strategy_dict(doc)
+    assert "5m" in str(exc.value)
+
+
+def test_unknown_operand_timeframe_is_rejected() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "timeframe": "4h",
+                             "operator": ">", "value": 100}]}
+    with pytest.raises(StrategyConfigError):
+        parse_strategy_dict(doc)
+
+
+def test_equal_operand_timeframe_is_allowed() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "timeframe": "15m",
+                             "operator": ">", "value": 100}]}
+    assert parse_strategy_dict(doc).entry.items[0].left.timeframe == "15m"
+
+
+def test_operand_timeframe_on_compare_to_is_checked_too() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{
+        "indicator": "close", "operator": ">",
+        "compare_to": {"indicator": "high", "timeframe": "5m"},
+    }]}
+    with pytest.raises(StrategyConfigError):
+        parse_strategy_dict(doc)
+
+
+def test_operand_timeframe_round_trips() -> None:
+    doc = valid_v2()
+    doc["entry"] = {"all": [{"indicator": "high", "timeframe": "day",
+                             "offset": 1, "operator": ">", "value": 100}]}
+    raw = strategy_to_raw(parse_strategy_dict(doc))
+    assert raw["entry"]["all"][0]["timeframe"] == "day"
+    round_tripped = parse_strategy_dict(raw).entry.items[0].left
+    assert (round_tripped.timeframe, round_tripped.offset) == ("day", 1)

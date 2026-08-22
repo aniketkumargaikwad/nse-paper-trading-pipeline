@@ -27,6 +27,7 @@ from strategy.vocabulary import (  # noqa: E402
     INDICATOR_OUTPUTS,
     INDICATOR_PARAMS,
     MAX_ATR_MULTIPLIER,
+    MAX_OFFSET,
     MAX_STOP_PERCENT,
     POSITION_TYPES,
     PRICE_SOURCES,
@@ -141,6 +142,81 @@ take no params.
 `source:` selects which series a moving average is computed over and is allowed
 only on {", ".join(f"`{s}`" for s in sorted(SOURCE_ALLOWED_FOR))}. A volume
 average is written `{{indicator: sma, source: volume, params: {{period: 20}}}}`.
+
+## Reading earlier bars — `offset`
+
+`offset:` reads a value N **closed bars back**, on any operand. `0` (the
+default) is the current bar, `1` the previous one. Maximum {MAX_OFFSET}.
+
+```yaml
+# this bar's close breaks the previous bar's high
+- indicator: close
+  operator: ">"
+  compare_to: {{ indicator: high, offset: 1 }}
+```
+
+```yaml
+# RSI is higher than it was three bars ago
+- indicator: rsi
+  params: {{ period: 14 }}
+  operator: ">"
+  compare_to: {{ indicator: rsi, params: {{ period: 14 }}, offset: 3 }}
+```
+
+On a `timeframe: day` strategy, `offset: 1` on `high` IS the previous day's
+high. There is no negative offset: it would read a bar that has not closed,
+which is look-ahead bias, and the parser rejects it.
+
+Each bar of offset delays the strategy's first possible signal by one bar,
+because the value does not exist until that much history has accumulated.
+
+## Reading a higher timeframe — `timeframe`
+
+`timeframe:` on an operand reads it on a **higher** timeframe than the
+strategy's own — a daily trend filter under a 15m entry, say. One strategy,
+two timeframes.
+
+```yaml
+timeframe: 15m          # the strategy trades 15m bars
+entry:
+  all:
+    # daily trend filter: price above the 200-day EMA
+    - indicator: close
+      timeframe: day
+      operator: ">"
+      compare_to: {{ indicator: ema, params: {{ period: 200 }}, timeframe: day }}
+    # 15m entry trigger
+    - indicator: rsi
+      params: {{ period: 14 }}
+      operator: crosses_above
+      value: 60
+```
+
+```yaml
+# today's price breaks yesterday's high, on an intraday strategy
+- indicator: close
+  operator: ">"
+  compare_to: {{ indicator: high, timeframe: day }}
+```
+
+**A higher-timeframe bar is only visible once it has fully closed.** During
+today's session the newest closed daily bar is *yesterday's*, so
+`{{indicator: high, timeframe: day}}` is yesterday's high on every bar of
+today — including the last one. This is what makes the reference free of
+look-ahead, and it is why the breakout example above needs no `offset`.
+
+`offset` then counts bars of the OPERAND's timeframe:
+`{{indicator: high, timeframe: day, offset: 1}}` is the high of the day
+*before* yesterday.
+
+Rules:
+
+* The operand's timeframe must be the strategy's own or higher. A lower one is
+  rejected — the strategy's candles do not contain that detail.
+* Higher-timeframe bars are built by aggregating the strategy's own candles,
+  so the filter and the entry can never disagree about the price.
+* History scales with the timeframe: a daily EMA(200) under a 15m strategy
+  needs 200 trading days of 15m candles before it produces a single value.
 
 ## Operators
 

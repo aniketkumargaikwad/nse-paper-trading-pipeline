@@ -95,6 +95,51 @@ def resample_candles(df: pd.DataFrame, target_timeframe: str) -> pd.DataFrame:
             f"Frame is missing required column(s): {', '.join(missing)}"
         )
 
+    return _bucket(df, target_minutes)
+
+
+def aggregate_for_reference(df: pd.DataFrame, target_timeframe: str) -> pd.DataFrame:
+    """Aggregate ANY frame up to `target_timeframe`, including `day`.
+
+    Separate from `resample_candles` because it answers a different question.
+    `resample_candles` serves candles for TRADING, and refuses `day` because
+    stored daily candles come from the provider's corporate-action-adjusted
+    feed, which intraday bars cannot reproduce.
+
+    This one serves a strategy REFERENCING a higher timeframe from inside a
+    lower-timeframe run — a daily trend filter under a 15m entry. Here the
+    derived bar is what you want: it is built from the very candles the
+    strategy trades, so the filter and the entry can never disagree about
+    what the price was. Pulling in the adjusted daily feed instead would put
+    two differently-adjusted series in one strategy, and a filter that
+    disagrees with the bars it gates is worse than no filter.
+
+    Bars are stamped at their session-anchored START, exactly as
+    `resample_candles` stamps them.
+    """
+    if df.empty:
+        return _empty_frame()
+    if df.index.tz is None:
+        raise ResampleError(
+            "aggregate_for_reference requires a tz-aware UTC index "
+            "(got naive timestamps)"
+        )
+    target_minutes = TIMEFRAME_MINUTES.get(target_timeframe)
+    if target_minutes is None:
+        raise ResampleError(
+            f"Unknown timeframe {target_timeframe!r}. "
+            f"Known: {', '.join(TIMEFRAME_MINUTES)}"
+        )
+    missing = [c for c in OHLCV_COLUMNS if c not in df.columns]
+    if missing:
+        raise ResampleError(
+            f"Frame is missing required column(s): {', '.join(missing)}"
+        )
+    return _bucket(df, target_minutes)
+
+
+def _bucket(df: pd.DataFrame, target_minutes: int) -> pd.DataFrame:
+    """Session-anchored OHLCV aggregation into `target_minutes` buckets."""
     frame = df.sort_index()
     ist_index = frame.index.tz_convert(IST)
 

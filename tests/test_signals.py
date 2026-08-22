@@ -301,3 +301,305 @@ def test_a_trailing_atr_period_counts_too():
         }
     )
     assert signals.min_candles_required(trailing) >= 60
+
+
+# ---------------------------------------------------------------------------
+# Previous-period references (`offset`)
+# ---------------------------------------------------------------------------
+#
+# `offset: N` reads a series N closed bars back. It is what lets a strategy
+# say "higher than the previous bar" without duplicating indicators, and it
+# is the foundation the higher-timeframe reference is built on.
+
+
+def test_offset_reads_the_previous_bar() -> None:
+    """close[-1], not close."""
+    strat = strategy_with(
+        {"all": [{"indicator": "close", "offset": 1, "operator": ">", "value": 105}]}
+    )
+    df = make_df([100, 110, 100, 100])
+    series = signals.entry_series(df, strat)
+    # Bar 2 sees bar 1's close of 110; bar 1 sees bar 0's close of 100.
+    assert list(series) == [False, False, True, False]
+
+
+def test_offset_zero_is_the_current_bar() -> None:
+    strat = strategy_with(
+        {"all": [{"indicator": "close", "offset": 0, "operator": ">", "value": 105}]}
+    )
+    df = make_df([100, 110, 100])
+    assert list(signals.entry_series(df, strat)) == [False, True, False]
+
+
+def test_omitting_offset_matches_offset_zero() -> None:
+    """The default must not change behaviour for every existing strategy."""
+    df = make_df([100, 110, 100])
+    without = signals.entry_series(
+        df, strategy_with({"all": [{"indicator": "close", "operator": ">", "value": 105}]})
+    )
+    with_zero = signals.entry_series(
+        df,
+        strategy_with(
+            {"all": [{"indicator": "close", "offset": 0, "operator": ">", "value": 105}]}
+        ),
+    )
+    assert list(without) == list(with_zero)
+
+
+def test_offset_before_history_exists_is_false_not_an_error() -> None:
+    """No value yet is not a signal. NaN must never read as True."""
+    strat = strategy_with(
+        {"all": [{"indicator": "close", "offset": 2, "operator": ">", "value": 1}]}
+    )
+    df = make_df([100, 110, 120])
+    assert list(signals.entry_series(df, strat)) == [False, False, True]
+
+
+def test_offset_applies_to_indicators_not_just_price() -> None:
+    """The previous bar's RSI, not the previous bar's close."""
+    strat = strategy_with(
+        {"all": [{"indicator": "rsi", "params": {"period": 2},
+                  "offset": 1, "operator": ">", "value": 0}]}
+    )
+    df = make_df([100, 101, 102, 103, 104, 105])
+    plain = signals.operand_series(
+        df, strategy_with(
+            {"all": [{"indicator": "rsi", "params": {"period": 2},
+                      "operator": ">", "value": 0}]}
+        ).entry.items[0].left
+    )
+    shifted = signals.operand_series(df, strat.entry.items[0].left)
+    pd.testing.assert_series_equal(
+        shifted.iloc[1:].reset_index(drop=True),
+        plain.iloc[:-1].reset_index(drop=True),
+        check_names=False,
+    )
+
+
+def test_offset_on_both_sides_of_a_comparison() -> None:
+    """'this bar's close above the previous bar's high' — a breakout."""
+    strat = strategy_with(
+        {"all": [{
+            "indicator": "close",
+            "operator": ">",
+            "compare_to": {"indicator": "high", "offset": 1},
+        }]}
+    )
+    # make_df sets high = close + 1.
+    df = make_df([100, 100, 102, 100])
+    # Bar 2: close 102 > bar 1's high of 101 -> True.
+    assert list(signals.entry_series(df, strat)) == [False, False, True, False]
+
+
+def test_offset_extends_the_required_history() -> None:
+    """A strategy that reads 3 bars back needs 3 more bars before it can fire."""
+    base = strategy_with(
+        {"all": [{"indicator": "rsi", "params": {"period": 14},
+                  "operator": ">", "value": 50}]}
+    )
+    offset = strategy_with(
+        {"all": [{"indicator": "rsi", "params": {"period": 14},
+                  "offset": 3, "operator": ">", "value": 50}]}
+    )
+    assert (
+        signals.min_candles_required(offset)
+        == signals.min_candles_required(base) + 3
+    )
+
+
+# ---------------------------------------------------------------------------
+# Higher-timeframe references (`timeframe`)
+# ---------------------------------------------------------------------------
+#
+# The whole risk here is look-ahead. A 15m bar at 10:00 must NOT be able to
+# see the daily high, because today's daily bar has not closed — knowing it
+# would be knowing the future, and a backtest built on that is worthless.
+#
+# The rule these tests pin down: an operand on a higher timeframe resolves to
+# the most recent higher-timeframe bar that had FULLY CLOSED by the time the
+# current bar closed. During today's session that is yesterday's daily bar.
+
+BARS_PER_DAY = 25  # 09:15-15:30 IST in 15m bars
+
+
+def make_sessions(day_specs: list[dict]) -> pd.DataFrame:
+    """Build a multi-session 15m frame.
+
+    Each spec is {"date": date, "closes": [...25 floats...]}.
+    """
+    stamps: list[datetime] = []
+    rows: list[float] = []
+    for spec in day_specs:
+        d = spec["date"]
+        closes = spec["closes"]
+        assert len(closes) == BARS_PER_DAY
+        for i, close in enumerate(closes):
+            start = datetime(d.year, d.month, d.day, 9, 15, tzinfo=IST) + timedelta(
+                minutes=15 * i
+            )
+            stamps.append(start.astimezone(UTC))
+            rows.append(float(close))
+    closes = np.asarray(rows, dtype=float)
+    return pd.DataFrame(
+        {
+            "open": closes,
+            "high": closes,      # high == close keeps the arithmetic obvious
+            "low": closes,
+            "close": closes,
+            "volume": np.full(len(closes), 1000.0),
+        },
+        index=pd.DatetimeIndex(stamps, name="ts"),
+    )
+
+
+def flat_day(d, value: float) -> dict:
+    return {"date": d, "closes": [value] * BARS_PER_DAY}
+
+
+def test_daily_operand_reads_yesterdays_bar_during_todays_session() -> None:
+    from datetime import date
+
+    strat = strategy_with(
+        {"all": [{"indicator": "high", "timeframe": "day",
+                  "operator": ">", "value": 0}]}
+    )
+    df = make_sessions([
+        flat_day(date(2026, 7, 16), 100.0),
+        flat_day(date(2026, 7, 17), 200.0),
+        flat_day(date(2026, 7, 20), 300.0),
+    ])
+    series = signals.operand_series(df, strat.entry.items[0].left)
+
+    day2 = series.iloc[BARS_PER_DAY:BARS_PER_DAY * 2]
+    day3 = series.iloc[BARS_PER_DAY * 2:]
+    # Day 2 sees day 1's high of 100 throughout — never its own 200.
+    assert (day2 == 100.0).all()
+    assert (day3 == 300.0).sum() == 0
+    assert (day3 == 200.0).all()
+
+
+def test_first_session_has_no_previous_day_and_stays_nan() -> None:
+    from datetime import date
+
+    strat = strategy_with(
+        {"all": [{"indicator": "high", "timeframe": "day",
+                  "operator": ">", "value": 0}]}
+    )
+    df = make_sessions([
+        flat_day(date(2026, 7, 16), 100.0),
+        flat_day(date(2026, 7, 17), 200.0),
+    ])
+    series = signals.operand_series(df, strat.entry.items[0].left)
+    assert series.iloc[:BARS_PER_DAY].isna().all()
+
+
+def test_daily_operand_never_leaks_todays_value_into_any_bar() -> None:
+    """The look-ahead test, stated directly."""
+    from datetime import date
+
+    strat = strategy_with(
+        {"all": [{"indicator": "high", "timeframe": "day",
+                  "operator": ">", "value": 0}]}
+    )
+    days = [flat_day(date(2026, 7, 16), 100.0),
+            flat_day(date(2026, 7, 17), 200.0),
+            flat_day(date(2026, 7, 20), 300.0)]
+    df = make_sessions(days)
+    series = signals.operand_series(df, strat.entry.items[0].left)
+    ist_dates = df.index.tz_convert(IST).date
+    for value, own_date in zip(series, ist_dates):
+        if pd.isna(value):
+            continue
+        # Whatever it read, it must belong to an EARLIER session.
+        assert value != {d["date"]: d["closes"][0] for d in days}[own_date]
+
+
+def test_offset_on_a_daily_operand_counts_in_days() -> None:
+    from datetime import date
+
+    strat = strategy_with(
+        {"all": [{"indicator": "high", "timeframe": "day", "offset": 1,
+                  "operator": ">", "value": 0}]}
+    )
+    df = make_sessions([
+        flat_day(date(2026, 7, 16), 100.0),
+        flat_day(date(2026, 7, 17), 200.0),
+        flat_day(date(2026, 7, 20), 300.0),
+    ])
+    series = signals.operand_series(df, strat.entry.items[0].left)
+    # Third session: offset 1 steps back past yesterday (200) to 100.
+    assert (series.iloc[BARS_PER_DAY * 2:] == 100.0).all()
+
+
+def test_higher_intraday_timeframe_aligns_to_closed_bars_only() -> None:
+    """A 15m strategy reading 60m bars."""
+    from datetime import date
+
+    strat = strategy_with(
+        {"all": [{"indicator": "close", "timeframe": "60m",
+                  "operator": ">", "value": 0}]}
+    )
+    closes = [float(i) for i in range(BARS_PER_DAY)]
+    df = make_sessions([{"date": date(2026, 7, 16), "closes": closes}])
+    series = signals.operand_series(df, strat.entry.items[0].left)
+
+    # 60m buckets are session-anchored: bars 0-3 form 09:15-10:15, etc.
+    # The first four bars have no closed 60m bar behind them.
+    assert series.iloc[:4].isna().all()
+    # Bars 4-7 see the first 60m bucket, whose close is bar 3's value.
+    assert (series.iloc[4:8] == 3.0).all()
+
+
+def test_strategy_timeframe_operand_is_unchanged() -> None:
+    """Naming your own timeframe must be a no-op, not a shift."""
+    from datetime import date
+
+    df = make_sessions([flat_day(date(2026, 7, 16), 100.0)])
+    plain = signals.operand_series(
+        df,
+        strategy_with(
+            {"all": [{"indicator": "close", "operator": ">", "value": 0}]}
+        ).entry.items[0].left,
+    )
+    named = signals.operand_series(
+        df,
+        strategy_with(
+            {"all": [{"indicator": "close", "timeframe": "15m",
+                      "operator": ">", "value": 0}]}
+        ).entry.items[0].left,
+    )
+    pd.testing.assert_series_equal(plain, named, check_names=False)
+
+
+def test_daily_indicator_not_just_price() -> None:
+    """A daily EMA as a trend filter under a 15m entry — the headline case."""
+    from datetime import date
+
+    strat = strategy_with(
+        {"all": [{"indicator": "ema", "params": {"period": 2},
+                  "timeframe": "day", "operator": ">", "value": 0}]}
+    )
+    df = make_sessions([
+        flat_day(date(2026, 7, 16), 100.0),
+        flat_day(date(2026, 7, 17), 200.0),
+        flat_day(date(2026, 7, 20), 300.0),
+    ])
+    series = signals.operand_series(df, strat.entry.items[0].left)
+    # Constant within a session: it is a daily value held across the day.
+    assert series.iloc[BARS_PER_DAY * 2:].nunique() == 1
+
+
+def test_higher_timeframe_multiplies_required_history() -> None:
+    """A daily EMA(20) under a 15m strategy needs 20 DAYS of 15m bars."""
+    intraday = strategy_with(
+        {"all": [{"indicator": "ema", "params": {"period": 20},
+                  "operator": ">", "value": 0}]}
+    )
+    daily = strategy_with(
+        {"all": [{"indicator": "ema", "params": {"period": 20},
+                  "timeframe": "day", "operator": ">", "value": 0}]}
+    )
+    assert (
+        signals.min_candles_required(daily)
+        > signals.min_candles_required(intraday) * 20
+    )

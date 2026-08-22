@@ -24,7 +24,7 @@ from typing import Any, Union
 
 import yaml
 
-from config import SUPPORTED_TIMEFRAMES
+from config import SUPPORTED_TIMEFRAMES, TIMEFRAME_MINUTES
 from strategy.migrate import CURRENT_VERSION, migrate_document
 from strategy.vocabulary import (
     ALL_OPERATORS,
@@ -33,6 +33,7 @@ from strategy.vocabulary import (
     INDICATOR_PARAMS,
     INSTRUMENT_RE,
     MAX_ATR_MULTIPLIER,
+    MAX_OFFSET,
     MAX_STOP_PERCENT,
     POSITION_TYPES,
     PRICE_SOURCES,
@@ -65,6 +66,15 @@ class Operand:
     params: dict[str, Any] = field(default_factory=dict)
     source: str = "close"   # only meaningful for ema/sma
     output: str | None = None  # only meaningful for multi-output indicators
+    # How many CLOSED bars back to read. 0 is the current bar, 1 the previous
+    # one. Never negative — see vocabulary.MAX_OFFSET for why that is a
+    # parser-level guarantee rather than a convention.
+    offset: int = 0
+    # Read this operand on a HIGHER timeframe than the strategy's own, e.g. a
+    # daily trend filter under a 15m entry. None means the strategy's own
+    # timeframe. `offset` then counts bars of THIS timeframe, so
+    # {timeframe: day, offset: 1} steps back a day, not a candle.
+    timeframe: str | None = None
 
 
 @dataclass(frozen=True)
@@ -230,7 +240,11 @@ def _require_keys(node: dict, where: str, required: set[str], optional: set[str]
 
 def _parse_operand(node: Any, where: str) -> Operand:
     node = _require_mapping(node, where)
-    _require_keys(node, where, required={"indicator"}, optional={"params", "source", "output"})
+    _require_keys(
+        node, where,
+        required={"indicator"},
+        optional={"params", "source", "output", "offset", "timeframe"},
+    )
 
     indicator = node["indicator"]
     if indicator not in INDICATOR_PARAMS:
@@ -296,11 +310,50 @@ def _parse_operand(node: Any, where: str) -> Operand:
     elif indicator in DEFAULT_OUTPUT:
         output = DEFAULT_OUTPUT[indicator]
 
+    # --- offset (previous-period reference) ---
+    offset = node.get("offset", 0)
+    if "offset" in node:
+        # bool before int: `offset: true` must not quietly become offset=1.
+        if isinstance(offset, bool) or not isinstance(offset, int):
+            _fail(
+                f"{where}.offset",
+                f"expected a whole number of bars, got {offset!r}",
+            )
+        if offset < 0:
+            _fail(
+                f"{where}.offset",
+                f"must be >= 0, got {offset}. A negative offset would read a "
+                "bar that has not closed yet — that is look-ahead bias, and "
+                "no backtest result built on it would mean anything.",
+            )
+        if offset > MAX_OFFSET:
+            _fail(
+                f"{where}.offset",
+                f"{offset} exceeds the maximum of {MAX_OFFSET} bars. This is "
+                "almost always an indicator period pasted into the wrong key.",
+            )
+
+    # --- timeframe (higher-timeframe reference) ---
+    # Only the NAME is validated here. Whether it is actually higher than the
+    # strategy's own timeframe cannot be known at operand level, so it is
+    # checked in _parse_strategy where both are in scope.
+    operand_timeframe = node.get("timeframe")
+    if "timeframe" in node:
+        if operand_timeframe not in SUPPORTED_TIMEFRAMES:
+            _fail(
+                f"{where}.timeframe",
+                f"unsupported timeframe {operand_timeframe!r}. "
+                f"Allowed: {', '.join(SUPPORTED_TIMEFRAMES)}",
+            )
+
     # MACD's slow period must exceed fast, or the indicator is meaningless.
     if indicator == "macd" and params["fast"] >= params["slow"]:
         _fail(f"{where}.params", f"macd 'fast' ({params['fast']}) must be < 'slow' ({params['slow']})")
 
-    return Operand(indicator=indicator, params=params, source=source, output=output)
+    return Operand(
+        indicator=indicator, params=params, source=source,
+        output=output, offset=offset, timeframe=operand_timeframe,
+    )
 
 
 def _parse_condition(node: dict, where: str) -> Condition:
@@ -309,7 +362,8 @@ def _parse_condition(node: dict, where: str) -> Condition:
     _require_keys(
         node, where,
         required={"indicator", "operator"},
-        optional={"params", "source", "output", "value", "compare_to"},
+        optional={"params", "source", "output", "offset", "timeframe",
+                  "value", "compare_to"},
     )
 
     operator = node["operator"]
@@ -330,7 +384,11 @@ def _parse_condition(node: dict, where: str) -> Condition:
             "'compare_to' (another indicator)",
         )
 
-    left_keys = {k: node[k] for k in ("indicator", "params", "source", "output") if k in node}
+    left_keys = {
+        k: node[k]
+        for k in ("indicator", "params", "source", "output", "offset", "timeframe")
+        if k in node
+    }
     left = _parse_operand(left_keys, where)
 
     value: float | None = None
@@ -646,6 +704,17 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
         else SessionConfig()
     )
 
+    entry = _parse_condition_group(node["entry"], f"{where}.entry")
+    exit_ = _parse_condition_group(node["exit"], f"{where}.exit")
+
+    # An operand may reference a HIGHER timeframe (a daily filter under a 15m
+    # entry), never a lower one. The engine derives the higher series by
+    # aggregating the strategy's own candles, so a lower timeframe would ask
+    # for detail those candles do not contain — and the only way to answer
+    # would be to invent it.
+    _check_operand_timeframes(entry, timeframe, f"{where}.entry")
+    _check_operand_timeframes(exit_, timeframe, f"{where}.exit")
+
     return Strategy(
         name=name,
         enabled=enabled,
@@ -653,13 +722,45 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
         timeframe=timeframe,
         instruments=tuple(instruments),
         universe=universe,
-        entry=_parse_condition_group(node["entry"], f"{where}.entry"),
-        exit=_parse_condition_group(node["exit"], f"{where}.exit"),
+        entry=entry,
+        exit=exit_,
         risk=_parse_risk(node["risk"], f"{where}.risk"),
         sizing=sizing,
         session=session,
         max_cycles_per_day=max_cycles,
     )
+
+
+def _check_operand_timeframes(
+    group: ConditionGroup, strategy_timeframe: str, where: str
+) -> None:
+    """Refuse any operand pointing at a timeframe below the strategy's."""
+    strategy_minutes = TIMEFRAME_MINUTES[strategy_timeframe]
+
+    def check(op: Operand, op_where: str) -> None:
+        if op.timeframe is None:
+            return
+        if TIMEFRAME_MINUTES[op.timeframe] < strategy_minutes:
+            _fail(
+                f"{op_where}.timeframe",
+                f"{op.timeframe} is LOWER than the strategy's own "
+                f"{strategy_timeframe}. An operand may reference a higher "
+                "timeframe (e.g. a daily trend filter under a 15m entry) but "
+                "not a lower one: the strategy's candles do not contain that "
+                "detail, and deriving it would mean inventing data.",
+            )
+
+    def walk(node: ConditionGroup, node_where: str) -> None:
+        for i, item in enumerate(node.items):
+            item_where = f"{node_where}.{node.logic}[{i}]"
+            if isinstance(item, ConditionGroup):
+                walk(item, item_where)
+                continue
+            check(item.left, item_where)
+            if item.right is not None:
+                check(item.right, f"{item_where}.compare_to")
+
+    walk(group, where)
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +825,12 @@ def strategy_to_raw(strategy: Strategy) -> dict[str, Any]:
         # Only emit `output` when it differs from the implicit default.
         if op.output is not None and op.output != DEFAULT_OUTPUT.get(op.indicator):
             node["output"] = op.output
+        # Likewise offset and timeframe: emitting the defaults would rewrite
+        # every existing document the first time it was loaded and saved.
+        if op.offset:
+            node["offset"] = op.offset
+        if op.timeframe is not None:
+            node["timeframe"] = op.timeframe
         return node
 
     def condition_to_raw(cond: Condition) -> dict[str, Any]:
