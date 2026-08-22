@@ -106,6 +106,13 @@ EXPR_MULTI_OUTPUT: dict[str, tuple[str, ...]] = {
     "supertrend": ("line", "direction"),
 }
 
+# Structural features of price rather than indicators over it. Kept separate
+# because they carry a confirmation DELAY that indicators do not: a swing high
+# is not a swing high until later bars have failed to exceed it.
+EXPR_STRUCTURE: dict[str, tuple[str, ...]] = {
+    "swing": ("high", "low"),
+}
+
 # Operators the expression grammar accepts, loosest-binding first. Used by the
 # generated document so the precedence table cannot drift from the parser.
 EXPR_PRECEDENCE: tuple[tuple[str, str], ...] = (

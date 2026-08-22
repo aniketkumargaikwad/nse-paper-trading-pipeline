@@ -42,6 +42,7 @@ from strategy.vocabulary import (  # noqa: E402
     EXPR_MULTI_OUTPUT,
     EXPR_PRECEDENCE,
     EXPR_SIMPLE_INDICATORS,
+    EXPR_STRUCTURE,
     HIGHER_TIMEFRAME_PREFIXES,
     POSITION_FIELDS,
 )
@@ -457,6 +458,18 @@ Every `when:`, `set:`, `stop:` and `target:` is an expression **in quotes**.
 | call | outputs |
 |---|---|
 {_v3_function_rows()}
+
+### Swing points
+
+`swing.high(n)` and `swing.low(n)` give the most recent **confirmed** swing,
+where a swing high is a bar that `n` bars on each side failed to exceed.
+
+The confirmation delay is real and deliberate: a swing high at a bar is not
+known to be one until `n` further bars have closed, so it only becomes
+readable `n` bars later. Anything that reported it sooner would be reading the
+future — and would backtest beautifully while being worthless.
+
+The value then persists as a standing level until a newer swing replaces it.
 
 ### Higher timeframes
 

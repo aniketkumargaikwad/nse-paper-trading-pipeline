@@ -43,6 +43,7 @@ from strategy.expr import Binary, Call, Expr, Literal, Name, Offset, Unary
 from strategy.vocabulary import (
     EXPR_MULTI_OUTPUT,
     EXPR_SIMPLE_INDICATORS,
+    EXPR_STRUCTURE,
     HIGHER_TIMEFRAME_PREFIXES,
 )
 
@@ -341,6 +342,16 @@ def _eval_call(node: Call, df: pd.DataFrame, variables: Mapping[str, Any]) -> An
             )
         return _multi_output_indicator(family, output, node, df, variables)
 
+    if len(path) == 2 and path[0] in EXPR_STRUCTURE:
+        family, output = path
+        if output not in EXPR_STRUCTURE[family]:
+            raise EvaluationError(
+                f"unknown {family} output {output!r}. Known: "
+                f"{', '.join(EXPR_STRUCTURE[family])}"
+            )
+        _require_arg_count(node, (1,))
+        return _swing(df, output, _int_arg(node, node.args[0], 0))
+
     if len(path) == 1 and path[0] in _MULTI_OUTPUT:
         raise EvaluationError(
             f"{path[0]} produces several series, so it needs one named: "
@@ -457,6 +468,48 @@ def _multi_output_indicator(
         )[output]
 
     raise EvaluationError(f"no implementation for {family!r}")
+
+
+# ---------------------------------------------------------------------------
+# Structure: swing points
+# ---------------------------------------------------------------------------
+
+
+def _swing(df: pd.DataFrame, output: str, lookback: int) -> pd.Series:
+    """The most recent CONFIRMED swing high or low, as of each bar.
+
+    THE DELAY IS THE IMPLEMENTATION. A bar is a swing high when `lookback`
+    bars on each side failed to exceed it — which cannot be known until
+    `lookback` bars AFTER it. So the pivot found at bar i only becomes
+    readable at bar i + lookback, and the value is carried forward from there
+    as the standing level.
+
+    The naive version — a centred rolling max, reported on the pivot's own bar
+    — is the obvious implementation and is catastrophically wrong: it lets a
+    strategy sell every high on the bar the high prints, producing a superb
+    equity curve out of information that did not exist. Nothing about the
+    output looks suspicious, which is why the delay is enforced here and
+    proved by a truncation test rather than left to review.
+    """
+    if df.empty:
+        return _nan_series(df)
+
+    window = 2 * lookback + 1
+    if len(df) < window:
+        return _nan_series(df)
+
+    series = df["high" if output == "high" else "low"].astype(float)
+    centred = (
+        series.rolling(window, center=True).max()
+        if output == "high"
+        else series.rolling(window, center=True).min()
+    )
+    is_pivot = series == centred
+
+    # Shift by `lookback`: the pivot at bar i is published at bar i+lookback.
+    # This is what removes the future that `center=True` just used.
+    published = series.where(is_pivot).shift(lookback)
+    return published.ffill()
 
 
 # ---------------------------------------------------------------------------

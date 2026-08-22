@@ -501,3 +501,36 @@ sizing: {type: notional, notional_per_trade: 100000}
         parse_machine(loaded)
     message = str(exc.value)
     assert "on:" in message and "transitions:" in message
+
+
+# --- functions are checked at parse time ------------------------------------
+
+
+def test_an_unknown_function_is_rejected_when_the_machine_is_parsed() -> None:
+    """Not mid-backtest, after minutes of fetching, on whichever symbol
+    reached that transition first."""
+    doc = machine()
+    doc["states"][0]["transitions"][0]["when"] = "supersignal(9) > 1"
+    with pytest.raises(StateMachineError) as exc:
+        parse_machine(doc)
+    assert "supersignal" in str(exc.value)
+
+
+def test_a_multi_output_indicator_without_an_output_is_rejected() -> None:
+    doc = machine()
+    doc["states"][0]["transitions"][0]["when"] = "macd(12, 26, 9) > 0"
+    with pytest.raises(StateMachineError) as exc:
+        parse_machine(doc)
+    assert "macd.line" in str(exc.value)
+
+
+def test_a_swing_call_is_accepted() -> None:
+    doc = machine()
+    doc["states"][0]["transitions"][0]["when"] = "close > swing.high(5)"
+    assert parse_machine(doc) is not None
+
+
+def test_a_daily_wrapped_call_is_accepted() -> None:
+    doc = machine()
+    doc["states"][0]["transitions"][0]["when"] = "close > daily.ema(50)"
+    assert parse_machine(doc) is not None

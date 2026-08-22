@@ -111,6 +111,18 @@ Every `when:`, `set:`, `stop:` and `target:` is an expression **in quotes**.
 | `macd.<output>(fast, slow, signal)` | `macd.line(...)`, `macd.signal(...)`, `macd.histogram(...)` |
 | `supertrend.<output>(period, multiplier)` | `supertrend.line(...)`, `supertrend.direction(...)` |
 
+### Swing points
+
+`swing.high(n)` and `swing.low(n)` give the most recent **confirmed** swing,
+where a swing high is a bar that `n` bars on each side failed to exceed.
+
+The confirmation delay is real and deliberate: a swing high at a bar is not
+known to be one until `n` further bars have closed, so it only becomes
+readable `n` bars later. Anything that reported it sooner would be reading the
+future — and would backtest beautifully while being worthless.
+
+The value then persists as a standing level until a newer swing replaces it.
+
 ### Higher timeframes
 
 Prefix any name or call with `daily.`, `hourly.`, `prev_day.` — `prev_day.high`, `daily.ema(50)`,

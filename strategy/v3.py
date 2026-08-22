@@ -41,7 +41,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from strategy.expr import Expr, ExpressionError, names_used, parse_expression
+from strategy.expr import (
+    Expr,
+    ExpressionError,
+    calls_used,
+    names_used,
+    parse_expression,
+)
 from strategy.parse import (
     RiskConfig,
     SessionConfig,
@@ -54,6 +60,9 @@ from strategy.parse import (
 from config import SUPPORTED_TIMEFRAMES
 from strategy.vocabulary import (
     CANDLE_FIELDS,
+    EXPR_MULTI_OUTPUT,
+    EXPR_SIMPLE_INDICATORS,
+    EXPR_STRUCTURE,
     HIGHER_TIMEFRAME_PREFIXES,
     INSTRUMENT_RE,
     UNIVERSE_RE,
@@ -519,6 +528,8 @@ def _check_variables_are_set_before_use(
                     if e is not None
                 )
             for expr in sources:
+                for path in calls_used(expr):
+                    _check_call(path, f"strategy {name!r}.{state.name}")
                 for path in names_used(expr):
                     if len(path) > 1:
                         if path[0] not in builtin_prefixes:
@@ -552,3 +563,55 @@ def _check_variables_are_set_before_use(
 
 
 _BUILTIN_SERIES = frozenset({"open", "high", "low", "close", "volume"})
+
+
+def _known_calls() -> list[str]:
+    """Every function spelling an expression may use."""
+    names = [f"{n}()" for n in sorted(EXPR_SIMPLE_INDICATORS)]
+    for family, outputs in sorted(EXPR_MULTI_OUTPUT.items()):
+        names += [f"{family}.{o}()" for o in outputs]
+    for family, outputs in sorted(EXPR_STRUCTURE.items()):
+        names += [f"{family}.{o}()" for o in outputs]
+    return names
+
+
+def _check_call(path: tuple[str, ...], where: str) -> None:
+    """Reject an unknown function at PARSE time.
+
+    It would otherwise raise mid-backtest, after minutes of fetching, on
+    whichever symbol happened to reach that transition first — and a machine
+    whose entry rule cannot evaluate is not a strategy that found no setups.
+    """
+    # A timeframe prefix wraps a call rather than being one: daily.ema(20) is
+    # ema(20) evaluated on daily bars.
+    if path and path[0] in HIGHER_TIMEFRAME_PREFIXES:
+        path = path[1:]
+        if not path:
+            _fail(where, "a timeframe prefix needs something after it")
+
+    if len(path) == 1:
+        if path[0] in EXPR_SIMPLE_INDICATORS:
+            return
+        if path[0] in EXPR_MULTI_OUTPUT:
+            _fail(
+                where,
+                f"{path[0]} produces several series, so it needs one named: "
+                f"write {path[0]}.{EXPR_MULTI_OUTPUT[path[0]][0]}(...)",
+            )
+    elif len(path) == 2:
+        family, output = path
+        for registry in (EXPR_MULTI_OUTPUT, EXPR_STRUCTURE):
+            if family in registry:
+                if output in registry[family]:
+                    return
+                _fail(
+                    where,
+                    f"unknown output {output!r} for {family}. Known: "
+                    f"{', '.join(registry[family])}",
+                )
+
+    _fail(
+        where,
+        f"unknown function {'.'.join(path)!r}. Known: "
+        f"{', '.join(_known_calls())}",
+    )
