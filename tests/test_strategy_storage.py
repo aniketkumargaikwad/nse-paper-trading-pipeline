@@ -101,7 +101,7 @@ def test_a_malformed_document_fails_validation() -> None:
     """
     bad = {
         "name": "bad", "enabled": True, "position_type": "long",
-        "timeframe": "1m",  # faster than the 5m base is forbidden
+        "timeframe": "3m",  # not a stored or derivable timeframe
         "instruments": ["NSE:RELIANCE"],
         "entry": {"all": [{"indicator": "close", "operator": ">", "value": 1}]},
         "exit": {"any": [{"indicator": "close", "operator": "<", "value": 1}]},

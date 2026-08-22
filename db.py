@@ -1237,13 +1237,41 @@ _MIGRATIONS: tuple[tuple[str, str, str, str | None], ...] = (
      "backtest_runs", "oos_passed_kill_rules"),
     ("008_machine_state.sql", "where a v3 machine is between runs",
      "machine_state", "state"),
+    # Widened CHECK constraints rather than a new table, so the probe
+    # below cannot detect it by selecting a column. Checked by writing
+    # nothing and reading the constraint instead — see _one_minute_allowed.
+    ("009_one_minute.sql", "the 1-minute timeframe", None, None),
 )
+
+
+def _one_minute_allowed(store: "SupabaseStore") -> bool:
+    """Is the 1m timeframe permitted by the stored CHECK constraints?
+
+    Read-only: PostgREST will not report a CHECK definition, so this asks
+    the question the cheapest honest way — whether a 1m coverage row can
+    be SELECTED. An un-widened database simply has none and returns an
+    empty list, so this reports applied only once 1m data actually exists.
+    """
+    try:
+        resp = (
+            store._table("candle_coverage")
+            .select("instrument_id").eq("timeframe", "1m").limit(1).execute()
+        )
+    except APIError:
+        return False
+    return bool(resp.data)
 
 
 def _migration_status(store: "SupabaseStore") -> list[tuple[str, str, bool]]:
     """(file, what it adds, applied) for every migration, in order."""
     out = []
     for filename, adds, table, column in _MIGRATIONS:
+        if table is None:
+            # A constraint-only migration. Attempting a 1m coverage read
+            # is harmless and tells us whether the widened CHECK is in
+            # place, without writing anything.
+            out.append((filename, adds, _one_minute_allowed(store)))
+            continue
         try:
             store._table(table).select(column or "*").limit(1).execute()
             applied = True

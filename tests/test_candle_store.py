@@ -217,7 +217,7 @@ def test_get_candles_with_no_data_returns_canonical_empty() -> None:
 def test_unsupported_timeframe_rejected() -> None:
     store, _, _ = make_store()
     with pytest.raises(Exception):
-        store.get_candles("NSE:RELIANCE", "1m", FROM, TO)
+        store.get_candles("NSE:RELIANCE", "3m", FROM, TO)
 
 
 # --- provider limits --------------------------------------------------------

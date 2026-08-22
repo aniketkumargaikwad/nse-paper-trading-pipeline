@@ -65,7 +65,7 @@ strategies:
 * Every strategy needs **exactly one** of `universe:` (a named group like
   `NIFTY100`) or `instruments:` (an explicit list like `[NSE:RELIANCE]`).
 * `position_type`: `long`, `short`.
-* `timeframe`: `5m`, `15m`, `25m`, `30m`, `60m`, `day`.
+* `timeframe`: `1m`, `5m`, `15m`, `25m`, `30m`, `60m`, `day`.
 * Conditions are grouped with `all:` (AND) or `any:` (OR); groups may nest.
 * Every condition compares a left operand against **either** a fixed `value`
   **or** another operand under `compare_to` — exactly one of the two.

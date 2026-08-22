@@ -23,9 +23,18 @@ def test_base_timeframe_is_five_minutes() -> None:
     assert config.BASE_TIMEFRAME == "5m"
 
 
-def test_stored_timeframes_are_base_and_day_only() -> None:
-    # Everything else is derived by resampling, so only these are persisted.
-    assert set(config.STORED_TIMEFRAMES) == {"5m", "day"}
+def test_only_underivable_timeframes_are_stored() -> None:
+    """15m/25m/30m/60m come from the 5m base, so storing them would be
+    duplication that can drift. 1m and day cannot be derived at all —
+    nothing resamples downward, and the daily feed is adjusted."""
+    assert set(config.STORED_TIMEFRAMES) == {"1m", "5m", "day"}
+
+
+def test_one_minute_is_served_from_its_own_store() -> None:
+    """NOT from the 5m base: a finer timeframe cannot be resampled out of
+    a coarser one, and quietly serving 5m bars under a 1m label would be
+    wrong in a way nothing downstream could detect."""
+    assert config.source_timeframe_for("1m") == "1m"
 
 
 def test_derived_timeframes_map_to_the_base() -> None:
@@ -37,7 +46,7 @@ def test_derived_timeframes_map_to_the_base() -> None:
 
 def test_unknown_timeframe_rejected() -> None:
     with pytest.raises(config.ConfigError, match="Unsupported timeframe"):
-        config.source_timeframe_for("1m")
+        config.source_timeframe_for("3m")
 
 
 def test_dhan_is_a_supported_provider_needing_no_daily_login() -> None:

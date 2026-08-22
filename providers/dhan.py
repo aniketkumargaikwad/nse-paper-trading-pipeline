@@ -57,8 +57,10 @@ _MAX_BACKOFF_SECONDS = 120
 INTRADAY_ENDPOINT = f"{DHAN_API_BASE}/charts/intraday"
 HISTORICAL_ENDPOINT = f"{DHAN_API_BASE}/charts/historical"
 
-# Our timeframe -> Dhan's `interval` value (intraday only).
-TIMEFRAME_TO_DHAN_INTERVAL: dict[str, str] = {"5m": "5"}
+# Our timeframe -> Dhan's `interval` value (intraday only). Only the
+# STORED intraday timeframes appear here; everything else is resampled and
+# must never be fetched, or the two would drift apart.
+TIMEFRAME_TO_DHAN_INTERVAL: dict[str, str] = {"1m": "1", "5m": "5"}
 
 REQUIRED_PAYLOAD_KEYS = ("open", "high", "low", "close", "volume", "timestamp")
 

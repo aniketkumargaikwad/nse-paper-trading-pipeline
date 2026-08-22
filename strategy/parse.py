@@ -648,7 +648,7 @@ def _parse_strategy(node: Any, where: str) -> Strategy:
         _fail(
             f"{where}.timeframe",
             f"unsupported timeframe {timeframe!r}. "
-            f"Allowed (15-minute and higher only): {', '.join(SUPPORTED_TIMEFRAMES)}",
+            f"Allowed: {', '.join(SUPPORTED_TIMEFRAMES)}",
         )
 
     # Exactly one of 'universe' (a named symbol group, resolved at run time —

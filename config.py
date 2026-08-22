@@ -89,6 +89,7 @@ TIMEFRAME_TO_KITE_INTERVAL: dict[str, str] = {
 # Our timeframe label -> candle length in minutes ("day" uses the full NSE
 # session length of 375 minutes: 09:15-15:30 IST).
 TIMEFRAME_MINUTES: dict[str, int] = {
+    "1m": 1,
     "5m": 5,
     "15m": 15,
     "25m": 25,
@@ -102,15 +103,26 @@ SUPPORTED_TIMEFRAMES: tuple[str, ...] = tuple(TIMEFRAME_MINUTES)
 # ---------------------------------------------------------------------------
 # Candle storage model
 # ---------------------------------------------------------------------------
-# Only two timeframes are ever PERSISTED:
-#   * BASE_TIMEFRAME ('5m') - every intraday timeframe is resampled from it,
-#     which guarantees they are mutually consistent and lets us add new
+# Three timeframes are PERSISTED:
+#   * BASE_TIMEFRAME ('5m') - 15m/25m/30m/60m are resampled from it, which
+#     guarantees they are mutually consistent and lets us add new
 #     timeframes without refetching anything.
 #   * 'day' - stored separately because Dhan's daily feed is corporate-action
 #     ADJUSTED and reaches back to inception, so it is both cleaner and far
 #     longer than anything we could resample from intraday data.
+#   * '1m' - stored separately because it CANNOT be derived: nothing can be
+#     resampled down. It is deliberately NOT the base for the others.
+#     Re-deriving 5m from 1m would be cleaner in the abstract and would
+#     silently change every stored 5m candle and every result built on
+#     them, so the two series are kept independent and each is fetched
+#     from the provider on its own terms.
+#
+#     1m is roughly five times the rows of 5m for the same window, so it
+#     is backfilled only for the symbols that actually need it rather than
+#     for a whole universe by default.
 BASE_TIMEFRAME = "5m"
-STORED_TIMEFRAMES: tuple[str, ...] = (BASE_TIMEFRAME, "day")
+MINUTE_TIMEFRAME = "1m"
+STORED_TIMEFRAMES: tuple[str, ...] = (MINUTE_TIMEFRAME, BASE_TIMEFRAME, "day")
 
 
 
@@ -149,7 +161,11 @@ def source_timeframe_for(timeframe: str) -> str:
             f"Unsupported timeframe {timeframe!r}. "
             f"Allowed: {', '.join(SUPPORTED_TIMEFRAMES)}"
         )
-    return "day" if timeframe == "day" else BASE_TIMEFRAME
+    # 1m and day are served from their own stores; everything between
+    # them is resampled from the 5m base.
+    if timeframe in ("day", MINUTE_TIMEFRAME):
+        return timeframe
+    return BASE_TIMEFRAME
 
 
 # ---------------------------------------------------------------------------
