@@ -151,6 +151,25 @@ class StateMachine:
                 return candidate
         raise StateMachineError(f"no state named {name!r}")
 
+    @property
+    def position_type(self) -> str:
+        """'long', 'short', or 'both'.
+
+        Derived rather than declared: a machine enters per transition, so
+        unlike a v2 strategy it can legitimately do both. Reporting a single
+        declared side would be a claim the document never made — 'both' says
+        what is true, and the per-trade side is recorded on each trade anyway.
+        """
+        sides = {
+            t.enter.side
+            for state in self.states
+            for t in state.transitions
+            if t.enter is not None
+        }
+        if len(sides) == 1:
+            return next(iter(sides))
+        return "both" if sides else "long"
+
 
 # ---------------------------------------------------------------------------
 # Parsing

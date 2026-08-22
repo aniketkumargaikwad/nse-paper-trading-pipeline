@@ -42,6 +42,7 @@ from strategy_schema import (
     migrate_document,
     parse_strategy_dict,
 )
+from strategy.v3 import CURRENT_V3_VERSION
 
 # Postgres error code for unique-constraint violations. We treat these as
 # "someone (a previous run) already did this" — the core of idempotency.
@@ -345,7 +346,18 @@ class SupabaseStore:
             doc = {k: v for k, v in doc.items()
                    if k not in ("status", "raw_source", "validation_errors")}
             try:
-                strategies.append(parse_strategy_dict(doc, where=f"strategy {doc.get('name')!r}"))
+                # A v3 document is a state machine, not a condition tree, so
+                # it needs its own parser. Both satisfy what the engines read
+                # (name, timeframe, sizing, universe/instruments), which is
+                # what lets one backtest run mix the two formats.
+                if doc.get("version") == CURRENT_V3_VERSION:
+                    from strategy.v3 import parse_machine
+
+                    strategies.append(parse_machine(doc))
+                else:
+                    strategies.append(
+                        parse_strategy_dict(doc, where=f"strategy {doc.get('name')!r}")
+                    )
             except ValueError as exc:
                 raise DatabaseError(
                     f"Stored strategy {doc.get('name')!r} is invalid: {exc}. "
@@ -572,9 +584,19 @@ class SupabaseStore:
         name = name.strip()
 
         errors: list[str] = []
-        strategy: Strategy | None = None
+        strategy: Any = None
         try:
-            strategy = parse_strategy_dict(doc, where="strategy")
+            # Validated on save AND on read, by the same parser either way.
+            # A v3 document goes through the state-machine validator, which is
+            # where an unreachable state or a variable nothing sets is caught
+            # — all failures that would otherwise produce a clean, plausible
+            # backtest of a strategy that never fires.
+            if doc.get("version") == CURRENT_V3_VERSION:
+                from strategy.v3 import parse_machine
+
+                strategy = parse_machine(doc)
+            else:
+                strategy = parse_strategy_dict(doc, where="strategy")
         except ValueError as exc:
             errors.append(str(exc))
 
@@ -601,7 +623,14 @@ class SupabaseStore:
                 "timeframe": strategy.timeframe,
                 "definition": json.loads(json.dumps(doc, default=str)),
                 "raw_source": raw_source,
-                "format_version": CURRENT_VERSION,
+                # The format the definition is actually IN. Stamping every row
+                # with CURRENT_VERSION would label a v3 machine as v2, and the
+                # read path picks its parser from this.
+                "format_version": (
+                    CURRENT_V3_VERSION
+                    if doc.get("version") == CURRENT_V3_VERSION
+                    else CURRENT_VERSION
+                ),
                 "status": "valid",
                 "validation_errors": None,
                 "updated_at": now,

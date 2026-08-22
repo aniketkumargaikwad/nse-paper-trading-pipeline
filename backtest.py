@@ -395,6 +395,37 @@ def simulate_with_skips(
     return SimResult(trades=trades, skipped=skipped)
 
 
+def simulate_any(
+    df: pd.DataFrame,
+    strategy: Any,
+    *,
+    slippage_pct: float,
+    cost_per_trade_inr: float,
+    cost_model: Any = None,
+) -> SimResult:
+    """Simulate a v2 Strategy or a v3 StateMachine, whichever this is.
+
+    One seam, chosen here rather than at the caller, so everything downstream
+    — metrics, kill rules, dispersion, equity, the stored rows — is shared.
+    A v3 result that were scored by different code could not be ranked against
+    the v2 results already in the table, which is the whole point of keeping
+    them in one place.
+    """
+    # Imported here: machine_backtest imports _make_trade from this module,
+    # and a module-level import would close the cycle.
+    from machine_backtest import simulate_machine
+    from strategy.v3 import StateMachine
+
+    params = dict(
+        slippage_pct=slippage_pct,
+        cost_per_trade_inr=cost_per_trade_inr,
+        cost_model=cost_model,
+    )
+    if isinstance(strategy, StateMachine):
+        return simulate_machine(df, strategy, **params)
+    return simulate_with_skips(df, strategy, **params)
+
+
 def simulate(
     df: pd.DataFrame,
     strategy: Strategy,
@@ -780,7 +811,7 @@ def run_backtest(
                 print(f"  WARN  {instrument}: no candles returned, skipping", file=sys.stderr)
                 missing.add(instrument)
                 continue
-            result = simulate_with_skips(
+            result = simulate_any(
                 df, strategy,
                 slippage_pct=settings.slippage_pct,
                 cost_per_trade_inr=settings.cost_per_trade_inr,
