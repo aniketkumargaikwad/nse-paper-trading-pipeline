@@ -1080,6 +1080,8 @@ _MIGRATIONS: tuple[tuple[str, str, str, str | None], ...] = (
     ("005_strategy_versions.sql", "immutable strategy versions", "strategy_versions", None),
     ("006_per_symbol_risk.sql", "per-symbol risk and equity curve",
      "backtest_results", "sharpe_daily"),
+    ("007_out_of_sample.sql", "in-sample vs out-of-sample verdict",
+     "backtest_runs", "oos_passed_kill_rules"),
 )
 
 

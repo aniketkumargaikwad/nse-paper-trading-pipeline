@@ -5,6 +5,7 @@ Run manually (GitHub Actions `workflow_dispatch`, or locally):
     python backtest.py                    # all enabled strategies, 2 years
     python backtest.py --years 3
     python backtest.py --strategy TF-EMA-RSI-15m-v1
+    python backtest.py --holdout 0.3      # reserve the last 30% as out-of-sample
     python backtest.py --no-db            # CSV only, skip Supabase writes
 
 Outputs one row per strategy x instrument combination:
@@ -33,6 +34,17 @@ A combination "passes" only if ALL hold:
     symbols traded (edge on one symbol only is usually curve-fitting).
 The flags (with required-vs-actual numbers) are stored per row so the
 dashboard can show WHY something failed, not just that it failed.
+
+IN-SAMPLE VS OUT-OF-SAMPLE (--holdout)
+--------------------------------------
+Without --holdout every figure here is in-sample: the rules were chosen while
+looking at the same candles that score them. --holdout 0.3 reserves the LAST
+30% of the window, reports both halves, and stores an `oos_` verdict beside
+the full-window one. `passed_kill_rules` keeps its old meaning so runs stay
+comparable; `oos_passed_kill_rules` is the figure that was not fitted.
+
+Trades are split by ENTRY time after simulating the whole window once — see
+walk_forward.py for why that beats re-running a short window (cold indicators).
 """
 
 from __future__ import annotations
@@ -52,6 +64,7 @@ import pandas as pd
 import indicators
 import signals
 from backtest_types import SimResult, SimTrade, SkippedEntry
+from walk_forward import HoldoutError, split_at, split_trades
 from metrics import (
     MAX_DRAWDOWN_PCT,
     MIN_PROFITABLE_SYMBOL_PCT,
@@ -489,6 +502,8 @@ def build_run_row(
     strategy_version_id: int | None = None,
     timeframe: str | None = None,
     cost_model_description: str | None = None,
+    holdout_split: datetime | None = None,
+    trading_dates: set | None = None,
 ) -> dict[str, Any]:
     """One strategy-level row: the pooled verdict plus how it was distributed.
 
@@ -569,6 +584,73 @@ def build_run_row(
         "system_quality_number": risk.system_quality_number,
         "passed_kill_rules": passed,
         "kill_rule_flags": flags,
+        **_holdout_columns(
+            per_symbol, holdout_split, capital_base, trading_dates
+        ),
+    }
+
+
+def _holdout_columns(
+    per_symbol: dict[str, list[SimTrade]],
+    split: datetime | None,
+    capital_base: float,
+    trading_dates: set | None,
+) -> dict[str, Any]:
+    """In-sample vs out-of-sample figures, when a holdout was requested.
+
+    The out-of-sample verdict is reported SEPARATELY rather than replacing
+    `passed_kill_rules`, so a run made with a holdout stays comparable with
+    every run made without one. The full-window column keeps meaning exactly
+    what it always meant; the honest number is the `oos_` one beside it.
+    """
+    if split is None:
+        return {}
+
+    in_by_symbol: dict[str, list[SimTrade]] = {}
+    out_by_symbol: dict[str, list[SimTrade]] = {}
+    for symbol, trades in per_symbol.items():
+        in_trades, out_trades = split_trades(trades, split)
+        in_by_symbol[symbol] = in_trades
+        out_by_symbol[symbol] = out_trades
+
+    split_date = split.astimezone(IST).date()
+    dates = trading_dates or set()
+    in_days = len([d for d in dates if d < split_date])
+    out_days = len([d for d in dates if d >= split_date])
+
+    def side(by_symbol: dict[str, list[SimTrade]], days: int, prefix: str):
+        pooled = pooled_metrics(by_symbol, capital_base=capital_base)
+        spread = dispersion_metrics(by_symbol)
+        risk = risk_metrics(
+            by_symbol, capital_base=capital_base, trading_days=days
+        )
+        combo = ComboMetrics(
+            total_trades=pooled.total_trades,
+            winning_trades=pooled.winning_trades,
+            net_pnl=pooled.net_pnl,
+            win_rate_pct=pooled.win_rate_pct,
+            profit_factor=pooled.profit_factor,
+            max_drawdown_pct=pooled.max_drawdown_pct,
+            longest_losing_streak=pooled.longest_losing_streak,
+        )
+        ok, _ = evaluate_kill_rules(
+            combo, spread.symbols_profitable, spread.symbols_traded
+        )
+        return {
+            f"{prefix}_trades": pooled.total_trades,
+            f"{prefix}_net_pnl": pooled.net_pnl,
+            f"{prefix}_win_rate_pct": pooled.win_rate_pct,
+            f"{prefix}_profit_factor": pooled.profit_factor,
+            f"{prefix}_max_drawdown_pct": pooled.max_drawdown_pct,
+            f"{prefix}_sharpe_daily": risk.sharpe_daily,
+            f"{prefix}_symbols_profitable": spread.symbols_profitable,
+            f"{prefix}_passed_kill_rules": ok,
+        }
+
+    return {
+        "oos_start": split_date.isoformat(),
+        **side(in_by_symbol, in_days, "is"),
+        **side(out_by_symbol, out_days, "oos"),
     }
 
 
@@ -588,6 +670,7 @@ def run_backtest(
     from_utc: datetime | None = None,
     to_utc: datetime | None = None,
     timeframes: list[str] | None = None,
+    holdout: float | None = None,
 ) -> tuple[uuid.UUID, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch, simulate, and score every strategy x instrument combination.
 
@@ -605,6 +688,17 @@ def run_backtest(
         from_utc = now - timedelta(days=math.ceil(years * 365.25))
     batch_id = uuid.uuid4()
     today_ist = now.astimezone(IST).date()
+
+    # Computed from the WINDOW, not from the trades, so the boundary does not
+    # move when a strategy happens to trade more in one half than the other.
+    holdout_split = split_at(from_utc, now, holdout) if holdout else None
+    if holdout_split is not None:
+        print(
+            f"holdout: in-sample {from_utc.astimezone(IST).date()} -> "
+            f"{holdout_split.astimezone(IST).date()}, out-of-sample "
+            f"{holdout_split.astimezone(IST).date()} -> "
+            f"{now.astimezone(IST).date()} ({holdout:.0%} reserved)"
+        )
 
     # Resolved BEFORE any fetching, so an unknown or empty universe fails
     # immediately rather than after minutes of downloading.
@@ -775,6 +869,8 @@ def run_backtest(
                 cost_model_description=(
                     cost_model.describe() if cost_model is not None else None
                 ),
+                holdout_split=holdout_split,
+                trading_dates=trading_dates,
             )
             run_rows.append(run_row)
 
@@ -794,6 +890,29 @@ def run_backtest(
                 f"sharpe={sharpe if sharpe is not None else 'n/a'}  "
                 f"{'PASSED' if run_row['passed_kill_rules'] else 'FAILED'} kill rules"
             )
+            if holdout_split is not None:
+                # Printed second and labelled plainly, because this is the
+                # only line above that was not fitted to the data it scores.
+                oos_sharpe = run_row["oos_sharpe_daily"]
+                print(
+                    f"  IN-SAMPLE      net=₹{run_row['is_net_pnl']:,.0f}  "
+                    f"trades={run_row['is_trades']}  "
+                    f"{'PASSED' if run_row['is_passed_kill_rules'] else 'FAILED'}"
+                )
+                print(
+                    f"  OUT-OF-SAMPLE  net=₹{run_row['oos_net_pnl']:,.0f}  "
+                    f"trades={run_row['oos_trades']}  "
+                    f"sharpe={oos_sharpe if oos_sharpe is not None else 'n/a'}  "
+                    f"{'PASSED' if run_row['oos_passed_kill_rules'] else 'FAILED'}"
+                    "   <- the one that was not fitted"
+                )
+                if run_row["oos_trades"] < MIN_TRADES:
+                    print(
+                        f"  NOTE: only {run_row['oos_trades']} out-of-sample "
+                        f"trades (kill rules want {MIN_TRADES}). Too few to "
+                        "conclude anything either way — lengthen the window "
+                        "or lower --holdout."
+                    )
 
     return batch_id, rows, run_rows, equity_rows
 
@@ -884,12 +1003,27 @@ def main(argv: list[str] | None = None) -> int:
         "--max-variants", type=int, default=DEFAULT_MAX_VARIANTS,
         help=f"refuse a sweep larger than this (default {DEFAULT_MAX_VARIANTS})",
     )
+    parser.add_argument(
+        "--holdout", type=float, metavar="FRACTION",
+        help="reserve the LAST fraction of the window as out-of-sample, e.g. "
+             "0.3. Metrics are reported for both halves; the out-of-sample "
+             "one is the only figure not fitted to the data it scores.",
+    )
     parser.add_argument("--no-db", action="store_true", help="skip Supabase writes (CSV only)")
     args = parser.parse_args(argv)
 
     # Argument validation before any work: connecting to Supabase and loading
     # strategies only to reject a malformed date wastes time and buries the
     # real complaint under unrelated setup errors.
+    if args.holdout is not None and not 0 < args.holdout < 1:
+        print(
+            f"ERROR: --holdout must be between 0 and 1 exclusive, got "
+            f"{args.holdout}. 0 leaves nothing to validate against and 1 "
+            "leaves nothing to fit on. A common choice is 0.3.",
+            file=sys.stderr,
+        )
+        return 1
+
     window_from = window_to = None
     if args.from_date or args.to_date:
         if not (args.from_date and args.to_date):
@@ -1030,6 +1164,7 @@ def main(argv: list[str] | None = None) -> int:
             strategies=strategies, years=args.years,
             from_utc=window_from, to_utc=window_to,
             timeframes=timeframes,
+            holdout=args.holdout,
         )
 
         csv_path = write_csv(batch_id, rows, started)

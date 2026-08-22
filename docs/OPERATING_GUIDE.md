@@ -437,6 +437,43 @@ strategy. Tick **Pin exact dates**, or from the terminal:
 .\.venv\Scripts\python.exe backtest.py --strategy <name> --from 2024-01-01 --to 2026-01-01
 ```
 
+**Check it on data it has never seen — `--holdout`.**
+
+Every backtest number you have read so far is *in-sample*: you chose the rules,
+the stop and the target while looking at the very candles that then scored
+them. That is the easiest way there is to believe a result that will not
+survive a live market, and it gets worse the more variants a `--sweep` tries.
+
+`--holdout 0.3` reserves the **last 30%** of the window, scores both halves,
+and prints them separately:
+
+```powershell
+.\.venv\Scripts\python.exe backtest.py --strategy <name> --years 2 --holdout 0.3
+```
+
+```
+  VERDICT        net=₹-1,770,552  profitable on 0/50 symbols  FAILED kill rules
+  IN-SAMPLE      net=₹-1,225,591  trades=6638  FAILED
+  OUT-OF-SAMPLE  net=₹-544,961    trades=2880  FAILED   <- the one that was not fitted
+```
+
+Read the **out-of-sample** line. It is the only one that was not shaped by the
+data it reports on. A strategy that passes in-sample and fails out-of-sample
+has told you something important: the in-sample result was the tuning, not an
+edge.
+
+Two cautions:
+
+* **Check `oos_trades` first.** A handful of out-of-sample trades makes every
+  other out-of-sample number noise rather than evidence. The run prints a NOTE
+  when there are too few.
+* A holdout cannot prove a strategy is good. It can only fail to disprove it.
+  Passing out-of-sample once is *interesting*, not *proven* — you can still
+  overfit by trying strategies until one passes the holdout too.
+
+The full-window `passed_kill_rules` keeps its old meaning, so runs made with
+and without `--holdout` remain comparable.
+
 ### 4.5 Read the results — the "kill rules"
 
 Results go to the `backtest_results` table (visible on the dashboard) and the
@@ -624,6 +661,8 @@ The default limit is 24 variants; `--max-variants` raises it, deliberately.
 | See the dashboard locally | `.\.venv\Scripts\streamlit.exe run dashboard.py` |
 | Backtest a fixed window (reproducible) | `.\.venv\Scripts\python.exe backtest.py --strategy <name> --from 2024-01-01 --to 2026-01-01` |
 | Sweep a setting across values | `.\.venv\Scripts\python.exe backtest.py --strategy <name> --sweep risk.stop_loss.value=0.5,0.7,1.0` |
+| Check a strategy out-of-sample | `.\.venv\Scripts\python.exe backtest.py --strategy <name> --holdout 0.3` |
+| Audit stored candles for splits and gaps | `.\.venv\Scripts\python.exe scripts\audit_data_quality.py --dry-run` |
 | Turn the schedule on/off | Railway → the cron service → **Settings** → pause / resume |
 | See recent cloud runs | Railway → the service → **Deployments** → **View Logs**, or the dashboard's *Recent engine runs* panel |
 | Load the Dhan symbol master | `.\.venv\Scripts\python.exe backfill.py --refresh-instruments` |
