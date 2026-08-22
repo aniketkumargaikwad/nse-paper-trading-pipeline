@@ -122,7 +122,7 @@ def test_a_machine_that_enters_both_ways_says_both() -> None:
     """A v2 strategy declares one side; a machine can honestly do either, and
     claiming a single side would be a claim the document never made."""
     doc = migrate_v2_to_v3(parse_strategy_dict(v2_doc()))
-    doc["states"][0]["on"].append({
+    doc["states"][0]["transitions"].append({
         "when": "rsi(14) > 80", "enter": {"side": "short"}, "goto": "holding",
     })
     assert parse_machine(doc).position_type == "both"

@@ -51,10 +51,10 @@ def doc(**overrides) -> dict:
         "initial": "flat",
         "states": [
             {"name": "flat",
-             "on": [{"when": "close > 100", "enter": {"side": "long"},
+             "transitions": [{"when": "close > 100", "enter": {"side": "long"},
                      "goto": "holding"}]},
             {"name": "holding",
-             "on": [{"when": "close < 90", "exit": {}, "goto": "flat"}]},
+             "transitions": [{"when": "close < 90", "exit": {}, "goto": "flat"}]},
         ],
         "risk": {"stop_loss": {"type": "percent", "value": 2.0},
                  "target": {"type": "percent", "value": 5.0}},
@@ -114,7 +114,7 @@ def test_a_machine_stop_expression_beats_the_risk_block() -> None:
     """`stop: floor` is the reason v3 exists — a level the strategy
     remembered, not a percentage from entry."""
     document = doc()
-    document["states"][0]["on"][0] = {
+    document["states"][0]["transitions"][0] = {
         "when": "close > 100", "set": {"floor": "low"},
         "enter": {"side": "long", "stop": "floor"}, "goto": "holding",
     }
@@ -188,7 +188,7 @@ def test_max_cycles_per_day_does_not_strand_the_machine() -> None:
     stopped trading on day one still looks like a perfectly ordinary result.
     """
     document = doc(max_cycles_per_day=1)
-    document["states"][1]["on"][0] = {
+    document["states"][1]["transitions"][0] = {
         "when": "close < 99", "exit": {}, "goto": "flat",
     }
     rows = (
@@ -232,7 +232,7 @@ def test_an_open_position_at_the_end_is_closed_and_flagged() -> None:
 def test_a_machine_can_exit_on_bars_held() -> None:
     """A time stop, which needs `position.bars_held`."""
     document = doc()
-    document["states"][1]["on"][0] = {
+    document["states"][1]["transitions"][0] = {
         "when": "position.bars_held >= 2", "exit": {}, "goto": "flat",
     }
     result = run(document, [
@@ -247,7 +247,7 @@ def test_a_machine_can_exit_on_bars_held() -> None:
 
 def test_a_machine_can_exit_on_unrealised_pnl() -> None:
     document = doc()
-    document["states"][1]["on"][0] = {
+    document["states"][1]["transitions"][0] = {
         "when": "position.pnl_pct > 1", "exit": {}, "goto": "flat",
     }
     result = run(document, [
@@ -261,7 +261,7 @@ def test_a_machine_can_exit_on_unrealised_pnl() -> None:
 
 def test_position_is_flat_before_any_entry() -> None:
     document = doc()
-    document["states"][0]["on"][0] = {
+    document["states"][0]["transitions"][0] = {
         "when": "not position.is_open and close > 100",
         "enter": {"side": "long"}, "goto": "holding",
     }
@@ -276,10 +276,10 @@ def test_position_is_flat_before_any_entry() -> None:
 
 def test_a_short_profits_when_price_falls() -> None:
     document = doc()
-    document["states"][0]["on"][0] = {
+    document["states"][0]["transitions"][0] = {
         "when": "close > 100", "enter": {"side": "short"}, "goto": "holding",
     }
-    document["states"][1]["on"][0] = {
+    document["states"][1]["transitions"][0] = {
         "when": "close < 95", "exit": {}, "goto": "flat",
     }
     result = run(document, [

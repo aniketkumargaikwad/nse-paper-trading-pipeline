@@ -40,7 +40,11 @@ import indicators
 from config import TIMEFRAME_MINUTES
 from resample import aggregate_for_reference
 from strategy.expr import Binary, Call, Expr, Literal, Name, Offset, Unary
-from strategy.vocabulary import HIGHER_TIMEFRAME_PREFIXES
+from strategy.vocabulary import (
+    EXPR_MULTI_OUTPUT,
+    EXPR_SIMPLE_INDICATORS,
+    HIGHER_TIMEFRAME_PREFIXES,
+)
 
 
 class EvaluationError(ValueError):
@@ -308,13 +312,10 @@ def _higher_timeframe(df: pd.DataFrame, timeframe: str, attr: str) -> pd.Series:
 # Calls
 # ---------------------------------------------------------------------------
 
-# name -> (how many args, which outputs it has)
-_SIMPLE_INDICATORS = {"sma", "ema", "rsi", "atr", "vwap"}
-_MULTI_OUTPUT = {
-    "macd": ("line", "signal", "histogram"),
-    "bbands": ("upper", "middle", "lower"),
-    "supertrend": ("line", "direction"),
-}
+# Both defined in the pure vocabulary module, so the validator, this
+# evaluator and the generated format document read one list.
+_SIMPLE_INDICATORS = EXPR_SIMPLE_INDICATORS
+_MULTI_OUTPUT = EXPR_MULTI_OUTPUT
 
 
 def _eval_call(node: Call, df: pd.DataFrame, variables: Mapping[str, Any]) -> Any:

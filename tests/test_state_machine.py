@@ -78,16 +78,16 @@ def machine(**overrides) -> dict:
         "states": [
             {
                 "name": "waiting",
-                "on": [{"when": "close > 100", "goto": "armed"}],
+                "transitions": [{"when": "close > 100", "goto": "armed"}],
             },
             {
                 "name": "armed",
-                "on": [{"when": "close > 110", "enter": {"side": "long"},
+                "transitions": [{"when": "close > 110", "enter": {"side": "long"},
                         "goto": "holding"}],
             },
             {
                 "name": "holding",
-                "on": [{"when": "close < 105", "exit": {}, "goto": "waiting"}],
+                "transitions": [{"when": "close < 105", "exit": {}, "goto": "waiting"}],
             },
         ],
         "risk": {
@@ -112,7 +112,7 @@ def test_a_machine_parses() -> None:
 def test_transitions_keep_their_written_order() -> None:
     """First match wins, so order is meaning, not presentation."""
     doc = machine()
-    doc["states"][0]["on"] = [
+    doc["states"][0]["transitions"] = [
         {"when": "close > 100", "goto": "armed"},
         {"when": "close > 50", "goto": "holding"},
     ]
@@ -123,7 +123,7 @@ def test_transitions_keep_their_written_order() -> None:
 def test_an_unknown_goto_is_rejected() -> None:
     """A typo'd state name would silently strand the machine forever."""
     doc = machine()
-    doc["states"][0]["on"][0]["goto"] = "wating"
+    doc["states"][0]["transitions"][0]["goto"] = "wating"
     with pytest.raises(StateMachineError) as exc:
         parse_machine(doc)
     assert "wating" in str(exc.value)
@@ -138,14 +138,14 @@ def test_an_unknown_initial_state_is_rejected() -> None:
 
 def test_duplicate_state_names_are_rejected() -> None:
     doc = machine()
-    doc["states"].append({"name": "waiting", "on": []})
+    doc["states"].append({"name": "waiting", "transitions": []})
     with pytest.raises(StateMachineError):
         parse_machine(doc)
 
 
 def test_a_bad_expression_is_reported_with_its_state() -> None:
     doc = machine()
-    doc["states"][0]["on"][0]["when"] = "close >"
+    doc["states"][0]["transitions"][0]["when"] = "close >"
     with pytest.raises(StateMachineError) as exc:
         parse_machine(doc)
     message = str(exc.value)
@@ -155,7 +155,7 @@ def test_a_bad_expression_is_reported_with_its_state() -> None:
 def test_an_unreachable_state_is_rejected() -> None:
     """Dead states are always a mistake — usually a rename half-applied."""
     doc = machine()
-    doc["states"].append({"name": "orphan", "on": []})
+    doc["states"].append({"name": "orphan", "transitions": []})
     with pytest.raises(StateMachineError) as exc:
         parse_machine(doc)
     assert "orphan" in str(exc.value)
@@ -164,7 +164,7 @@ def test_an_unreachable_state_is_rejected() -> None:
 def test_a_variable_used_before_it_is_ever_set_is_rejected() -> None:
     """Caught at parse time, not as a NaN that quietly never fires."""
     doc = machine()
-    doc["states"][1]["on"][0]["when"] = "close > confirm_low"
+    doc["states"][1]["transitions"][0]["when"] = "close > confirm_low"
     with pytest.raises(StateMachineError) as exc:
         parse_machine(doc)
     assert "confirm_low" in str(exc.value)
@@ -172,8 +172,8 @@ def test_a_variable_used_before_it_is_ever_set_is_rejected() -> None:
 
 def test_a_variable_set_earlier_may_be_used_later() -> None:
     doc = machine()
-    doc["states"][0]["on"][0]["set"] = {"trigger": "high"}
-    doc["states"][1]["on"][0]["when"] = "close > trigger"
+    doc["states"][0]["transitions"][0]["set"] = {"trigger": "high"}
+    doc["states"][1]["transitions"][0]["when"] = "close > trigger"
     m = parse_machine(doc)
     assert "trigger" in m.variables
 
@@ -227,7 +227,7 @@ def test_no_transition_means_the_state_holds() -> None:
 
 def test_the_first_matching_transition_wins() -> None:
     doc = machine()
-    doc["states"][0]["on"] = [
+    doc["states"][0]["transitions"] = [
         {"when": "close > 100", "goto": "holding"},
         {"when": "close > 100", "goto": "armed"},
     ]
@@ -241,8 +241,8 @@ def test_the_first_matching_transition_wins() -> None:
 
 def test_a_variable_is_captured_at_the_transition_bar() -> None:
     doc = machine()
-    doc["states"][0]["on"][0]["set"] = {"trigger": "high"}
-    doc["states"][1]["on"][0] = {
+    doc["states"][0]["transitions"][0]["set"] = {"trigger": "high"}
+    doc["states"][1]["transitions"][0] = {
         "when": "close > trigger", "enter": {"side": "long"}, "goto": "holding",
     }
     df = candles([
@@ -256,11 +256,11 @@ def test_a_variable_is_captured_at_the_transition_bar() -> None:
 
 def test_a_variable_persists_until_reassigned() -> None:
     doc = machine()
-    doc["states"][0]["on"][0]["set"] = {"trigger": "high"}
-    doc["states"][1]["on"][0] = {
+    doc["states"][0]["transitions"][0]["set"] = {"trigger": "high"}
+    doc["states"][1]["transitions"][0] = {
         "when": "close > trigger", "enter": {"side": "long"}, "goto": "holding",
     }
-    doc["states"][2]["on"][0] = {"when": "close < 1", "exit": {}, "goto": "waiting"}
+    doc["states"][2]["transitions"][0] = {"when": "close < 1", "exit": {}, "goto": "waiting"}
     df = candles([
         (101, 105, 100, 101),
         (102, 103, 101, 102),
@@ -275,8 +275,8 @@ def test_a_variable_persists_until_reassigned() -> None:
 def test_a_variable_may_hold_an_arithmetic_result() -> None:
     """`level = (B * C) / A`, the audit's example, as a captured variable."""
     doc = machine()
-    doc["states"][0]["on"][0]["set"] = {"level": "(high * close) / low"}
-    doc["states"][1]["on"][0] = {
+    doc["states"][0]["transitions"][0]["set"] = {"level": "(high * close) / low"}
+    doc["states"][1]["transitions"][0] = {
         "when": "close > level", "enter": {"side": "long"}, "goto": "holding",
     }
     df = candles([
@@ -333,7 +333,7 @@ def liquidity_sweep_machine() -> dict:
         "states": [
             {
                 "name": "waiting_for_sweep",
-                "on": [{
+                "transitions": [{
                     "when": "low < prev_day.low",
                     "set": {"swept_low": "low"},
                     "goto": "waiting_for_confirmation",
@@ -342,7 +342,7 @@ def liquidity_sweep_machine() -> dict:
             {
                 "name": "waiting_for_confirmation",
                 "timeout": {"bars": 20, "goto": "waiting_for_sweep"},
-                "on": [{
+                "transitions": [{
                     "when": "candle.is_bearish and close > prev_day.low",
                     "set": {"confirm_high": "high", "confirm_low": "low"},
                     "goto": "armed",
@@ -350,7 +350,7 @@ def liquidity_sweep_machine() -> dict:
             },
             {
                 "name": "armed",
-                "on": [{
+                "transitions": [{
                     "when": "low < confirm_low",
                     "enter": {"side": "short", "stop": "confirm_high"},
                     "goto": "in_position",
@@ -358,7 +358,7 @@ def liquidity_sweep_machine() -> dict:
             },
             {
                 "name": "in_position",
-                "on": [{
+                "transitions": [{
                     "when": "close > confirm_high",
                     "exit": {},
                     "goto": "waiting_for_sweep",
@@ -430,3 +430,74 @@ def test_the_machine_cannot_see_the_future() -> None:
     for i in range(25, len(df)):
         truncated = run_machine(m, df.iloc[:i + 1])
         assert truncated.states[i] == full.states[i], f"state differs at bar {i}"
+
+
+# --- the YAML surface -------------------------------------------------------
+#
+# Every test above builds documents as Python dicts, where "on" is just a
+# string. The real workflow is YAML pasted from an AI tool — and YAML 1.1
+# reads a bare `on:` as the BOOLEAN true. A format whose keys silently change
+# type between the tests and the product is a trap, so the surface is tested
+# as text here rather than as dicts.
+
+
+def test_a_yaml_document_round_trips() -> None:
+    import yaml
+
+    text = """
+version: 3
+name: yaml-machine
+timeframe: 15m
+instruments: [NSE:RELIANCE]
+initial: flat
+states:
+  - name: flat
+    transitions:
+      - when: "close > prev_day.high"
+        set: {trigger: "high"}
+        enter: {side: long, stop: "low"}
+        goto: holding
+  - name: holding
+    transitions:
+      - when: "close < trigger"
+        exit: {}
+        goto: flat
+risk:
+  stop_loss: {type: percent, value: 1.0}
+  target: {type: percent, value: 2.0}
+sizing: {type: notional, notional_per_trade: 100000}
+"""
+    machine = parse_machine(yaml.safe_load(text))
+    assert [s.name for s in machine.states] == ["flat", "holding"]
+    assert machine.variables == {"trigger"}
+
+
+def test_the_yaml_boolean_trap_is_named_not_just_rejected() -> None:
+    """`on:` becomes True, the state ends up with no transitions, and the
+    machine strands. The error has to say WHY, because the document looks
+    perfectly reasonable to whoever wrote it."""
+    import yaml
+
+    text = """
+version: 3
+name: trap
+timeframe: 15m
+instruments: [NSE:RELIANCE]
+initial: flat
+states:
+  - name: flat
+    on:
+      - when: "close > 100"
+        goto: flat
+risk:
+  stop_loss: {type: percent, value: 1.0}
+  target: {type: percent, value: 2.0}
+sizing: {type: notional, notional_per_trade: 100000}
+"""
+    loaded = yaml.safe_load(text)
+    assert True in loaded["states"][0], "precondition: YAML really does do this"
+
+    with pytest.raises(StateMachineError) as exc:
+        parse_machine(loaded)
+    message = str(exc.value)
+    assert "on:" in message and "transitions:" in message

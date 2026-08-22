@@ -37,6 +37,17 @@ from strategy.vocabulary import (  # noqa: E402
     SOURCE_ALLOWED_FOR,
     STOP_TYPES,
 )
+from strategy.vocabulary import (  # noqa: E402
+    CANDLE_FIELDS,
+    EXPR_MULTI_OUTPUT,
+    EXPR_PRECEDENCE,
+    EXPR_SIMPLE_INDICATORS,
+    HIGHER_TIMEFRAME_PREFIXES,
+    POSITION_FIELDS,
+)
+from strategy.v3 import CURRENT_V3_VERSION  # noqa: E402
+
+V3_DOC_PATH = Path(__file__).resolve().parent.parent / "docs" / "STRATEGY_FORMAT_V3.md"
 
 DOC_PATH = Path(__file__).resolve().parent.parent / "docs" / "STRATEGY_FORMAT.md"
 
@@ -295,8 +306,216 @@ def main() -> int:
     DOC_PATH.parent.mkdir(parents=True, exist_ok=True)
     DOC_PATH.write_text(render_document(), encoding="utf-8")
     print(f"wrote {DOC_PATH}")
+    V3_DOC_PATH.write_text(render_v3_document(), encoding="utf-8")
+    print(f"wrote {V3_DOC_PATH}")
     return 0
 
+
+
+# ---------------------------------------------------------------------------
+# Version 3: state machines
+# ---------------------------------------------------------------------------
+
+V3_EXAMPLE = """version: 3
+name: LIQUIDITY-SWEEP-15m
+enabled: false
+timeframe: 15m
+universe: NIFTY50
+
+initial: waiting_for_sweep
+on_position_closed: waiting_for_sweep
+
+states:
+  - name: waiting_for_sweep
+    transitions:
+      - when: "low < prev_day.low"
+        set: {swept_low: "low"}
+        goto: waiting_for_confirmation
+
+  - name: waiting_for_confirmation
+    timeout: {bars: 20, goto: waiting_for_sweep}
+    transitions:
+      - when: "candle.is_bullish and close > prev_day.low"
+        set: {confirm_low: "low", confirm_high: "high"}
+        goto: armed
+
+  - name: armed
+    timeout: {bars: 10, goto: waiting_for_sweep}
+    transitions:
+      - when: "high > confirm_high"
+        enter:
+          side: long
+          stop: "confirm_low"
+          target: "close + atr(14) * 3"
+        goto: in_position
+
+  - name: in_position
+    transitions:
+      - when: "position.bars_held >= 20"
+        exit: {reason: time_stop}
+        goto: waiting_for_sweep
+
+risk:
+  stop_loss: {type: percent, value: 1.5}
+  target:    {type: percent, value: 3.0}
+sizing:
+  type: notional
+  notional_per_trade: 100000
+session:
+  square_off: "15:15"
+max_cycles_per_day: 2
+"""
+
+
+def _v3_function_rows() -> str:
+    rows = []
+    for name, arities in sorted(EXPR_SIMPLE_INDICATORS.items()):
+        if name in ("sma", "ema"):
+            call = f"`{name}(period)` or `{name}(series, period)`"
+        elif 0 in arities:
+            call = f"`{name}()`"
+        else:
+            call = f"`{name}(period)`"
+        rows.append(f"| {call} | one series |")
+    for family, outputs in sorted(EXPR_MULTI_OUTPUT.items()):
+        params = {
+            "macd": "fast, slow, signal",
+            "bbands": "period, std",
+            "supertrend": "period, multiplier",
+        }[family]
+        spelled = ", ".join(f"`{family}.{o}(...)`" for o in outputs)
+        rows.append(f"| `{family}.<output>({params})` | {spelled} |")
+    return "\n".join(rows)
+
+
+def _v3_precedence_rows() -> str:
+    return "\n".join(
+        f"| {i + 1} | `{ops}` | {meaning} |"
+        for i, (ops, meaning) in enumerate(EXPR_PRECEDENCE)
+    )
+
+
+def render_v3_document() -> str:
+    """The v3 reference. Pure — returns text, writes nothing."""
+    prefixes = ", ".join(
+        f"`{p}.`" for p in sorted(HIGHER_TIMEFRAME_PREFIXES)
+    )
+    return f"""# Strategy format v{CURRENT_V3_VERSION} — state machines
+
+<!-- GENERATED FILE — do not edit by hand.
+     Regenerate: .venv\\Scripts\\python.exe scripts/gen_strategy_format_doc.py -->
+
+Paste this whole page into ChatGPT (or any similar tool) before asking it to
+write a v3 strategy.
+
+**Use v{CURRENT_V3_VERSION} when the strategy waits for things in order** — "sweep the low,
+then wait for a confirming candle, then enter on a break of *that* candle" —
+or when it needs arithmetic, or a stop placed at a level it noticed earlier.
+For a plain indicator-threshold rule, v{CURRENT_VERSION} (see STRATEGY_FORMAT.md) is
+shorter and does the same job.
+
+## Worked example
+
+```yaml
+{V3_EXAMPLE}```
+
+## How it runs
+
+A machine sits in one state and checks that state's `on:` list against each
+closed candle, in written order. **The first `when:` that is true wins, and at
+most one transition fires per candle.** Two events a strategy waits for happen
+on different candles anyway, so this costs nothing and keeps a cycle in the
+state graph from spinning forever inside one bar.
+
+`set:` captures values at the transition's own candle and they persist until
+reassigned — that is how `confirm_low` is still there several candles later.
+
+`timeout: {{bars: N, goto: S}}` leaves a state after N candles with no
+transition. Without one, "wait for confirmation" waits forever.
+
+`on_position_closed:` is where the machine goes when the position closes for
+**any** reason — its own `exit:`, or a stop, target or square-off. It defaults
+to `initial`. This matters: without it a machine that got stopped out would
+sit waiting for an exit rule to fire on a position that no longer exists, and
+report a strategy that quietly stopped trading.
+
+## Expressions
+
+Every `when:`, `set:`, `stop:` and `target:` is an expression **in quotes**.
+
+### Values you can name
+
+| name | meaning |
+|---|---|
+| `open` `high` `low` `close` `volume` | the current candle |
+| `{'` `'.join(sorted(CANDLE_FIELDS))}` | prefixed `candle.` — e.g. `candle.is_bullish` |
+| `{'` `'.join(sorted(POSITION_FIELDS))}` | prefixed `position.` — e.g. `position.bars_held` |
+| anything you `set:` | your own variable |
+
+### Functions
+
+| call | outputs |
+|---|---|
+{_v3_function_rows()}
+
+### Higher timeframes
+
+Prefix any name or call with {prefixes} — `prev_day.high`, `daily.ema(50)`,
+`hourly.rsi(14)`.
+
+A higher-timeframe bar becomes visible only once it has **fully closed**, so
+during today's session `prev_day.high` is yesterday's high, and it stays
+yesterday's on every candle of the day rather than turning into today's on the
+last one.
+
+### Reading earlier candles
+
+`close[1]` is the previous candle's close; `rsi(14)[2]` is the RSI two candles
+back. Under a timeframe prefix the step is in THAT timeframe's bars, so
+`prev_day.high[1]` is the day before yesterday.
+
+The offset must be a whole number from 0 to {MAX_OFFSET}. **A negative offset is
+rejected**: it would read a candle that has not closed yet.
+
+### Operator precedence
+
+Loosest first. Use brackets when in doubt.
+
+| | operators | |
+|---|---|---|
+{_v3_precedence_rows()}
+
+## Actions on a transition
+
+* `goto:` — **required**. Which state to move to. Name an existing state; a
+  typo is rejected rather than stranding the machine.
+* `set:` — capture values, e.g. `{{confirm_low: "low"}}`.
+* `enter:` — `side: long|short`, plus optional `stop:` and `target:`
+  **expressions**. A level you name here beats the `risk:` block, which stays
+  as the fallback so every machine has a stop either way.
+* `exit:` — close the position; optional `reason:` shows in the trade log.
+
+A transition cannot both `enter:` and `exit:` on the same candle.
+
+## What is rejected, and why
+
+Each of these would otherwise produce a clean, plausible, wrong backtest:
+
+* a `goto:` naming no declared state — the machine strands
+* a state nothing can reach — a branch you think you are testing never runs
+* two states with the same name — the second shadows the first
+* a variable read that no transition ever `set:` — it resolves to nothing, so
+  the condition never fires and the result looks like a strategy with no setups
+* a negative offset — look-ahead bias written as configuration
+
+## Shared with v{CURRENT_VERSION}
+
+`risk:`, `sizing:`, `session:`, `max_cycles_per_day:`, and
+`universe:`/`instruments:` mean exactly what they mean in v{CURRENT_VERSION} —
+see STRATEGY_FORMAT.md. Fills, slippage, costs and the order of exits within a
+candle are identical too, so a v{CURRENT_V3_VERSION} result is directly comparable with a
+v{CURRENT_VERSION} one.
+"""
 
 if __name__ == "__main__":
     raise SystemExit(main())

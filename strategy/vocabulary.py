@@ -85,6 +85,38 @@ POSITION_FIELDS: frozenset[str] = frozenset({
     "is_open", "is_long", "is_short", "bars_held", "entry_price", "pnl_pct",
 })
 
+# Functions a v3 expression may call. Here rather than in the evaluator for
+# the same reason as the prefixes above: the validator, the evaluator and the
+# generated format document all read this, and a list kept in three places is
+# a list that will disagree with itself.
+#
+# name -> how many arguments it accepts.
+EXPR_SIMPLE_INDICATORS: dict[str, tuple[int, ...]] = {
+    "sma": (1, 2),      # sma(20) over close, or sma(volume, 20)
+    "ema": (1, 2),
+    "rsi": (1,),
+    "atr": (1,),
+    "vwap": (0,),
+}
+
+# name -> the outputs it produces, each spelled as a dotted call.
+EXPR_MULTI_OUTPUT: dict[str, tuple[str, ...]] = {
+    "macd": ("line", "signal", "histogram"),
+    "bbands": ("upper", "middle", "lower"),
+    "supertrend": ("line", "direction"),
+}
+
+# Operators the expression grammar accepts, loosest-binding first. Used by the
+# generated document so the precedence table cannot drift from the parser.
+EXPR_PRECEDENCE: tuple[tuple[str, str], ...] = (
+    ("or", "either side true"),
+    ("and", "both sides true"),
+    ("not", "negates what follows"),
+    ("< > <= >= == !=", "comparison"),
+    ("+ -", "add, subtract"),
+    ("* /", "multiply, divide"),
+)
+
 COMPARISON_OPERATORS: frozenset[str] = frozenset({">", "<", ">=", "<="})
 CROSS_OPERATORS: frozenset[str] = frozenset({"crosses_above", "crosses_below"})
 ALL_OPERATORS: frozenset[str] = COMPARISON_OPERATORS | CROSS_OPERATORS

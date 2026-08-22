@@ -335,16 +335,28 @@ def _parse_state(node: Any, where: str) -> State:
     if not isinstance(name, str) or not name.strip():
         _fail(where, "'name' must be a non-empty string")
 
-    unknown = set(node) - {"name", "on", "timeout"}
-    if unknown:
-        _fail(where, f"unknown key(s): {', '.join(sorted(unknown))}")
+    # YAML 1.1 reads a bare `on:` as the boolean True, so a document written
+    # with `on:` arrives here with True as a key and its transitions
+    # invisible — the state would silently have none and the machine would
+    # strand. Caught by name rather than left to fail as "no transitions".
+    if True in node:
+        _fail(
+            where,
+            "found a key that YAML read as the boolean `true` — almost "
+            "certainly `on:`, which YAML 1.1 treats as true rather than as "
+            "the word. Use `transitions:` instead.",
+        )
 
-    raw_transitions = node.get("on") or []
+    unknown = set(node) - {"name", "transitions", "timeout"}
+    if unknown:
+        _fail(where, f"unknown key(s): {', '.join(sorted(str(u) for u in unknown))}")
+
+    raw_transitions = node.get("transitions") or []
     if not isinstance(raw_transitions, list):
-        _fail(f"{where}.on", "expected a list of transitions")
+        _fail(f"{where}.transitions", "expected a list of transitions")
 
     transitions = tuple(
-        _parse_transition(item, f"state {name!r}.on[{i}]")
+        _parse_transition(item, f"state {name!r}.transitions[{i}]")
         for i, item in enumerate(raw_transitions)
     )
 

@@ -193,7 +193,7 @@ def migrate_v2_to_v3(strategy: Strategy) -> dict[str, Any]:
         "states": [
             {
                 "name": "flat",
-                "on": [{
+                "transitions": [{
                     "when": entry,
                     "enter": {"side": strategy.position_type},
                     "goto": "holding",
@@ -201,7 +201,7 @@ def migrate_v2_to_v3(strategy: Strategy) -> dict[str, Any]:
             },
             {
                 "name": "holding",
-                "on": [{"when": exit_, "exit": {}, "goto": "flat"}],
+                "transitions": [{"when": exit_, "exit": {}, "goto": "flat"}],
             },
         ],
         "risk": raw["risk"],
