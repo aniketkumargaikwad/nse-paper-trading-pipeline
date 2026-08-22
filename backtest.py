@@ -702,6 +702,7 @@ def run_backtest(
     to_utc: datetime | None = None,
     timeframes: list[str] | None = None,
     holdout: float | None = None,
+    symbols_override: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[uuid.UUID, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch, simulate, and score every strategy x instrument combination.
 
@@ -733,9 +734,22 @@ def run_backtest(
 
     # Resolved BEFORE any fetching, so an unknown or empty universe fails
     # immediately rather than after minutes of downloading.
-    resolved_by_strategy = {
-        s.name: resolve_strategy_symbols(s, store) for s in strategies
-    }
+    #
+    # `symbols_override` pins the list instead of resolving it. A re-run needs
+    # that: NIFTY50 is not the same fifty stocks it was six months ago, so
+    # re-resolving would quietly test a different universe and call the
+    # difference a change in the strategy.
+    resolved_by_strategy = {}
+    for s in strategies:
+        pinned = (symbols_override or {}).get(s.name)
+        if pinned:
+            resolved_by_strategy[s.name] = ResolvedSymbols(
+                symbols=tuple(pinned),
+                universe_name=s.universe,
+                constituents_as_of=None,
+            )
+        else:
+            resolved_by_strategy[s.name] = resolve_strategy_symbols(s, store)
     # Which exact definition is being tested. Recorded on every row so a
     # result stays reproducible after the strategy is edited - without this a
     # stored result points at rules that may no longer exist.
@@ -1040,6 +1054,10 @@ def main(argv: list[str] | None = None) -> int:
              "0.3. Metrics are reported for both halves; the out-of-sample "
              "one is the only figure not fitted to the data it scores.",
     )
+    parser.add_argument(
+        "--rerun", metavar="BATCH_ID",
+        help="reproduce a stored batch exactly: same strategy VERSION, same symbols, same window. Reports whether it still reproduces.",
+    )
     parser.add_argument("--no-db", action="store_true", help="skip Supabase writes (CSV only)")
     args = parser.parse_args(argv)
 
@@ -1131,13 +1149,19 @@ def main(argv: list[str] | None = None) -> int:
         # Prefer strategies stored in the database (what the dashboard edits);
         # fall back to the YAML file when running fully offline with --no-db.
         strategies: list[Strategy] = []
-        if not args.no_db:
+        if args.rerun:
+            # A reproduction takes its strategies from the stored snapshots,
+            # not from what is enabled today. Loading the live ones here would
+            # reject the run for having none enabled — which has nothing to do
+            # with whether the stored batch can be reproduced.
+            pass
+        elif not args.no_db:
             probe = SupabaseStore.connect(settings)
             probe.seed_strategies_if_empty(load_strategy_documents())
             strategies = probe.list_strategies()
-        if not strategies:
+        if not strategies and not args.rerun:
             strategies = load_strategies()
-        if args.strategy:
+        if args.strategy and not args.rerun:
             # Naming a strategy is an explicit request, so it runs even when
             # paused. Backtesting a paused strategy is the DOCUMENTED workflow
             # — the Strategies page says "Saved (paused). Backtest it first,
@@ -1159,7 +1183,7 @@ def main(argv: list[str] | None = None) -> int:
                     "— that is what pausing is for. It will not paper-trade "
                     "until you switch it Live."
                 )
-        else:
+        elif not args.rerun:
             strategies = [s for s in strategies if s.enabled]
             if not strategies:
                 print(
@@ -1190,13 +1214,55 @@ def main(argv: list[str] | None = None) -> int:
         client = create_data_client(settings, token_store, started.astimezone(IST).date())
         print(f"data provider: {describe_provider(settings)}")
 
+        symbols_override = None
+        if args.rerun:
+            # Everything the run needs comes from the stored rows, so
+            # anything the user also typed would silently change what
+            # is being reproduced.
+            from rerun import describe, load_config, parse_strategy_for
+
+            configs = load_config(store, args.rerun)
+            strategies = [parse_strategy_for(c) for c in configs]
+            symbols_override = {c.strategy_name: c.symbols for c in configs}
+            window_from = min(c.from_utc for c in configs)
+            window_to = max(c.to_utc for c in configs)
+            timeframes = None
+            print(f"re-running batch {args.rerun}")
+            for c in configs:
+                print(f"  {describe(c)}")
+
         batch_id, rows, run_rows, equity_rows = run_backtest(
             settings=settings, store=store, client=client,
             strategies=strategies, years=args.years,
             from_utc=window_from, to_utc=window_to,
             timeframes=timeframes,
             holdout=args.holdout,
+            symbols_override=symbols_override,
         )
+
+        if args.rerun:
+            from rerun import compare
+
+            print()
+            by_name = {r["strategy_name"]: r for r in run_rows}
+            all_same = True
+            for c in configs:
+                row = by_name.get(c.strategy_name)
+                if row is None:
+                    print(f"  {c.strategy_name}: produced no run row")
+                    all_same = False
+                    continue
+                same, detail = compare(c, row)
+                all_same &= same
+                print(f"  {'MATCH ' if same else 'DIFFERS'} {c.strategy_name}: {detail}")
+            if not all_same:
+                print(
+                    "\nA difference is not the strategy — that was pinned to "
+                    "its stored version.\nSomething underneath moved: candles "
+                    "backfilled or corrected, a data-quality fix, or the "
+                    "engine itself."
+                )
+        
 
         csv_path = write_csv(batch_id, rows, started)
         print(f"\nCSV written: {csv_path}")

@@ -534,3 +534,22 @@ def test_a_daily_wrapped_call_is_accepted() -> None:
     doc = machine()
     doc["states"][0]["transitions"][0]["when"] = "close > daily.ema(50)"
     assert parse_machine(doc) is not None
+
+
+def test_a_stored_snapshot_using_the_old_on_key_still_parses() -> None:
+    """Snapshots are immutable. Renaming `on:` to `transitions:` must not make
+    results recorded before the rename irreproducible — that is exactly what
+    versioning exists to prevent."""
+    doc = machine()
+    doc["states"][0]["on"] = doc["states"][0].pop("transitions")
+    parsed = parse_machine(doc)
+    assert parsed.states[0].transitions[0].goto == "armed"
+
+
+def test_the_yaml_boolean_is_still_refused_even_now() -> None:
+    """Accepting the legacy string must not let the YAML trap back in."""
+    doc = machine()
+    doc["states"][0][True] = doc["states"][0].pop("transitions")
+    with pytest.raises(StateMachineError) as exc:
+        parse_machine(doc)
+    assert "transitions:" in str(exc.value)

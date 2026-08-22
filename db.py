@@ -747,6 +747,47 @@ class SupabaseStore:
                 return []
             raise self._wrap(exc, f"reading versions of {name}") from exc
 
+    def strategy_version_by_id(self, version_id: int) -> dict[str, Any] | None:
+        """One immutable version snapshot, by id.
+
+        This is what makes a stored result reproducible. Re-running from the
+        strategy's CURRENT definition would answer a different question — it
+        would test what the strategy says today, not what produced the result
+        being reproduced, and the two silently diverge the moment it is edited.
+        """
+        try:
+            rows = (
+                self._table("strategy_versions")
+                .select("id,strategy_name,version,definition,format_version,created_at")
+                .eq("id", version_id)
+                .limit(1)
+                .execute()
+            ).data
+        except APIError as exc:
+            if "does not exist" in str(exc).lower():
+                return None
+            raise self._wrap(exc, f"reading strategy version {version_id}") from exc
+        return rows[0] if rows else None
+
+    def backtest_run_rows(self, batch_id: str) -> list[dict[str, Any]]:
+        """Every run row in one batch — the config a re-run needs.
+
+        A run row already records the window, the universe, the exact symbol
+        list, the cost model and the strategy version. That IS the config; it
+        just was never read back.
+        """
+        try:
+            return (
+                self._table("backtest_runs")
+                .select("*")
+                .eq("batch_id", batch_id)
+                .execute()
+            ).data
+        except APIError as exc:
+            if "does not exist" in str(exc).lower():
+                return []
+            raise self._wrap(exc, f"reading backtest run {batch_id}") from exc
+
     def current_version_id(self, name: str) -> int | None:
         """The version id a run should record for this strategy."""
         try:

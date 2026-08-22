@@ -441,11 +441,24 @@ def _parse_state(node: Any, where: str) -> State:
             "the word. Use `transitions:` instead.",
         )
 
+    # `on` as a STRING is the pre-rename spelling. It survives only in
+    # already-stored snapshots, which are immutable by design — refusing it
+    # would make results recorded before the rename permanently
+    # irreproducible, which is precisely what versioning exists to prevent.
+    #
+    # The boolean above is a different thing and stays an error: that is YAML
+    # mangling a freshly written document, and accepting it would let the trap
+    # back in through the front door.
+    legacy_on = node.pop("on", None)
+
     unknown = set(node) - {"name", "transitions", "timeout"}
     if unknown:
         _fail(where, f"unknown key(s): {', '.join(sorted(str(u) for u in unknown))}")
 
-    raw_transitions = node.get("transitions") or []
+    raw_transitions = node.get("transitions")
+    if raw_transitions is None and legacy_on is not None:
+        raw_transitions = legacy_on
+    raw_transitions = raw_transitions or []
     if not isinstance(raw_transitions, list):
         _fail(f"{where}.transitions", "expected a list of transitions")
 
