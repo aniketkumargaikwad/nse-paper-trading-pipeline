@@ -328,6 +328,9 @@ def load_all(ctx: AppContext) -> dict[str, pd.DataFrame]:
             # Optional: added by sql/004. A database without it should lose
             # the verdict panel, not the whole dashboard.
             "backtest_runs": fetch_optional_table(c, "backtest_runs", order_by="created_at"),
+            # Optional: added by sql/008. Where each v3 machine is between
+            # runs — the setups being hunted, which no other table records.
+            "machine_state": fetch_optional_table(c, "machine_state", order_by="updated_at"),
         }
     except Exception as exc:
         message = str(exc)

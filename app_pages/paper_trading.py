@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import streamlit as st
 
@@ -14,6 +16,33 @@ from app_common import (
     rupees,
     to_ist,
 )
+from strategy.v3 import is_v3_document, parse_machine, setups_in_progress
+
+
+def _v3_machines(strategies: pd.DataFrame) -> dict:
+    """Parse the stored v3 documents, keyed by name.
+
+    A strategy that no longer parses is skipped rather than raising: this
+    panel is a read-only view, and one broken document must not take the
+    whole page down with it.
+    """
+    machines: dict = {}
+    if strategies is None or strategies.empty:
+        return machines
+    for _, row in strategies.iterrows():
+        definition = row.get("definition") or {}
+        if isinstance(definition, str):
+            try:
+                definition = json.loads(definition)
+            except ValueError:
+                continue
+        if not is_v3_document(definition):
+            continue
+        try:
+            machines[row["name"]] = parse_machine(definition)
+        except Exception:
+            continue
+    return machines
 
 
 def _equity_and_drawdown(trades: pd.DataFrame) -> pd.DataFrame:
@@ -39,6 +68,28 @@ def render(ctx: AppContext) -> None:
 
     data = load_all(ctx)
     trades, positions = data["trades"], data["positions"]
+
+    # ---- setups being hunted ------------------------------------------------
+    # Nothing else records this. `positions` shows what is open and `trades`
+    # what finished; neither can say that eleven symbols swept their previous
+    # day's low this morning and are waiting for a confirming candle — which
+    # is most of what a state machine spends its day doing. Without it a v3
+    # strategy looks idle right up until it trades.
+    machine_rows = data.get("machine_state")
+    if machine_rows is not None and not machine_rows.empty:
+        machines = _v3_machines(data["strategies"])
+        setups = setups_in_progress(machine_rows.to_dict("records"), machines)
+        if setups:
+            st.subheader("Setups in progress")
+            st.caption(
+                f"{len(setups)} symbol(s) part-way through a state machine. "
+                "These are not positions — nothing is open until a machine "
+                "reaches an entry."
+            )
+            st.dataframe(
+                pd.DataFrame(setups), use_container_width=True, hide_index=True,
+            )
+            st.divider()
 
     # ---- open positions ----------------------------------------------------
     st.subheader("Open positions")

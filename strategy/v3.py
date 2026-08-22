@@ -39,7 +39,7 @@ Pure module: no pandas, no I/O. Execution lives in `state_runner.py`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from strategy.expr import (
     Expr,
@@ -126,6 +126,10 @@ class ExitAction:
 class Transition:
     when: Expr
     goto: str
+    # The `when` text as written. Kept because an AST has no readable
+    # rendering, and the dashboard has to show a person WHAT a machine
+    # is waiting for while it sits mid-setup.
+    when_source: str = ""
     sets: tuple[tuple[str, Expr], ...] = ()
     enter: EntryAction | None = None
     exit: ExitAction | None = None
@@ -522,6 +526,7 @@ def _parse_transition(node: Any, where: str) -> Transition:
     return Transition(
         when=when, goto=goto, sets=tuple(sets),
         enter=enter, exit=exit_action,
+        when_source=str(node["when"]),
     )
 
 
@@ -709,3 +714,58 @@ def _check_call(path: tuple[str, ...], where: str) -> None:
         f"unknown function {'.'.join(path)!r}. Known: "
         f"{', '.join(_known_calls())}",
     )
+
+
+def setups_in_progress(
+    rows: Iterable[Mapping[str, Any]], machines: Mapping[str, "StateMachine"]
+) -> list[dict[str, Any]]:
+    """Machine-state rows as display rows, newest activity first.
+
+    Only machines that are actually mid-setup appear: a machine sitting in its
+    initial state is deleted rather than stored, so a row here always means
+    "this symbol is part-way through something".
+
+    That is information nothing else in the system records. `positions` shows
+    what is open; `trades` shows what finished. Neither can tell you that
+    eleven symbols swept their previous-day low this morning and are waiting
+    for a confirming candle — which is most of what a state machine spends
+    its day doing.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        name = str(row.get("strategy_name", ""))
+        machine = machines.get(name)
+        state = str(row.get("state", ""))
+        variables = row.get("variables") or {}
+        if isinstance(variables, str):
+            import json as _json
+
+            try:
+                variables = _json.loads(variables)
+            except ValueError:
+                variables = {}
+
+        waiting_for = "—"
+        if machine is not None:
+            try:
+                transitions = machine.state(state).transitions
+            except StateMachineError:
+                # The strategy was edited and this state no longer exists.
+                # Say so rather than rendering a blank cell.
+                waiting_for = "(state no longer in the strategy)"
+                transitions = ()
+            if transitions:
+                waiting_for = " or ".join(str(t.when_source) for t in transitions)
+
+        out.append({
+            "Strategy": name,
+            "Symbol": str(row.get("instrument", "")),
+            "Waiting in": state,
+            "For": waiting_for,
+            "Remembered": ", ".join(
+                f"{k}={v:g}" if isinstance(v, (int, float)) else f"{k}={v}"
+                for k, v in sorted(variables.items())
+            ) or "—",
+            "Bars": int(row.get("bars_in_state") or 0),
+        })
+    return out

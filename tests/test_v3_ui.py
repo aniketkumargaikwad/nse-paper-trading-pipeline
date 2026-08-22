@@ -215,3 +215,94 @@ def test_pasting_a_v2_document_still_migrates() -> None:
     assert store.saved is not None
     assert store.saved["name"] == "v2-paste"
     assert "states" not in store.saved
+
+
+# --- setups in progress -----------------------------------------------------
+#
+# `positions` records what is open and `trades` what finished. Neither can say
+# that a symbol swept its previous-day low an hour ago and is still waiting for
+# a confirming candle — so without this panel a v3 strategy looks completely
+# idle right up until the moment it trades.
+
+
+def a_machine():
+    from strategy.v3 import parse_machine
+    return parse_machine(v3_doc())
+
+
+def test_a_setup_row_says_what_it_is_waiting_for() -> None:
+    from strategy.v3 import setups_in_progress
+
+    rows = [{
+        "strategy_name": "ui-machine", "instrument": "NSE:RELIANCE",
+        "state": "armed", "variables": {"floor": 97.3}, "bars_in_state": 2,
+    }]
+    out = setups_in_progress(rows, {"ui-machine": a_machine()})
+    assert out[0]["Symbol"] == "NSE:RELIANCE"
+    assert out[0]["Waiting in"] == "armed"
+    assert out[0]["For"] == "close > floor"
+    assert out[0]["Remembered"] == "floor=97.3"
+    assert out[0]["Bars"] == 2
+
+
+def test_variables_arriving_as_json_text_are_read() -> None:
+    """PostgREST usually hands back a dict, but a jsonb column can arrive as
+    text depending on the client — a blank cell here would look like a machine
+    that had captured nothing."""
+    from strategy.v3 import setups_in_progress
+
+    rows = [{
+        "strategy_name": "ui-machine", "instrument": "NSE:TCS",
+        "state": "armed", "variables": '{"floor": 12.5}', "bars_in_state": 1,
+    }]
+    out = setups_in_progress(rows, {"ui-machine": a_machine()})
+    assert out[0]["Remembered"] == "floor=12.5"
+
+
+def test_a_machine_with_no_variables_yet_shows_a_dash() -> None:
+    from strategy.v3 import setups_in_progress
+
+    rows = [{
+        "strategy_name": "ui-machine", "instrument": "NSE:TCS",
+        "state": "watching", "variables": {}, "bars_in_state": 0,
+    }]
+    assert setups_in_progress(rows, {"ui-machine": a_machine()})[0]["Remembered"] == "—"
+
+
+def test_a_state_removed_from_the_strategy_is_named_not_blank() -> None:
+    """The strategy was edited while a machine sat in a state that no longer
+    exists. Saying so beats an empty cell."""
+    from strategy.v3 import setups_in_progress
+
+    rows = [{
+        "strategy_name": "ui-machine", "instrument": "NSE:TCS",
+        "state": "deleted_state", "variables": {}, "bars_in_state": 4,
+    }]
+    out = setups_in_progress(rows, {"ui-machine": a_machine()})
+    assert "no longer" in out[0]["For"]
+
+
+def test_an_unknown_strategy_still_renders_its_row() -> None:
+    from strategy.v3 import setups_in_progress
+
+    rows = [{
+        "strategy_name": "gone", "instrument": "NSE:TCS",
+        "state": "armed", "variables": {}, "bars_in_state": 1,
+    }]
+    out = setups_in_progress(rows, {})
+    assert out[0]["Strategy"] == "gone"
+    assert out[0]["For"] == "—"
+
+
+def test_the_page_helper_skips_a_document_that_no_longer_parses() -> None:
+    """One broken strategy must not take down a read-only panel."""
+    import pandas as pd
+    from app_pages.paper_trading import _v3_machines
+
+    frame = pd.DataFrame([
+        {"name": "good", "definition": v3_doc()},
+        {"name": "broken", "definition": {"version": 3, "states": "nope"}},
+        {"name": "a-v2-one", "definition": V2_DOC},
+    ])
+    machines = _v3_machines(frame)
+    assert list(machines) == ["good"]
