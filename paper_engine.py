@@ -436,15 +436,32 @@ def run_once(
         (p.strategy_name, p.instrument): p for p in store.list_open_positions()
     }
 
+    # Imported here, not at module scope: paper_machine reaches back into this
+    # module for the shared fill and trade helpers, and a top-level import
+    # would close the cycle.
+    from paper_machine import process_machine_combo
+    from strategy.v3 import StateMachine
+
     for strategy in strategies:
         for instrument in symbols_by_strategy[strategy.name]:
             try:
-                _process_combo(
+                # A v3 machine carries state between runs and so takes a
+                # different path; everything either path writes — positions,
+                # trades, the audit row — is the same.
+                handler = (
+                    process_machine_combo
+                    if isinstance(strategy, StateMachine)
+                    else _process_combo
+                )
+                handler(
                     now_utc=now_utc,
                     settings=settings,
                     store=store,
                     client=client,
-                    strategy=strategy,
+                    **(
+                        {"machine": strategy} if isinstance(strategy, StateMachine)
+                        else {"strategy": strategy}
+                    ),
                     instrument=instrument,
                     instrument_token=tokens[instrument],
                     position=open_positions.get((strategy.name, instrument)),

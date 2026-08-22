@@ -841,6 +841,84 @@ class SupabaseStore:
             self.save_strategy_document(doc)
         return len(documents)
 
+    # -- v3 machine state -----------------------------------------------------
+
+    def get_machine_state(self, strategy_name: str, instrument: str) -> dict[str, Any] | None:
+        """Where a state machine was left, or None if it has never run.
+
+        None means "start from the initial state", which is also the right
+        answer for a machine that finished a cycle — see clear_machine_state.
+        """
+        try:
+            resp = (
+                self._table("machine_state")
+                .select("state,variables,bars_in_state,last_candle_ts")
+                .eq("strategy_name", strategy_name)
+                .eq("instrument", instrument)
+                .limit(1)
+                .execute()
+            )
+        except APIError as exc:
+            if _is_missing_table(exc):
+                raise DatabaseError(
+                    "the machine_state table does not exist. Run "
+                    "sql/008_machine_state.sql in the Supabase SQL editor "
+                    "before paper trading a version 3 strategy."
+                ) from exc
+            raise self._wrap(exc, "reading machine state") from exc
+
+        if not resp.data:
+            return None
+        row = resp.data[0]
+        return {
+            "state": row["state"],
+            "variables": dict(row.get("variables") or {}),
+            "bars_in_state": int(row.get("bars_in_state") or 0),
+            "last_candle_ts": (
+                _parse_ts(row["last_candle_ts"]) if row.get("last_candle_ts") else None
+            ),
+        }
+
+    def save_machine_state(
+        self, strategy_name: str, instrument: str, *,
+        state: str, variables: Mapping[str, Any], bars_in_state: int,
+        last_candle_ts: datetime,
+    ) -> None:
+        """Persist where a machine is, so the next stateless run resumes it."""
+        row = {
+            "strategy_name": strategy_name,
+            "instrument": instrument,
+            "state": state,
+            "variables": to_native(dict(variables)),
+            "bars_in_state": int(bars_in_state),
+            "last_candle_ts": _iso(last_candle_ts),
+            "updated_at": _iso(datetime.now(tz=UTC)),
+        }
+        try:
+            self._table("machine_state").upsert(
+                row, on_conflict="strategy_name,instrument"
+            ).execute()
+        except APIError as exc:
+            raise self._wrap(exc, "saving machine state") from exc
+
+    def clear_machine_state(self, strategy_name: str, instrument: str) -> None:
+        """Forget a machine that is back at its starting point.
+
+        Keeping a row that says "initial state, no variables" would be
+        indistinguishable from one that has never run, while making the table
+        grow by one row per symbol per strategy forever.
+        """
+        try:
+            (
+                self._table("machine_state")
+                .delete()
+                .eq("strategy_name", strategy_name)
+                .eq("instrument", instrument)
+                .execute()
+            )
+        except APIError as exc:
+            raise self._wrap(exc, "clearing machine state") from exc
+
     # -- positions ------------------------------------------------------------
 
     def list_open_positions(self) -> list[OpenPosition]:
@@ -1116,6 +1194,8 @@ _MIGRATIONS: tuple[tuple[str, str, str, str | None], ...] = (
      "backtest_results", "sharpe_daily"),
     ("007_out_of_sample.sql", "in-sample vs out-of-sample verdict",
      "backtest_runs", "oos_passed_kill_rules"),
+    ("008_machine_state.sql", "where a v3 machine is between runs",
+     "machine_state", "state"),
 )
 
 

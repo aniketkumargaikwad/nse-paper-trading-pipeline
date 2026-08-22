@@ -325,7 +325,27 @@ class MachineStepper:
         self._closes = df["close"].astype(float).to_numpy() if not df.empty else []
         self.state = machine.initial
         self.variables: dict[str, float] = {}
-        self._bars_in_state = 0
+        self.bars_in_state = 0
+
+    def restore(
+        self, *, state: str, variables: dict, bars_in_state: int
+    ) -> None:
+        """Resume a machine that was left mid-setup by an earlier run.
+
+        The paper engine is stateless — it rebuilds its world from the
+        database on every tick — so a machine hunting a setup across
+        several candles has to be put back exactly where it was, variables
+        and timeout counter included. Restoring the state alone would
+        restart every `timeout:` and lose every captured level.
+        """
+        if state not in self._by_name:
+            raise ValueError(
+                f"cannot resume in unknown state {state!r}; the strategy "
+                "was probably edited since this state was saved"
+            )
+        self.state = state
+        self.variables = dict(variables)
+        self.bars_in_state = int(bars_in_state)
 
     def position_closed(self) -> None:
         """Tell the machine the position is gone, however it went.
@@ -336,7 +356,7 @@ class MachineStepper:
         mentions `on_position_closed` still cannot strand itself.
         """
         self.state = self._machine.on_position_closed or self._machine.initial
-        self._bars_in_state = 0
+        self.bars_in_state = 0
 
     def step(self, i: int, position: PositionView | None = None) -> StepResult:
         """Consider bar i. At most one transition fires."""
@@ -376,16 +396,16 @@ class MachineStepper:
                 )
 
             self.state = fired.goto
-            self._bars_in_state = 0
+            self.bars_in_state = 0
             result.moved_to = self.state
             return result
 
         # Only when nothing fired. A transition and a timeout on the same bar
         # is not a race: the rule the author wrote wins over the fallback.
-        self._bars_in_state += 1
-        if state.timeout is not None and self._bars_in_state >= state.timeout.bars:
+        self.bars_in_state += 1
+        if state.timeout is not None and self.bars_in_state >= state.timeout.bars:
             self.state = state.timeout.goto
-            self._bars_in_state = 0
+            self.bars_in_state = 0
             result.moved_to = self.state
         return result
 
