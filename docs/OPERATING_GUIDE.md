@@ -22,35 +22,40 @@ project before. Every step says **where to be** and **exactly what to type**.
 ## 0. The 60-second mental model
 
 ```
-  YOUR LAPTOP (once each morning)                 THE CLOUD (runs by itself)
+  YOUR LAPTOP (whenever you like)                RAILWAY (runs by itself)
   ┌──────────────────────────────┐    ┌──────────────────────────────────────┐
-  │ Yahoo Finance (FREE)         │    │ GitHub Actions – paper-engine         │
-  │   no account, no API key,    │◄───┤   every 15 min during market hours    │
-  │   no daily login             │    │     reads strategies + open positions,│
-  └──────────────────────────────┘    │     fetches candles, evaluates rules, │
-   (swap to paid Kite any time        │     writes trades + an audit row      │
-    with DATA_PROVIDER=kite)          │                                       │
-                                       │ GitHub Actions – backtest (manual)    │
-        Supabase (Postgres)  ◄─────────┤     writes results table + CSV        │
-        = the ONLY memory              └──────────────────────────────────────┘
-              ▲
-              │ read-only anon key
-  ┌───────────┴──────────────┐
-  │ Streamlit dashboard      │   (always-on web page, read-only)
-  └──────────────────────────┘
+  │ backfill.py                  │    │ dashboard  - the website              │
+  │   downloads price history    │    │   run backtests, edit strategies,     │
+  │   from Dhan into parquet     │    │   read results                        │
+  │ backtest.py                  │    │                                       │
+  │   the same runs, faster      │    │ paper engine - a cron job              │
+  └──────────────────────────────┘    │   every 15 min in market hours,       │
+              │                        │   writes trades + one audit row       │
+              │  candles                └──────────────────────────────────────┘
+              ▼                                        │
+     Supabase Storage (parquet files)                  │ strategies, trades,
+              │                                        │ results, audit rows
+              └───────────────►  Supabase (Postgres) ◄─┘
 ```
 
 Four facts that explain everything else:
+
 1. **Supabase is the only place state lives.** Every cloud run starts blank and
    rebuilds itself from Supabase. If Supabase is empty, the dashboard is empty.
-2. **The engine needs one thing to work:** a Supabase connection. Market data
-   comes from a **free** source (Yahoo Finance) that needs no account, no API
-   key, and no daily login. *(Only if you later switch to paid Kite Connect
-   does a daily login appear — see §9.)*
-3. **The dashboard needs one thing:** a read-only Supabase key. It shows nothing
-   until an engine has written some rows.
-4. **You edit strategies in `strategies.yaml` only.** You never edit Python to
-   change trading logic.
+2. **Price history is stored as parquet files, not database rows.** About 5x
+   smaller and roughly 8x faster to read. On your laptop they sit in
+   `data/candles`; on Railway they come from Supabase Storage, which is a
+   separate quota from the database. `CANDLE_STORE=parquet` selects this.
+3. **Strategies live in the database**, and the dashboard is how you edit them.
+   `strategies.yaml` is only a seed: it fills an empty database on first run.
+   Once a strategy is stored, the file is no longer the source of truth.
+4. **Nothing places a real order.** There is no broker order API in this
+   codebase at all — not disabled, absent.
+
+> **Which data provider?** Your `.env` decides. `DATA_PROVIDER=dhan` (what you
+> are on) gives about 5 years of 5-minute history; every longer timeframe is
+> resampled from it. The free `yfinance` provider needs no account but serves
+> only ~58 days of intraday data — see §9.
 
 ---
 
@@ -182,7 +187,8 @@ the free Personal tier has no historical-data API) plus a daily login.
 3. Left sidebar **Project Settings → API**. Copy three things:
    - **Project URL** → `.env` as `SUPABASE_URL`
    - **`service_role` key** (the secret one) → `.env` as `SUPABASE_SERVICE_ROLE_KEY`
-   - **`anon` `public` key** → keep this somewhere; the dashboard needs it in 2.7.
+   - **`anon` `public` key** → keep this somewhere; a read-only deployment
+     uses it instead of the service key.
    ```
    SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
    SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi....(very long)
@@ -196,49 +202,31 @@ the free Personal tier has no historical-data API) plus a daily login.
 Expected: every table prints `OK`, ending with `All checks passed. Supabase is ready.`
 If you see `relation "..." does not exist`, the SQL in step 2 didn't apply — re-run it.
 
-### 2.5 GitHub repository Secrets  ← **THIS is the step that was missing**
+### 2.5 Put it online (browser, ~20 minutes)
 
-The cloud engine cannot read your laptop's `.env`. You must copy the same four
-values into GitHub, or **every scheduled run fails** (that was the cause of the
-failure emails).
+Everything above works on your laptop alone. To reach the workbench from a
+phone, and to have the paper engine run without your laptop being on, deploy it
+to Railway.
 
-1. In a browser open the repo → **Settings** → **Secrets and variables** →
-   **Actions**.
-2. Click **New repository secret** and add these **two**, one at a time, names
-   spelled exactly, values copied from your `.env`:
+**That is its own document, written click by click:
+[`docs/DEPLOYING.md`](DEPLOYING.md).** It covers creating the account, pasting
+the keys, inventing an `APP_PASSWORD`, adding the scheduled job, and what to do
+when a step goes wrong.
 
-   | Secret name | Value from `.env` |
-   |---|---|
-   | `SUPABASE_URL` | your Supabase project URL |
-   | `SUPABASE_SERVICE_ROLE_KEY` | your Supabase service_role key |
+Two things worth knowing before you start:
 
-   That's all — the free data provider needs no API keys. (Only if you later
-   switch to paid Kite do you add `KITE_API_KEY` / `KITE_API_SECRET`; see §9.)
+* The dashboard needs a password when hosted. It carries the **service_role**
+  key to be useful, and that key is full access to your database — so anyone
+  who found the URL could edit strategies and read every trade. The app warns
+  loudly if it is deployed without `APP_PASSWORD` set.
+* Add `CANDLE_ROOT=supabase://candles` to the hosted environment. Railway wipes
+  its filesystem on every deploy, so a server pointed at a local folder would
+  find no price history at all.
 
-**Check:** the Actions → Secrets page lists both names.
-
-### 2.6 Re-enable the scheduled engine (laptop or browser)
-
-
-The auto-schedule was **disabled** to stop the failure emails during setup.
-Turn it back on only *after* 2.5 is done:
-```powershell
-gh workflow enable paper-engine
-```
-(Or in the browser: repo → **Actions** → **paper-engine** → **⋯ / Enable workflow**.)
-
-### 2.7 Deploy the dashboard (browser)
-
-1. Go to **https://share.streamlit.io** → sign in with GitHub → **New app**.
-2. Pick this repo, branch **main**, main file **`dashboard.py`** → **Deploy**.
-3. App menu (top-right **⋮**) → **Settings → Secrets** → paste (with your values):
-   ```toml
-   SUPABASE_URL = "https://xxxxxxxxxxxx.supabase.co"
-   SUPABASE_ANON_KEY = "eyJhbGciOi....(the anon/public key from 2.4)"
-   ```
-   **Use the `anon` key here, never `service_role`.** The dashboard refuses to
-   start with a service key on purpose.
-4. The page loads with friendly "no data yet" messages. That is success.
+This project previously used GitHub Actions for scheduling and Streamlit Cloud
+for the dashboard. Both are gone: one platform running the site and the cron
+job together is fewer moving parts, one set of secrets, and one place to look
+when something breaks.
 
 ### 2.8 (Optional) Preview the dashboard with sample data
 
@@ -267,14 +255,15 @@ task is the morning login (Part 3).
 
 ## 3. The daily routine (every trading day)
 
-**On the free provider (the default): there is none.** No morning login, no
-daily task. GitHub Actions runs the engine every 15 minutes during market hours
-by itself. Just look at the dashboard whenever you're curious.
+**On Dhan (what you are on): there is none.** No morning login, no daily
+task — the token refreshes itself. The Railway cron job runs the engine every
+15 minutes during market hours. Look at the dashboard whenever you're curious.
 
 | When | Where | Do this |
 |---|---|---|
-| Anytime | browser | Glance at the Streamlit dashboard |
+| Anytime | browser | Glance at the dashboard |
 | Weekly-ish | browser | Check the *Recent engine runs* panel is green |
+| After adding symbols | laptop | `backfill.py --symbols ... --years 2` to fetch their history |
 
 <details>
 <summary>Only if you switched to paid Kite (DATA_PROVIDER=kite)</summary>
@@ -305,8 +294,10 @@ you log in. Nothing is damaged — there are no real orders.
 
 ## 4. Building and testing strategies (the important part)
 
-You never touch Python to change what the system trades. All logic lives in one
-file: **`strategies.yaml`** (in the project root). The workflow is always:
+You never touch Python to change what the system trades. A strategy is a
+document you write in the dashboard, paste from ChatGPT, or seed from
+**`strategies.yaml`** — once saved it lives in the database, and the dashboard
+is where you edit it. The workflow is always:
 
 ```
 edit strategies.yaml → validate → backtest → read kill rules → enable → push
@@ -414,13 +405,14 @@ always made on the **just-closed** candle — never a forming one.
 **From your laptop** (fastest for experimenting):
 ```powershell
 .\.venv\Scripts\python.exe backtest.py --years 2
-.\.venv\Scripts\python.exe backtest.py --strategy TF-EMA-RSI-15m-v1 --years 3
+.\.venv\Scripts\python.exe backtest.py --strategy <name> --years 3
 .\.venv\Scripts\python.exe backtest.py --no-db      # only write a CSV, skip the database
 ```
 > `--no-db` on the free provider needs **no accounts at all** — not even
 > Supabase. It's the fastest way to try a strategy idea.
 
-**How much history you actually get (free provider):**
+**How much history you actually get (free `yfinance` provider — Dhan serves
+about 5 years at every timeframe):**
 
 | Timeframe | History | Good for |
 |---|---|---|
@@ -432,9 +424,18 @@ If you ask for more than the provider has, the backtester prints a clear NOTE,
 runs on the shorter window anyway, and the kill rules flag the thin sample. To
 judge a rule-set properly, test it on **60m or day**.
 
-**From the cloud** (no laptop needed): repo → **Actions** → **backtest** →
-**Run workflow** → optionally fill in `years` / `strategy` → **Run**. When it
-finishes, the run page has a downloadable **backtest-results** CSV.
+**From the dashboard** (no terminal needed): **Backtest** → **Run a
+backtest** → pick a strategy → **Run backtest**. Output streams into the page
+and the results appear under **Results**.
+
+**Pin the dates when you intend to compare two runs.** "Last 2 years" measured
+today and measured next week are different periods, so the same strategy would
+produce different numbers for reasons that have nothing to do with the
+strategy. Tick **Pin exact dates**, or from the terminal:
+
+```powershell
+.\.venv\Scripts\python.exe backtest.py --strategy <name> --from 2024-01-01 --to 2026-01-01
+```
 
 ### 4.5 Read the results — the "kill rules"
 
@@ -445,16 +446,34 @@ as worth running **only if all four pass**:
 | Rule | Passes when | Why it matters |
 |---|---|---|
 | Enough trades | ≥ 30 trades | Fewer is statistical noise, not evidence |
-| Net positive | net P&L > 0 **after** ₹30/trade + slippage | It must make money as modeled |
+| Net positive | net P&L > 0 **after costs** | It must make money as modeled |
 | Drawdown OK | max drawdown ≤ 20% | Bigger is too painful to sit through |
-| Robust | profitable on ≥ 3 symbols | Working on one stock only = curve-fitting |
+| Robust | profitable on **≥ 40% of the symbols traded** | Working on one stock only = curve-fitting |
+
+> The robustness rule used to be a fixed "at least 3 symbols". That was a 60%
+> bar when a strategy named five symbols by hand — but only a 6% bar on
+> NIFTY50, where it would pass a strategy losing money on 47 stocks out of 50.
+> A proportion scales honestly to a universe of any size.
 
 If a strategy fails these on 2+ years of history, it will almost certainly lose
 in reality (where costs are worse). Don't enable it.
 
-#### ⚠️ The #1 trap: your target must beat the flat ₹30 cost
+#### ⚠️ The #1 trap: your target must beat the cost of trading
 
-Every simulated round-trip is charged a flat **₹30**. With `quantity: 1`, a
+**Which costs apply is set by `COST_MODEL` in your `.env`:**
+
+| `COST_MODEL` | What is charged | Round trip in and out at ₹100,000 |
+|---|---|---|
+| `flat` (default) | a flat ₹30 per round trip | ₹30 |
+| `itemised` (what you are on) | brokerage, STT, stamp duty, exchange and SEBI fees, GST | **₹82.45** |
+
+The itemised model scales with turnover, so a bigger position costs more —
+which is the honest behaviour, and about 2.7x the flat charge at a lakh per
+trade. (The exact figure moves a little with the exit price, because STT is
+charged on the sell value.) The flat model is kept so results produced before it can still be
+reproduced exactly.
+
+The trap is the same either way. With `quantity: 1`, a
 1.5% target on a ₹1,400 share earns **₹21 — less than the ₹30 cost.** Such a
 strategy **cannot make money even when every trade wins.**
 
@@ -469,26 +488,31 @@ Real numbers from the shipped demo strategy at `quantity: 1`:
 
 At `quantity: 10`, RELIANCE's target becomes ₹210 − ₹30 = **+₹180**. 
 
-**Rule of thumb:** make sure
-`quantity × price × target_pct/100` is comfortably larger than ₹30 — aim for at
-least 5×. Either raise `quantity` or pick a larger `target_pct`. This one line
-in `strategies.yaml` decides whether a strategy is mathematically capable of
-profit.
+**Rule of thumb:** make sure `quantity × price × target_pct/100` is
+comfortably larger than the cost — aim for at least 5x.
+
+**The better fix is not to use `quantity` at all.** Use `sizing: {type:
+notional, notional_per_trade: 100000}` instead: a fixed rupee amount per trade
+buys 25 shares of a ₹4,000 stock and 500 of a ₹200 one, so the cost drag is the
+same on both. With a fixed share count you are partly ranking a universe by
+share price, which is not a property of the strategy at all.
 
 ### 4.6 The safe promotion workflow
 
-1. Add your new strategy to `strategies.yaml` with **`enabled: false`**.
-2. `strategy_schema.py` → fix until valid.
-3. Backtest it → check the four kill rules.
-4. Only if it passes, set **`enabled: true`**.
-5. Commit and push:
-   ```powershell
-   git add strategies.yaml
-   git commit -m "Add/enable strategy <name>"
-   git push
-   ```
-6. The next scheduled engine run picks it up automatically. (Pushing also
-   re-activates the cron if GitHub had auto-paused it after 60 idle days.)
+1. Write the strategy in the dashboard (**Strategies** → **New**), or paste
+   one from ChatGPT. Save it **paused**. A paused strategy is stored and
+   backtestable; it simply never trades.
+2. Fix anything the validator complains about. It names the exact location.
+3. Backtest it → check the four kill rules. Pin the dates.
+4. Re-test the winner on a period you did not use while tuning. This is the
+   step everyone skips and the only one that distinguishes an edge from a
+   coincidence.
+5. Only then switch it to **Live** in the dashboard.
+6. The next scheduled engine run picks it up automatically — nothing to push,
+   because strategies live in the database, not in the repository.
+
+> Editing `strategies.yaml` still works, but it only seeds an **empty**
+> database. Once a strategy is stored, changing the file changes nothing.
 
 ### 4.7 Worked example: add a new strategy
 
@@ -534,6 +558,52 @@ Then:
 ```
 If the kill rules pass, change `enabled: false` → `true`, then commit and push.
 
+### 4.8 Sweeping a setting to search for better numbers
+
+Rather than editing a stop loss, re-running, editing it again and trying to
+remember which was which, test several values in one run.
+
+**In the dashboard:** **Backtest** → **Run a backtest** → pick a strategy →
+open **Sweep a setting across several values** → type e.g. `0.5, 0.7, 1.0` into
+**Stop loss values to try**. It tells you how many variants that is before you
+start.
+
+**From the terminal:**
+```powershell
+.\.venv\Scripts\python.exe backtest.py --strategy BANKS-EMA-RSI-60m `
+  --from 2026-01-01 --to 2026-06-30 `
+  --sweep risk.stop_loss.value=0.5,0.7,1.0 `
+  --sweep risk.target.value=1.0,2.0
+```
+That is 3 x 2 = 6 runs. Each variant is stored under its own name — for example
+`BANKS-EMA-RSI-60m [stop_loss.value=0.7, target.value=2.0]` — so the results
+table and the **Compare runs** tab can tell them apart. The run ends with every
+variant ranked by net P&L.
+
+You can sweep any setting in the strategy document by its path:
+`risk.stop_loss.value`, `risk.target.value`, `sizing.notional_per_trade`,
+`entry.all.1.params.period`. A path that does not exist is refused rather than
+created, so a typo is caught before the run starts instead of silently changing
+nothing.
+
+> ### Read this part before you trust a sweep
+>
+> **A sweep is the fastest way to fool yourself in this entire system.** Trying
+> 24 combinations and keeping the best one is not research — it is picking the
+> luckiest sample from a distribution you generated on purpose.
+>
+> If any single combination had a 5% chance of looking good by luck alone, then
+> across 24 of them the chance that *at least one* did is about **71%**. The
+> tool prints this number for your actual sweep, before and after the run.
+>
+> So: sweep a handful of values, not a hundred. And when something passes,
+> treat it as a **hypothesis**, not a finding — re-test it on a period the
+> sweep never saw (a different year, with `--from` / `--to`) before you believe
+> it. A result that survives that is worth something. A result that only exists
+> inside the window you searched is worth nothing.
+
+The default limit is 24 variants; `--max-variants` raises it, deliberately.
+
 ---
 
 ## 5. Command cheat-sheet (all laptop commands run from the project folder)
@@ -542,7 +612,7 @@ If the kill rules pass, change `enabled: false` → `true`, then commit and push
 |---|---|
 | Set up / repair the Python env | `python -m venv .venv` then `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` |
 | Confirm the code is healthy | `.\.venv\Scripts\python.exe -m pytest tests/ -q` |
-| Check Supabase is reachable | `.\.venv\Scripts\python.exe db.py` |
+| Check Supabase, and which migrations are applied | `.\.venv\Scripts\python.exe db.py` |
 | Validate strategies after editing | `.\.venv\Scripts\python.exe strategy_schema.py` |
 | Do the morning login (**paid Kite only**) | `.\.venv\Scripts\python.exe login.py` |
 | Check today's token (**paid Kite only**) | `.\.venv\Scripts\python.exe login.py --check` |
@@ -552,9 +622,10 @@ If the kill rules pass, change `enabled: false` → `true`, then commit and push
 | Fill the dashboard with sample data | `.\.venv\Scripts\python.exe seed_demo.py` |
 | Remove the sample data | `.\.venv\Scripts\python.exe seed_demo.py --clear` |
 | See the dashboard locally | `.\.venv\Scripts\streamlit.exe run dashboard.py` |
-| Turn the auto-schedule on/off | `gh workflow enable paper-engine` / `gh workflow disable paper-engine` |
-| See recent cloud runs | `gh run list --limit 10` |
-| Read a failed run's log | `gh run view <run-id> --log-failed` |
+| Backtest a fixed window (reproducible) | `.\.venv\Scripts\python.exe backtest.py --strategy <name> --from 2024-01-01 --to 2026-01-01` |
+| Sweep a setting across values | `.\.venv\Scripts\python.exe backtest.py --strategy <name> --sweep risk.stop_loss.value=0.5,0.7,1.0` |
+| Turn the schedule on/off | Railway → the cron service → **Settings** → pause / resume |
+| See recent cloud runs | Railway → the service → **Deployments** → **View Logs**, or the dashboard's *Recent engine runs* panel |
 | Load the Dhan symbol master | `.\.venv\Scripts\python.exe backfill.py --refresh-instruments` |
 | Warm the candle cache | `.\.venv\Scripts\python.exe backfill.py --symbols NSE:RELIANCE --years 2` |
 | Verify the data layer end to end | `.\.venv\Scripts\python.exe scripts\verify_dhan_live.py` |
@@ -569,15 +640,16 @@ panel (or the `run_audit` table). Every run leaves one row saying `ok`,
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| **Failure emails from GitHub Actions** | The two repository Secrets are missing/blank | Do **Step 2.5**, then `gh workflow enable paper-engine` |
-| Log says `Missing required environment variable(s)` | Same as above | Same as above |
+| Log says `Missing required environment variable(s)` | A variable was not copied into Railway | Railway → the service → **Variables** — see [`DEPLOYING.md`](DEPLOYING.md) step 3 |
+| A result column is blank, or there is no equity chart | A migration in `sql/` has not been applied | Run `.\.venv\Scripts\python.exe db.py` — it names the exact file to paste into the Supabase SQL editor |
+| Every variant of a sweep looks similar | The swept path may not be doing what you think | Check the variant names in the results table; each states the value it used |
 | Log says `No Kite access token stored` / `token has expired` | (paid Kite only) morning login not done | `.\.venv\Scripts\python.exe login.py` |
 | Backtest returns 0 trades / "no candles returned" | Asked for more history than the free feed has | Normal — see §4.4; use 60m or day for deep tests |
 | Every backtest trade loses money | Flat ₹30 cost exceeds your target | See the sizing trap in §4.5 — raise `quantity` |
 | `Yahoo Finance failed ... after 4 attempts` | Free endpoint throttled or offline | Nothing — next run retries; if persistent, `pip install -U yfinance` |
 | Free provider can't fetch an F&O symbol | Yahoo has no reliable NSE derivatives feed | Use cash-market symbols, or switch to paid Kite (§9) |
 | Engine says `SKIPPED: market closed` on a trading day | Wrong date in `nse_holidays.yaml`, or genuinely closed | Check/fix that file, push |
-| Runs arrive late or one is missing | GitHub cron delay (normal, up to ~1–2 h) | Nothing — runs are idempotent, the next one catches up |
+| Runs arrive late or one is missing | Cron delay (normal) | Nothing — runs are idempotent, the next one catches up |
 | Scheduled runs stopped entirely | GitHub pauses cron after 60 idle days | Push any commit; re-enable in Actions if needed |
 | Dashboard: "Could not read from Supabase" | SQL not applied, or wrong anon key | Re-run `sql/001_init.sql`; re-copy the anon key into Streamlit secrets |
 | Dashboard: "looks like a service-role key" | Wrong Supabase key pasted into the dashboard | Use the `anon` `public` key |
@@ -628,11 +700,14 @@ panel (or the `run_audit` table). Every run leaves one row saying `ok`,
 | `dashboard.py` | The Streamlit dashboard. |
 | `strategy_schema.py` | The strategy validator. |
 | `db.py` | Database connectivity self-test + all reads/writes. |
-| `tests/` | 133 offline tests (`pytest tests/`). |
-| `.github/workflows/` | The two cloud schedules. |
-| `yfinance_client.py` | The free (default) market-data provider. |
-| `kite_client.py` | The paid Kite provider (used only when `DATA_PROVIDER=kite`). |
+| `tests/` | The offline test suite (`pytest tests/ -q`). |
+| `sweep.py` | Expands one strategy into a grid of variants. |
+| `sql/` | Migrations, applied by hand. `db.py` says which are outstanding. |
+| `providers/dhan.py` | The Dhan market-data provider (what you are on). |
+| `yfinance_client.py` | The free provider — no account, ~58 days intraday. |
+| `kite_client.py` | The paid Kite provider (`DATA_PROVIDER=kite`). |
 | `data_provider.py` | Picks between them. |
+| `Procfile` | What Railway runs. |
 | `docs/OPERATING_GUIDE.md` | **This file.** |
 
 ---
@@ -652,12 +727,11 @@ history** or **F&O/derivatives** data.
    KITE_API_KEY=xxxxxxxx
    KITE_API_SECRET=xxxxxxxx
    ```
-3. In GitHub: add secrets `KITE_API_KEY` and `KITE_API_SECRET`, **and** a
-   repository *variable* (Settings → Secrets and variables → Actions →
-   **Variables** tab) named `DATA_PROVIDER` with value `kite`.
+3. In Railway: add `KITE_API_KEY`, `KITE_API_SECRET` and `DATA_PROVIDER=kite`
+   to **both** services' **Variables** tabs.
 4. Start doing the morning `login.py` (see §3) — this becomes mandatory.
 
-**No code changes.** To go back to free, remove the `DATA_PROVIDER` variable.
+**No code changes.** To go back, set `DATA_PROVIDER` to `dhan` or `yfinance`.
 
 What you gain: years of 15m history, F&O symbols, official broker-grade data,
 and live quotes. What you take on: ₹500/month and the daily login.

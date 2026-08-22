@@ -77,6 +77,13 @@ from costs import CostModel, FlatCostModel
 from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
 from kite_client import KiteClientError, TokenExpiredError
+from sweep import (
+    DEFAULT_MAX_VARIANTS,
+    SweepError,
+    count_variants,
+    expand,
+    false_positive_warning,
+)
 from universes import UniverseError
 from strategy_schema import (
     Strategy,
@@ -803,6 +810,41 @@ def write_csv(batch_id: uuid.UUID, rows: list[dict[str, Any]], now_utc: datetime
     return path
 
 
+def print_sweep_ranking(run_rows: list[dict[str, Any]]) -> None:
+    """Every variant, best net P&L first, with what the search cost.
+
+    Ranked but not chosen. The top row of a sweep is the luckiest sample, not
+    the best strategy, and the two are only the same thing if the edge is real
+    — which this table cannot tell you and the warning underneath it says out
+    loud.
+    """
+    if not run_rows:
+        return
+
+    ranked = sorted(run_rows, key=lambda r: r["net_pnl"], reverse=True)
+    width = max(len(str(r["strategy_name"])) for r in ranked)
+
+    print("\nSweep results (best net P&L first):")
+    print(
+        f"  {'variant'.ljust(width)}  {'trades':>7}  {'net':>12}  "
+        f"{'sharpe':>7}  {'profitable':>10}  verdict"
+    )
+    for row in ranked:
+        sharpe = row.get("sharpe_daily")
+        profitable = f"{row['symbols_profitable']}/{row['symbols_resolved']}"
+        print(
+            f"  {str(row['strategy_name']).ljust(width)}  "
+            f"{row['total_trades']:>7}  {row['net_pnl']:>12,.0f}  "
+            f"{('-' if sharpe is None else format(sharpe, '.2f')):>7}  "
+            f"{profitable:>10}  "
+            f"{'PASSED' if row['passed_kill_rules'] else 'failed'}"
+        )
+
+    warning = false_positive_warning(len(ranked))
+    if warning:
+        print(f"\n  {warning}")
+
+
 def main(argv: list[str] | None = None) -> int:
     use_utf8_stdout()
     parser = argparse.ArgumentParser(description="Batch backtester (paper research only).")
@@ -826,6 +868,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--timeframes",
         help="comma-separated timeframes to test instead of the strategy's own",
+    )
+    # A sweep answers "which settings would have worked", which is also the
+    # fastest way to fool yourself: keeping the best of 24 tries is picking the
+    # luckiest sample from a distribution you generated on purpose. The run
+    # says so, with a number, rather than trusting the reader to remember.
+    parser.add_argument(
+        "--sweep", action="append", default=[], metavar="PATH=V1,V2",
+        help=(
+            "vary one setting across values, e.g. risk.stop_loss.value=0.5,0.7,1.0. "
+            "Repeat for a grid. Needs --strategy."
+        ),
+    )
+    parser.add_argument(
+        "--max-variants", type=int, default=DEFAULT_MAX_VARIANTS,
+        help=f"refuse a sweep larger than this (default {DEFAULT_MAX_VARIANTS})",
     )
     parser.add_argument("--no-db", action="store_true", help="skip Supabase writes (CSV only)")
     args = parser.parse_args(argv)
@@ -857,6 +914,32 @@ def main(argv: list[str] | None = None) -> int:
             print("ERROR: --from must be before --to.", file=sys.stderr)
             return 1
         print(f"window: {args.from_date} -> {args.to_date} IST (explicit)")
+
+    if args.sweep and not args.strategy:
+        print(
+            "ERROR: --sweep needs --strategy. A sweep varies ONE strategy's "
+            "settings; applying the same paths to several strategies at once "
+            "would silently skip the ones that do not have them.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.sweep:
+        try:
+            planned = count_variants(args.sweep)
+        except SweepError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        if planned > args.max_variants:
+            print(
+                f"ERROR: that sweep is {planned} variants, over the limit of "
+                f"{args.max_variants}. Every extra combination buys another "
+                "chance at a false positive, so the limit is deliberate. "
+                "Narrow the grid, or raise it with --max-variants if you mean "
+                "it.",
+                file=sys.stderr,
+            )
+            return 1
 
     timeframes = None
     if args.timeframes:
@@ -921,6 +1004,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 1
 
+        if args.sweep:
+            try:
+                strategies = expand(strategies[0], args.sweep)
+            except SweepError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 1
+            print(
+                f"sweep: {len(strategies)} variants of {args.strategy!r} "
+                f"({'; '.join(args.sweep)})"
+            )
+
         store = None if args.no_db else SupabaseStore.connect(settings)
         # Only the Kite provider needs a database connection to read the
         # daily token, so `--no-db` with the free provider needs no Supabase
@@ -964,6 +1058,9 @@ def main(argv: list[str] | None = None) -> int:
                     "years": args.years,
                 },
             )
+
+        if args.sweep:
+            print_sweep_ranking(run_rows)
 
         passed = sum(1 for r in rows if r["passed_kill_rules"])
         print(f"\nDone: {len(rows)} combinations, {passed} passed all kill rules.")

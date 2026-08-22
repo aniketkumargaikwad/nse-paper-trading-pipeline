@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -18,6 +19,7 @@ from app_common import (
     to_ist,
 )
 from metrics import MIN_PROFITABLE_SYMBOL_PCT
+from sweep import SweepError, count_variants, false_positive_warning
 
 KILL_RULE_LABELS = {
     "min_trades": "Enough trades (≥30)",
@@ -304,6 +306,106 @@ def _fmt(value) -> str:
     return "—" if value is None or pd.isna(value) else f"{float(value):.2f}"
 
 
+
+def _definition_for(strategies: pd.DataFrame, name: str) -> dict:
+    """The stored document for one strategy, or {} when there is none."""
+    if strategies.empty or "definition" not in strategies:
+        return {}
+    match = strategies[strategies["name"] == name]
+    if match.empty:
+        return {}
+    definition = match.iloc[0]["definition"]
+    if isinstance(definition, str):
+        try:
+            definition = json.loads(definition)
+        except ValueError:
+            return {}
+    return definition if isinstance(definition, dict) else {}
+
+
+def _risk_path(definition: dict, key: str) -> tuple[str, str, float | None] | None:
+    """Where a stop or target's SIZE lives, and what it is now.
+
+    A percent stop is sized by `value`; an ATR stop by `multiplier`. Offering
+    the wrong one would fail validation with a message about the strategy,
+    sending the reader to look in the wrong place entirely.
+    """
+    spec = (definition.get("risk") or {}).get(key)
+    if not isinstance(spec, dict):
+        return None
+    if spec.get("type") == "percent" and "value" in spec:
+        return f"risk.{key}.value", "%", float(spec["value"])
+    if spec.get("type") == "atr" and "multiplier" in spec:
+        return f"risk.{key}.multiplier", "x ATR", float(spec["multiplier"])
+    return None
+
+
+def _sweep_controls(strategies: pd.DataFrame, chosen: str) -> list[str]:
+    """Build --sweep specifications from plain inputs. Returns [] for none.
+
+    Deliberately shows the count and what it does to the odds BEFORE the run,
+    not after. Told afterwards, "26% chance one of these passed by luck" reads
+    as an excuse for a disappointing result; told beforehand, it is a reason to
+    test six combinations instead of sixty.
+    """
+    if chosen == "(all enabled)":
+        st.caption(
+            "Pick one strategy above to sweep its settings. A sweep varies one "
+            "strategy at a time."
+        )
+        return []
+
+    definition = _definition_for(strategies, chosen)
+    specs: list[str] = []
+
+    for key, label in (("stop_loss", "Stop loss"), ("target", "Target")):
+        found = _risk_path(definition, key)
+        if found is None:
+            continue
+        path, unit, current = found
+        text = st.text_input(
+            f"{label} values to try ({unit})",
+            value="",
+            placeholder=f"currently {current:g} - try e.g. {current / 2:g}, {current:g}, {current * 2:g}",
+            key=f"sweep_{key}",
+            help=(
+                "Comma-separated. Leave empty to keep the strategy's own "
+                "setting."
+            ),
+        )
+        if text.strip():
+            specs.append(f"{path}={text.strip()}")
+
+    advanced = st.text_area(
+        "Anything else (one per line)",
+        value="",
+        placeholder="entry.all.1.params.period=10,14,21",
+        key="sweep_advanced",
+        help=(
+            "Full paths into the strategy document, as shown on the "
+            "Strategies page. Repeat a path on one line with commas between "
+            "its values."
+        ),
+        height=68,
+    )
+    specs += [line.strip() for line in advanced.splitlines() if line.strip()]
+
+    if not specs:
+        return []
+
+    try:
+        planned = count_variants(specs)
+    except SweepError as exc:
+        st.error(str(exc))
+        return []
+
+    st.info(f"**{planned} variants** will be tested.")
+    warning = false_positive_warning(planned)
+    if warning:
+        st.warning(warning)
+    return specs
+
+
 def _run_backtest_ui(ctx: AppContext, strategies: pd.DataFrame) -> None:
     """Launch backtest.py as a subprocess and stream its output."""
     st.markdown(
@@ -317,15 +419,53 @@ def _run_backtest_ui(ctx: AppContext, strategies: pd.DataFrame) -> None:
         "**60m or day** for evidence you can trust. The run prints a warning "
         "when it has to shorten the window."
     )
-    c1, c2 = st.columns([1, 2])
-    years = c1.number_input("Years of history", 0.5, 10.0, value=2.0, step=0.5)
     names = ["(all enabled)"] + (list(strategies["name"]) if not strategies.empty else [])
-    chosen = c2.selectbox("Strategy", names)
+    chosen = st.selectbox("Strategy", names)
+
+    # Pinned dates are what make a run REPRODUCIBLE, and reproducibility is
+    # what makes two runs comparable. "Last 2 years" measured today and
+    # measured next week are different periods, so the same settings would
+    # produce different numbers for reasons that have nothing to do with the
+    # strategy.
+    pinned = st.checkbox(
+        "Pin exact dates", value=False,
+        help=(
+            "Test a fixed window instead of 'the last N years'. Two runs over "
+            "the same pinned window can be compared; two runs over 'the last "
+            "2 years' taken a week apart cannot."
+        ),
+    )
+    c1, c2 = st.columns(2)
+    if pinned:
+        today = date.today()
+        start = c1.date_input("From", value=today - timedelta(days=730))
+        end = c2.date_input("To", value=today)
+        years = None
+    else:
+        years = c1.number_input("Years of history", 0.5, 10.0, value=2.0, step=0.5)
+        start = end = None
+
+    with st.expander("Sweep a setting across several values (optional)"):
+        specs = _sweep_controls(strategies, chosen)
 
     if st.button("▶️ Run backtest", type="primary", disabled=not ctx.can_edit):
-        cmd = [sys.executable, "backtest.py", "--years", str(years)]
+        if pinned and start >= end:
+            st.error("The 'From' date must be before the 'To' date.")
+            return
+        cmd = [sys.executable, "backtest.py"]
+        if pinned:
+            cmd += ["--from", start.isoformat(), "--to", end.isoformat()]
+        else:
+            cmd += ["--years", str(years)]
         if chosen != "(all enabled)":
             cmd += ["--strategy", chosen]
+        for spec in specs:
+            cmd += ["--sweep", spec]
+        if specs:
+            # The CLI's own limit exists to make a large sweep a deliberate
+            # act. It was made deliberate here instead, in front of the count
+            # and the odds, so re-imposing it would only be confusing.
+            cmd += ["--max-variants", str(count_variants(specs))]
         with st.status("Running backtest…", expanded=True) as status:
             st.caption(" ".join(cmd[1:]))
             try:
