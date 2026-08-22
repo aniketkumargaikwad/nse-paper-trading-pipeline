@@ -75,6 +75,7 @@ from kite_client import (
     drop_forming_candle,
     lookback_start_utc,
 )
+from backtest import resolve_strategy_symbols
 from market_calendar import covered_years, load_holidays, session_gate
 from strategy_schema import Strategy, load_strategy_documents, resolve_quantity
 
@@ -416,7 +417,19 @@ def run_once(
     summary = RunSummary()
     today_ist = now_utc.astimezone(IST).date()
 
-    all_instruments = sorted({i for s in strategies for i in s.instruments})
+    # Resolved through the SAME helper the backtester uses. Reading
+    # `strategy.instruments` directly meant a universe strategy resolved to
+    # nothing and the engine finished cleanly having evaluated no stocks at
+    # all - a healthy-looking run that could never open a position. Every
+    # stored strategy is scoped by universe, so that was all of them.
+    #
+    # Resolving BEFORE any fetching also means an empty or unknown universe
+    # fails immediately rather than after a round of network calls.
+    symbols_by_strategy = {
+        s.name: resolve_strategy_symbols(s, store).symbols for s in strategies
+    }
+
+    all_instruments = sorted({i for syms in symbols_by_strategy.values() for i in syms})
     tokens = client.resolve_instrument_tokens(all_instruments, today_ist)
 
     open_positions = {
@@ -424,7 +437,7 @@ def run_once(
     }
 
     for strategy in strategies:
-        for instrument in strategy.instruments:
+        for instrument in symbols_by_strategy[strategy.name]:
             try:
                 _process_combo(
                     now_utc=now_utc,

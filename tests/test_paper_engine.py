@@ -584,3 +584,87 @@ def test_covered_years_survives_a_missing_file() -> None:
     from market_calendar import covered_years
 
     assert covered_years("does-not-exist.yaml") == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# Universe strategies
+# ---------------------------------------------------------------------------
+#
+# The backtester resolves a universe into symbols; this engine read
+# `strategy.instruments` directly and therefore saw NOTHING for a universe
+# strategy. It then finished cleanly and wrote an "ok" audit row, which is the
+# worst possible shape for a bug: every stored strategy uses a universe, so
+# paper trading would have reported healthy runs and never opened a position.
+
+
+def universe_strategy(**kwargs):
+    """The same test strategy, but scoped by universe instead of a list."""
+    doc = {
+        "version": 2,
+        "strategies": [{
+            "name": "pe-universe", "enabled": True, "position_type": "long",
+            "timeframe": "15m", "universe": "TESTSET",
+            "entry": {"all": [{"indicator": "close", "operator": ">", "value": 105.0}]},
+            "exit": {"any": [{"indicator": "close", "operator": "<", "value": 90.0}]},
+            "risk": {"stop_loss": {"type": "percent", "value": 1.0},
+                     "target": {"type": "percent", "value": 2.0}},
+            "sizing": {"type": "fixed_quantity", "quantity": 1},
+            "max_cycles_per_day": 5,
+        }],
+    }
+    return parse_strategies(doc)[0]
+
+
+class UniverseStore(FakeStore):
+    """FakeStore that can resolve one named universe."""
+
+    def __init__(self, members=("NSE:RELIANCE", "NSE:TCS")):
+        super().__init__()
+        self.members = tuple(members)
+
+    def universe_members(self, name):
+        if name != "TESTSET":
+            return (), None
+        return self.members, "2026-07-01"
+
+
+def test_a_universe_strategy_trades_its_members() -> None:
+    """The bug in one assertion: this used to open zero positions."""
+    store = UniverseStore()
+    # Same shape as the single-instrument entry tests: three quiet candles,
+    # a closed signal candle at 10:00, then the forming candle at 10:15.
+    rows = [
+        (100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 99, 100),
+        (100, 107, 99, 106),        # closed: 106 > 105 -> ENTRY
+        (108, 108.5, 107.5, 108),   # forming
+    ]
+    frames = {"NSE:RELIANCE": frame(rows), "NSE:TCS": frame(rows)}
+    summary = run_once(
+        now_utc=NOW, settings=SETTINGS, store=store,
+        client=FakeClient(frames), strategies=[universe_strategy()],
+    )
+    assert len(store.positions) == 2, f"opened nothing; summary={summary}"
+    assert {inst for _, inst in store.positions} == {"NSE:RELIANCE", "NSE:TCS"}
+
+
+def test_an_empty_universe_is_an_error_not_a_quiet_no_op() -> None:
+    """Refusing is the point: a run that reports success having evaluated no
+    stocks is indistinguishable from one that found no signals."""
+    from universes import UniverseError
+
+    store = UniverseStore(members=())
+    with pytest.raises(UniverseError):
+        run_once(
+            now_utc=NOW, settings=SETTINGS, store=store,
+            client=FakeClient({}), strategies=[universe_strategy()],
+        )
+
+
+def test_an_explicit_instrument_list_still_works() -> None:
+    store = FakeStore()
+    rows = [
+        (100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 99, 100),
+        (100, 107, 99, 106), (108, 108.5, 107.5, 108),
+    ]
+    run(store, {"NSE:RELIANCE": frame(rows)}, strategy())
+    assert len(store.positions) == 1
