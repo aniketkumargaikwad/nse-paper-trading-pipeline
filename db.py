@@ -42,7 +42,7 @@ from strategy_schema import (
     migrate_document,
     parse_strategy_dict,
 )
-from strategy.v3 import CURRENT_V3_VERSION
+from strategy.v3 import CURRENT_V3_VERSION, is_v3_document
 
 # Postgres error code for unique-constraint violations. We treat these as
 # "someone (a previous run) already did this" — the core of idempotency.
@@ -777,6 +777,11 @@ class SupabaseStore:
                 "Common causes: inconsistent indentation, a missing ':', or an "
                 "unquoted '>' operator (write operator: \">\")."
             ) from exc
+
+        if is_v3_document(data):
+            # A v3 document is already a single strategy. Sending it through
+            # the v1->v2 migration would reject it for lacking `entry:`.
+            return self.save_strategy_document(data, raw_source=text)
 
         if isinstance(data, dict) and "strategies" in data:
             try:

@@ -220,6 +220,74 @@ def _expression(source: Any, where: str) -> Expr:
         raise  # unreachable, keeps type checkers honest
 
 
+def is_v3_document(doc: Any) -> bool:
+    """Is this a v3 state machine rather than a v2 condition tree?
+
+    One predicate, used by storage, the paste box and the dashboard, so
+    "which format is this" is answered the same way everywhere.
+    """
+    return isinstance(doc, Mapping) and doc.get("version") == CURRENT_V3_VERSION
+
+
+def machine_outline(doc: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """A v3 document's states as flat rows, for display.
+
+    Reads the RAW document rather than a parsed machine on purpose: a draft
+    that failed validation is exactly when you most want to see its shape,
+    and it cannot be parsed by definition.
+    """
+    rows: list[dict[str, Any]] = []
+    for state in doc.get("states") or []:
+        if not isinstance(state, Mapping):
+            continue
+        name = str(state.get("name", "?"))
+        timeout = state.get("timeout") or {}
+        transitions = state.get("transitions") or []
+        # A draft can carry anything here. A bare string would otherwise
+        # iterate as characters and the state would vanish from the outline —
+        # the opposite of what a broken draft's author needs to see.
+        if not isinstance(transitions, list):
+            transitions = []
+        if not transitions:
+            rows.append({
+                "State": name, "When": "—", "Does": "—", "Goes to": "—",
+            })
+        for transition in transitions:
+            if not isinstance(transition, Mapping):
+                continue
+            does = []
+            if transition.get("set"):
+                does.append("set " + ", ".join(transition["set"]))
+            enter = transition.get("enter")
+            if isinstance(enter, Mapping):
+                bits = f"ENTER {enter.get('side', '?')}"
+                if enter.get("stop"):
+                    bits += f", stop {enter['stop']}"
+                if enter.get("target"):
+                    bits += f", target {enter['target']}"
+                does.append(bits)
+            exit_ = transition.get("exit")
+            if isinstance(exit_, Mapping):
+                fraction = exit_.get("fraction", 1.0)
+                does.append(
+                    "EXIT" if fraction >= 1.0 else f"EXIT {fraction:.0%}"
+                )
+            rows.append({
+                "State": name,
+                "When": str(transition.get("when", "—")),
+                "Does": " · ".join(does) or "—",
+                "Goes to": str(transition.get("goto", "—")),
+            })
+        if timeout:
+            rows.append({
+                "State": name,
+                "When": f"(after {timeout.get('bars', '?')} bars)",
+                "Does": "timeout",
+                "Goes to": str(timeout.get("goto", "—")),
+            })
+    return rows
+
+
 def parse_machine(doc: Any) -> StateMachine:
     """Validate a v3 document into a runnable StateMachine."""
     doc = _mapping(doc, "strategy")

@@ -17,6 +17,7 @@ import streamlit as st
 import yaml
 
 from app_common import AppContext, empty_state, load_all, page_header, to_ist
+from strategy.v3 import is_v3_document, machine_outline
 from strategy_schema import (
     COMPARISON_OPERATORS,
     CROSS_OPERATORS,
@@ -36,6 +37,11 @@ NEEDS_NO_PARAMS = {i for i, p in INDICATOR_PARAMS.items() if not p}
 # ---------------------------------------------------------------------------
 # Condition builder widgets
 # ---------------------------------------------------------------------------
+
+
+def _machine_states_count(definition: dict) -> int:
+    """How many states a v3 document declares. 0 for a v2 strategy."""
+    return len(definition.get("states") or []) if is_v3_document(definition) else 0
 
 
 def _operand_widget(prefix: str, label: str, default_indicator: str = "close") -> dict:
@@ -578,6 +584,18 @@ def render(ctx: AppContext) -> None:
                             "**Instruments:** "
                             + ", ".join(definition.get("instruments", []))
                         )
+                    if is_v3_document(definition):
+                        st.caption(
+                            f"State machine · starts in `{definition.get('initial')}` · "
+                            f"returns to `{definition.get('on_position_closed', definition.get('initial'))}` "
+                            "when a position closes"
+                        )
+                        outline = machine_outline(definition)
+                        if outline:
+                            st.dataframe(
+                                pd.DataFrame(outline),
+                                use_container_width=True, hide_index=True,
+                            )
                     st.code(yaml.safe_dump(definition, sort_keys=False), language="yaml")
 
                     a, b = st.columns([1, 1])
