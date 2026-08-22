@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
 from app_common import AppContext, load_all, page_header, to_ist
+from engine_health import assess, paper_runs_from_rows
+from config import IST
+from market_calendar import covered_years, load_holidays
 
 
 def render(ctx: AppContext) -> None:
@@ -81,12 +85,35 @@ def render(ctx: AppContext) -> None:
 
     # ---- engine runs --------------------------------------------------------
     st.subheader("Engine runs")
-    if audits.empty:
+
+    # The paper engine is judged SEPARATELY from the totals below. Counting
+    # every run together is how this page came to report twenty-one healthy
+    # runs of an engine that had never evaluated a single strategy: nineteen
+    # were backtests, and the two paper runs were weekend skips.
+    verdict = assess(
+        paper_runs_from_rows(audits.to_dict("records") if not audits.empty else []),
+        now_ist=datetime.now(tz=IST),
+        holidays=load_holidays(),
+        known_years=covered_years(),
+    )
+    if verdict.level == "ok":
+        st.success(f"🟢 **{verdict.headline}** — {verdict.detail}")
+    else:
         st.warning(
-            "**No runs recorded.** The scheduled engine has never executed.\n\n"
-            "Enable it with `gh workflow enable paper-engine`, or trigger one "
-            "manually from the repo's **Actions → paper-engine → Run workflow**."
+            f"🔴 **{verdict.headline}**\n\n{verdict.detail}\n\n"
+            "The scheduled job is a **second Railway service** running "
+            "`python paper_engine.py` on a cron — see `docs/DEPLOYING.md`, "
+            "Step 5. It is separate from the dashboard service."
         )
+    if verdict.level != "never":
+        st.caption(
+            f"Paper runs: {verdict.trading_day_runs} on trading days, "
+            f"{verdict.total_runs} in total. Backtests are counted separately "
+            "in the table below."
+        )
+
+    if audits.empty:
+        st.info("No runs of any kind recorded yet.")
     else:
         a = audits.copy()
         a["Started (IST)"] = to_ist(a["run_started_at"])
