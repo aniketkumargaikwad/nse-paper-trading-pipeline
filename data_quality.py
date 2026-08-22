@@ -207,6 +207,13 @@ def detect_suspected_splits(
                 prev_adj = daily_by_date.get(previous_date)
                 curr_adj = daily_by_date.get(day)
                 corroborated = False
+                # Distinguishing "the adjusted series disagreed" from "there
+                # was no adjusted series" matters more than it looks. The
+                # first is strong evidence of an unadjusted corporate action;
+                # the second is no evidence at all. Reporting both as
+                # corroborated=false made a confirmed defect and an unchecked
+                # one indistinguishable in the flags table.
+                adj_ratio: float | None = None
                 if prev_adj and curr_adj and prev_adj > 0 and curr_adj > 0:
                     adj_ratio = max(curr_adj / prev_adj, prev_adj / curr_adj)
                     corroborated = (
@@ -222,6 +229,10 @@ def detect_suspected_splits(
                             "close": close,
                             "previous_date": previous_date.isoformat() if previous_date else None,
                             "corroborated_by_adjusted_daily": corroborated,
+                            "adjusted_daily_checked": adj_ratio is not None,
+                            "adjusted_ratio": (
+                                round(adj_ratio, 4) if adj_ratio is not None else None
+                            ),
                         },
                     ))
         previous_date, previous_close = day, close

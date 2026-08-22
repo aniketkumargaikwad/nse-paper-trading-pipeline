@@ -277,3 +277,40 @@ def test_large_genuine_move_is_corroborated_despite_small_feed_disagreement() ->
         (datetime(2026, 8, 4, tzinfo=IST), 103.0),   # 3% apart -> ratio ~9.7
     ])
     assert detect_suspected_splits(intraday, adjusted_daily) == []
+
+
+# --- "not corroborated" must say WHICH kind ---------------------------------
+#
+# A jump the adjusted daily series CONTRADICTS is strong evidence of an
+# unadjusted corporate action. A jump with no daily series to check against is
+# no evidence at all. Both used to be reported as corroborated=false, which
+# makes a confirmed defect and an unchecked one look identical in the table.
+
+
+def test_flag_records_the_adjusted_ratio_when_daily_is_available() -> None:
+    intraday = closes_frame([
+        (datetime(2026, 8, 3, 15, 25, tzinfo=IST), 1000.0),
+        (datetime(2026, 8, 4, 9, 15, tzinfo=IST), 200.0),
+    ])
+    adjusted_daily = closes_frame([          # a normal ~1% move, not 5x
+        (datetime(2026, 8, 3, tzinfo=IST), 400.0),
+        (datetime(2026, 8, 4, tzinfo=IST), 395.0),
+    ])
+    flags = detect_suspected_splits(intraday, adjusted_daily)
+    assert len(flags) == 1
+    detail = flags[0].detail
+    assert detail["adjusted_daily_checked"] is True
+    # The adjusted series moved ~1%, nothing like the intraday 5x.
+    assert detail["adjusted_ratio"] == pytest.approx(400.0 / 395.0, rel=1e-3)
+
+
+def test_flag_says_so_when_there_was_no_daily_series_to_check() -> None:
+    intraday = closes_frame([
+        (datetime(2026, 8, 3, 15, 25, tzinfo=IST), 1000.0),
+        (datetime(2026, 8, 4, 9, 15, tzinfo=IST), 200.0),
+    ])
+    flags = detect_suspected_splits(intraday, pd.DataFrame())
+    assert len(flags) == 1
+    detail = flags[0].detail
+    assert detail["adjusted_daily_checked"] is False
+    assert detail["adjusted_ratio"] is None

@@ -287,3 +287,118 @@ def test_front_gap_is_always_chased_even_without_extend_to_now() -> None:
     store.ensure_coverage("NSE:RELIANCE", "5m", earlier, TO)
     assert len(provider.calls) == 1
     assert provider.calls[0][2] == earlier
+
+
+# --- split detection on ingest ----------------------------------------------
+#
+# A split that the provider never adjusted for looks like a 50-80% overnight
+# move. A breakout strategy reads that as the signal of the decade, so the
+# flag has to be raised at the moment the candles are stored - not left to a
+# detector that production never calls.
+
+
+def two_session_frame(day_one_close: float, day_two_close: float) -> pd.DataFrame:
+    """Two sessions, one 5m candle each, with the given closes."""
+    stamps = [
+        datetime(2026, 8, 3, 15, 25, tzinfo=IST).astimezone(UTC),
+        datetime(2026, 8, 4, 15, 25, tzinfo=IST).astimezone(UTC),
+    ]
+    closes = [day_one_close, day_two_close]
+    return pd.DataFrame(
+        {
+            "open": closes,
+            "high": [c * 1.01 for c in closes],
+            "low": [c * 0.99 for c in closes],
+            "close": closes,
+            "volume": [1000.0, 1000.0],
+        },
+        index=pd.DatetimeIndex(stamps, name="ts"),
+    )
+
+
+def daily_frame(day_one_close: float, day_two_close: float) -> pd.DataFrame:
+    stamps = [
+        datetime(2026, 8, 3, 15, 30, tzinfo=IST).astimezone(UTC),
+        datetime(2026, 8, 4, 15, 30, tzinfo=IST).astimezone(UTC),
+    ]
+    closes = [day_one_close, day_two_close]
+    return pd.DataFrame(
+        {"open": closes, "high": closes, "low": closes,
+         "close": closes, "volume": [1.0, 1.0]},
+        index=pd.DatetimeIndex(stamps, name="ts"),
+    )
+
+
+SPLIT_FROM = datetime(2026, 8, 3, 0, 0, tzinfo=UTC)
+SPLIT_TO = datetime(2026, 8, 5, 0, 0, tzinfo=UTC)
+
+
+def test_unadjusted_split_is_flagged_on_ingest() -> None:
+    """1:5 split intraday, absent from the adjusted daily series."""
+    backend = FakeBackend()
+    backend.candles[(1, "day")] = daily_frame(1000.0, 1010.0)  # no such move
+    store, backend, _ = make_store(
+        provider=FakeProvider(frame=two_session_frame(1000.0, 200.0)),
+        backend=backend,
+    )
+    store.ensure_coverage("NSE:RELIANCE", "5m", SPLIT_FROM, SPLIT_TO)
+
+    splits = [f for f in backend.flags if f["flag_type"] == "suspected_split"]
+    assert len(splits) == 1
+    assert splits[0]["detail"]["ratio"] == 5.0
+
+
+def test_split_flag_does_not_drop_candles() -> None:
+    """Flagged, never auto-corrected: a dropped candle is a silent lie too."""
+    backend = FakeBackend()
+    backend.candles[(1, "day")] = daily_frame(1000.0, 1010.0)
+    store, backend, _ = make_store(
+        provider=FakeProvider(frame=two_session_frame(1000.0, 200.0)),
+        backend=backend,
+    )
+    store.ensure_coverage("NSE:RELIANCE", "5m", SPLIT_FROM, SPLIT_TO)
+    assert len(backend.candles[(1, "5m")]) == 2
+
+
+def test_genuine_move_corroborated_by_daily_is_not_flagged() -> None:
+    """The same move in BOTH feeds is a real crash, not a split artefact."""
+    backend = FakeBackend()
+    backend.candles[(1, "day")] = daily_frame(1000.0, 200.0)  # daily agrees
+    store, backend, _ = make_store(
+        provider=FakeProvider(frame=two_session_frame(1000.0, 200.0)),
+        backend=backend,
+    )
+    store.ensure_coverage("NSE:RELIANCE", "5m", SPLIT_FROM, SPLIT_TO)
+    assert not [f for f in backend.flags if f["flag_type"] == "suspected_split"]
+
+
+def test_ordinary_overnight_move_is_not_flagged() -> None:
+    backend = FakeBackend()
+    backend.candles[(1, "day")] = daily_frame(1000.0, 1020.0)
+    store, backend, _ = make_store(
+        provider=FakeProvider(frame=two_session_frame(1000.0, 1020.0)),
+        backend=backend,
+    )
+    store.ensure_coverage("NSE:RELIANCE", "5m", SPLIT_FROM, SPLIT_TO)
+    assert not [f for f in backend.flags if f["flag_type"] == "suspected_split"]
+
+
+def test_daily_timeframe_is_not_split_checked() -> None:
+    """Dhan's daily feed is already adjusted; checking it against itself
+    would flag every genuine large move."""
+    store, backend, _ = make_store(
+        provider=FakeProvider(frame=two_session_frame(1000.0, 200.0))
+    )
+    store.ensure_coverage("NSE:RELIANCE", "day", SPLIT_FROM, SPLIT_TO)
+    assert not [f for f in backend.flags if f["flag_type"] == "suspected_split"]
+
+
+def test_split_check_survives_missing_daily_series() -> None:
+    """Daily not backfilled yet: flag uncorroborated rather than crash."""
+    store, backend, _ = make_store(
+        provider=FakeProvider(frame=two_session_frame(1000.0, 200.0))
+    )
+    store.ensure_coverage("NSE:RELIANCE", "5m", SPLIT_FROM, SPLIT_TO)
+    splits = [f for f in backend.flags if f["flag_type"] == "suspected_split"]
+    assert len(splits) == 1
+    assert splits[0]["detail"]["corroborated_by_adjusted_daily"] is False

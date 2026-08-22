@@ -5,9 +5,20 @@
 # December for the following year:
 #   https://www.nseindia.com/resources/exchange-communication-holidays
 #
-# !! The 2026 dates below are a PLACEHOLDER list and MUST be verified against
-# !! the official circular. Festival dates (Holi, Diwali, Eid, ...) move with
-# !! the lunar calendar and exchange decisions.
+# Dates marked CONFIRMED were verified against our own stored candles: on
+# those days all 50 backfilled NIFTY symbols have zero candles, which is an
+# exchange closure, not a per-stock gap. Run this to re-check after any
+# backfill:
+#
+#     python scripts/audit_data_quality.py --dry-run
+#
+# That audit is what caught the original placeholder list listing Holi on
+# 2026-03-04, a day NSE actually traded, while the real closure on 2026-03-03
+# was absent. Dates still marked VERIFY fall outside the backfilled window
+# (candles end 2026-08-11) and remain unchecked against anything.
+#
+# !! Festival dates (Holi, Diwali, Eid, ...) move with the lunar calendar and
+# !! exchange decisions. Never carry a date forward to the next year.
 #
 # Either direction of error fails safe:
 #   * a date wrongly listed  -> the engine skips that day (missed evaluation,
@@ -21,15 +32,20 @@
 
 holidays:
   2026:
-    - 2026-01-26   # Republic Day                     (fixed - reliable)
-    - 2026-02-15   # Mahashivratri                    (VERIFY - lunar)
-    - 2026-03-04   # Holi                             (VERIFY - lunar)
-    - 2026-03-26   # Ram Navami                       (VERIFY - lunar)
-    - 2026-03-31   # Mahavir Jayanti / Id-ul-Fitr     (VERIFY - lunar)
-    - 2026-04-03   # Good Friday                      (VERIFY)
-    - 2026-04-14   # Dr. Ambedkar Jayanti             (fixed - reliable)
-    - 2026-05-01   # Maharashtra Day                  (fixed - reliable)
-    - 2026-08-15   # Independence Day                 (fixed - reliable)
+    - 2026-01-15   # CONFIRMED closed (no candles); festival name unverified
+    - 2026-01-26   # Republic Day                     (CONFIRMED closed)
+    - 2026-02-15   # Mahashivratri                    (CONFIRMED closed)
+    - 2026-03-03   # Holi                             (CONFIRMED closed)
+    #  2026-03-04 was listed here as Holi and REMOVED: NSE traded that day.
+    #  Leaving it in made the engine skip a live session every year it recurs.
+    - 2026-03-26   # Ram Navami                       (CONFIRMED closed)
+    - 2026-03-31   # Mahavir Jayanti / Id-ul-Fitr     (CONFIRMED closed)
+    - 2026-04-03   # Good Friday                      (CONFIRMED closed)
+    - 2026-04-14   # Dr. Ambedkar Jayanti             (CONFIRMED closed)
+    - 2026-05-01   # Maharashtra Day                  (CONFIRMED closed)
+    - 2026-05-28   # CONFIRMED closed (no candles); likely Bakri Id, unverified
+    - 2026-06-26   # CONFIRMED closed (no candles); likely Muharram, unverified
+    - 2026-08-15   # Independence Day        (fixed - after candle coverage)
     - 2026-09-14   # Ganesh Chaturthi                 (VERIFY - lunar)
     - 2026-10-02   # Mahatma Gandhi Jayanti           (fixed - reliable)
     - 2026-10-20   # Dussehra                         (VERIFY - lunar)

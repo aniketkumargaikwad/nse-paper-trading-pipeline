@@ -35,7 +35,7 @@ import pandas as pd
 
 from config import UTC, source_timeframe_for
 from coverage_math import CoverageRange, extend_coverage, missing_ranges
-from data_quality import check_ohlc_sanity
+from data_quality import check_ohlc_sanity, detect_suspected_splits
 from providers.base import empty_frame
 from resample import resample_candles
 
@@ -172,16 +172,54 @@ class CandleStore:
     def _validate_and_flag(
         self, instrument_id: int, timeframe: str, df: pd.DataFrame
     ) -> pd.DataFrame:
-        """Drop structurally impossible candles and record why.
+        """Record quality findings, dropping only impossible candles.
 
-        These are the only findings that are dropped rather than merely
+        OHLC violations are the ONLY findings dropped rather than merely
         flagged: a candle whose high is below its close never existed.
+        A suspected split is flagged and kept — the data may well be right,
+        and a silently removed session is its own kind of lie.
         """
-        flags = check_ohlc_sanity(df)
-        if not flags:
-            return df
-        self._backend.write_quality_flags(
-            [f.to_row(instrument_id, timeframe) for f in flags]
+        invalid = check_ohlc_sanity(df)
+        clean = df
+        if invalid:
+            bad_timestamps = {f.ts for f in invalid}
+            clean = df[~df.index.isin(bad_timestamps)]
+
+        flags = [*invalid, *self._split_flags(instrument_id, timeframe, clean)]
+        if flags:
+            self._backend.write_quality_flags(
+                [f.to_row(instrument_id, timeframe) for f in flags]
+            )
+        return clean
+
+    def _split_flags(
+        self, instrument_id: int, timeframe: str, clean: pd.DataFrame
+    ) -> list:
+        """Overnight jumps the adjusted daily series does not corroborate.
+
+        Intraday only. The daily feed is already corporate-action adjusted,
+        so checking it against itself would flag every genuine large move —
+        and it is the DISAGREEMENT between the two feeds that makes an
+        unadjusted split detectable at all without a corporate-actions source.
+
+        A missing daily series is not a reason to skip the check. With
+        nothing to corroborate against, the jump is flagged as
+        uncorroborated: raising a reviewable flag costs a glance, while
+        staying silent lets an 80% split artefact reach a backtest as the
+        best breakout signal it has ever seen.
+        """
+        if timeframe == "day" or clean.empty:
+            return []
+        # Widened by a day at each end on purpose: a daily candle is stamped
+        # at the session CLOSE, which falls after the last intraday candle of
+        # the same session. Reading the exact intraday span would miss the
+        # very day being corroborated and report a genuine move as a split.
+        margin = timedelta(days=1)
+        adjusted_daily = self._backend.read_candles(
+            instrument_id, "day",
+            clean.index[0].to_pydatetime() - margin,
+            clean.index[-1].to_pydatetime() + margin,
         )
-        bad_timestamps = {f.ts for f in flags}
-        return df[~df.index.isin(bad_timestamps)]
+        if adjusted_daily is None:
+            adjusted_daily = empty_frame()
+        return detect_suspected_splits(clean, adjusted_daily)
