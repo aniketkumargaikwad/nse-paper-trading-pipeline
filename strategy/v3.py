@@ -106,7 +106,20 @@ class EntryAction:
 
 @dataclass(frozen=True)
 class ExitAction:
+    """Close the position, or a slice of it.
+
+    `fraction` below 1 is a partial exit: it closes that share of what is
+    still open and LEAVES THE REST RUNNING. "Take half off at 1R, let the
+    rest run" had no expression before this — the only way to model a runner
+    was to pretend it was two strategies with two sets of costs.
+    """
+
     reason: str = "rule"
+    fraction: float = 1.0
+
+    @property
+    def is_partial(self) -> bool:
+        return self.fraction < 1.0
 
 
 @dataclass(frozen=True)
@@ -417,10 +430,23 @@ def _parse_transition(node: Any, where: str) -> Transition:
     exit_action = None
     if "exit" in node:
         exit_node = _mapping(node["exit"], f"{where}.exit")
-        unknown_exit = set(exit_node) - {"reason"}
+        unknown_exit = set(exit_node) - {"reason", "fraction"}
         if unknown_exit:
             _fail(f"{where}.exit", f"unknown key(s): {', '.join(sorted(unknown_exit))}")
-        exit_action = ExitAction(reason=str(exit_node.get("reason", "rule")))
+        fraction = exit_node.get("fraction", 1.0)
+        if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+            _fail(f"{where}.exit.fraction", f"expected a number, got {fraction!r}")
+        if not 0.0 < float(fraction) <= 1.0:
+            _fail(
+                f"{where}.exit.fraction",
+                f"must be greater than 0 and at most 1, got {fraction}. "
+                "It is the share of the OPEN position to close, so 0.5 is "
+                "half and 1 is all of it.",
+            )
+        exit_action = ExitAction(
+            reason=str(exit_node.get("reason", "rule")),
+            fraction=float(fraction),
+        )
 
     if enter is not None and exit_action is not None:
         _fail(where, "a transition cannot both enter and exit on the same bar")

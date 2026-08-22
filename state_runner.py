@@ -106,6 +106,9 @@ class ExitEvent:
     price: float
     reason: str = "rule"
     from_state: str = ""
+    # Below 1 this is a partial: close that share of what is open and let the
+    # rest run.
+    fraction: float = 1.0
 
 
 @dataclass
@@ -369,6 +372,7 @@ class MachineStepper:
                 result.exit = ExitEvent(
                     bar=i, ts=self._df.index[i], price=price,
                     reason=fired.exit.reason, from_state=self.state,
+                    fraction=fired.exit.fraction,
                 )
 
             self.state = fired.goto

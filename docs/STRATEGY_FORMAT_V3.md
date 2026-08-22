@@ -164,6 +164,12 @@ Loosest first. Use brackets when in doubt.
   **expressions**. A level you name here beats the `risk:` block, which stays
   as the fallback so every machine has a stop either way.
 * `exit:` — close the position; optional `reason:` shows in the trade log.
+  Add `fraction:` below 1 to close only part of it and **leave the rest
+  running** — `exit: {fraction: 0.5, reason: first_target}` takes half off.
+  Each slice is booked as its own trade against the same entry price, and
+  pays its own costs, because each sale really is a separate order. The stop
+  and target then protect what is left. A fraction too small to sell a whole
+  share is recorded as a skip rather than silently doing nothing.
 
 A transition cannot both `enter:` and `exit:` on the same candle.
 

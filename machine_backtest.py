@@ -99,7 +99,7 @@ def simulate_machine(
 
     # Queued from a bar's close, acted on at the next bar's open.
     pending_entry: Any = None      # the EntryEvent that asked for it
-    pending_exit_from: int | None = None
+    pending_exit: Any = None       # the ExitEvent that asked for it
 
     def fill_buy(price: float) -> float:
         return price * (1 + slip)
@@ -107,26 +107,61 @@ def simulate_machine(
     def fill_sell(price: float) -> float:
         return price * (1 - slip)
 
-    def close_position(i: int, intended: float, reason: str) -> None:
-        nonlocal in_pos, pending_exit_from
+    def close_position(
+        i: int, intended: float, reason: str, *,
+        fraction: float = 1.0, from_signal: bool = False,
+    ) -> None:
+        """Close all of the position, or a slice of it.
+
+        A partial keeps the position open with the remainder, so `qty` is the
+        RUNNING quantity from here on — the stop and target below protect
+        what is left rather than what was originally bought.
+
+        Each slice is its own SimTrade against the same entry price. Both
+        halves really were bought at the same moment, so scoring the runner
+        against anything else would be fiction; and each sale really is a
+        separate order, so it pays its own costs.
+        """
+        nonlocal in_pos, pending_exit, qty
+
+        if fraction >= 1.0:
+            slice_qty = qty
+        else:
+            slice_qty = int(qty * fraction)
+            if slice_qty < 1:
+                # One share cannot be halved. Doing nothing quietly would
+                # leave the strategy believing it had reduced risk.
+                skipped.append(SkippedEntry(
+                    signal_ts=index[i], price=float(intended),
+                    reason="partial_below_one_share",
+                ))
+                pending_exit = None
+                return
+
         exit_price = fill_sell(intended) if is_long else fill_buy(intended)
         trades.append(_make_trade(
             entry_signal_ts=e_signal_ts, entry_fill_ts=e_fill_ts,
-            exit_signal_ts=index[i - 1] if reason == "signal" else index[i],
+            exit_signal_ts=index[i - 1] if from_signal else index[i],
             exit_fill_ts=index[i],
-            position_type="long" if is_long else "short", quantity=qty,
+            position_type="long" if is_long else "short", quantity=slice_qty,
             intended_entry=e_intended, entry_price=e_price,
             intended_exit=intended, exit_price=exit_price,
             exit_reason=reason, cost_per_trade_inr=cost_per_trade_inr,
             cost_model=cost_model,
         ))
-        in_pos = False
-        pending_exit_from = None
+        qty -= slice_qty
+        if qty < 1:
+            in_pos = False
+        pending_exit = None
 
     for i in range(len(df)):
         # ---- At this candle's OPEN: act on what the previous close queued.
-        if in_pos and pending_exit_from is not None:
-            close_position(i, opens[i], "signal")
+        if in_pos and pending_exit is not None:
+            close_position(
+                i, opens[i],
+                pending_exit.reason if pending_exit.reason != "rule" else "signal",
+                fraction=pending_exit.fraction, from_signal=True,
+            )
         elif not in_pos and pending_entry is not None:
             event = pending_entry
             fill_day = index[i].astimezone(IST).date()
@@ -215,8 +250,8 @@ def simulate_machine(
         )
         result = stepper.step(i, view)
 
-        if result.exit is not None and in_pos and pending_exit_from is None:
-            pending_exit_from = i
+        if result.exit is not None and in_pos and pending_exit is None:
+            pending_exit = result.exit
         if result.entry is not None and not in_pos and pending_entry is None:
             pending_entry = result.entry
 

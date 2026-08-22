@@ -290,3 +290,170 @@ def test_a_short_profits_when_price_falls() -> None:
     trade = result.trades[0]
     assert trade.position_type == "short"
     assert trade.gross_pnl == pytest.approx((100.0 - 90.0) * 10)
+
+
+# --- partial exits and runners ----------------------------------------------
+#
+# "Take half off at 1R, let the rest run" was on the audit's list of things
+# the platform could not express. A position was all-or-nothing, so the only
+# way to model a runner was to pretend it was two strategies.
+
+
+def test_a_partial_exit_closes_only_its_share() -> None:
+    document = doc(sizing={"type": "fixed_quantity", "quantity": 10})
+    document["states"][1]["transitions"][0] = {
+        "when": "close > 110", "exit": {"fraction": 0.5, "reason": "partial"},
+        "goto": "running",
+    }
+    document["states"].append({
+        "name": "running",
+        "transitions": [{"when": "close < 95", "exit": {}, "goto": "flat"}],
+    })
+    result = run(document, [
+        (95, 96, 94, 101),      # signal
+        (100, 101, 99, 111),    # fill 10 @100; partial signal
+        (100, 101, 99, 94),     # partial fills 5 @100; runner exit signal
+        (100, 101, 99, 100),    # runner fills 5 @100
+    ])
+    assert [t.quantity for t in result.trades] == [5, 5]
+    assert result.trades[0].exit_reason == "partial"
+
+
+def test_the_runner_keeps_the_original_entry_price() -> None:
+    """Both halves were bought at the same time, so both must be scored
+    against the same entry - otherwise the runner's P&L is fiction."""
+    document = doc(sizing={"type": "fixed_quantity", "quantity": 10})
+    document["states"][1]["transitions"][0] = {
+        "when": "close > 110", "exit": {"fraction": 0.5}, "goto": "running",
+    }
+    document["states"].append({
+        "name": "running",
+        "transitions": [{"when": "close < 95", "exit": {}, "goto": "flat"}],
+    })
+    result = run(document, [
+        (95, 96, 94, 101), (100, 101, 99, 111),
+        (100, 101, 99, 94), (100, 101, 99, 100),
+    ])
+    assert result.trades[0].entry_price == result.trades[1].entry_price
+
+
+def test_a_partial_leaves_the_position_open() -> None:
+    document = doc(sizing={"type": "fixed_quantity", "quantity": 10})
+    document["states"][1]["transitions"][0] = {
+        "when": "close > 110", "exit": {"fraction": 0.5}, "goto": "running",
+    }
+    document["states"].append({
+        "name": "running",
+        "transitions": [{"when": "not position.is_open", "goto": "flat"}],
+    })
+    result = run(document, [
+        (95, 96, 94, 101), (100, 101, 99, 111),
+        (100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 99, 100),
+    ])
+    # The runner is still open, so it is closed by end_of_data - not by the
+    # `not position.is_open` rule, which must never have fired.
+    assert result.trades[-1].exit_reason == "end_of_data"
+
+
+def test_the_stop_still_protects_the_runner() -> None:
+    document = doc(sizing={"type": "fixed_quantity", "quantity": 10})
+    document["states"][1]["transitions"][0] = {
+        "when": "close > 110", "exit": {"fraction": 0.5}, "goto": "running",
+    }
+    document["states"].append({
+        "name": "running",
+        "transitions": [{"when": "close < 1", "exit": {}, "goto": "flat"}],
+    })
+    result = run(document, [
+        (95, 96, 94, 101),
+        (100, 101, 99, 111),    # fill 10 @100, stop 98
+        (100, 101, 99, 100),    # partial 5 @100
+        (99, 99, 97, 97),       # runner stopped out
+    ])
+    assert result.trades[-1].exit_reason == "stop_loss"
+    assert result.trades[-1].quantity == 5
+
+
+def test_several_partials_scale_out() -> None:
+    document = doc(sizing={"type": "fixed_quantity", "quantity": 12})
+    document["states"][1]["transitions"][0] = {
+        "when": "close > 110", "exit": {"fraction": 0.5}, "goto": "second",
+    }
+    document["states"] += [
+        {"name": "second",
+         "transitions": [{"when": "close > 110", "exit": {"fraction": 0.5},
+                          "goto": "third"}]},
+        {"name": "third",
+         "transitions": [{"when": "close < 95", "exit": {}, "goto": "flat"}]},
+    ]
+    result = run(document, [
+        (95, 96, 94, 101),
+        (100, 101, 99, 111),    # fill 12
+        (100, 101, 99, 111),    # -6, leaves 6
+        (100, 101, 99, 111),    # -3, leaves 3
+        (100, 101, 99, 94),     # exit signal
+        (100, 101, 99, 100),
+    ])
+    assert [t.quantity for t in result.trades] == [6, 3, 3]
+
+
+def test_a_fraction_of_one_is_a_full_exit() -> None:
+    document = doc(sizing={"type": "fixed_quantity", "quantity": 10})
+    document["states"][1]["transitions"][0] = {
+        "when": "close < 90", "exit": {"fraction": 1.0}, "goto": "flat",
+    }
+    result = run(document, [
+        (95, 96, 94, 101), (100, 101, 99, 88), (100, 101, 99, 100),
+    ])
+    assert [t.quantity for t in result.trades] == [10]
+
+
+def test_a_partial_too_small_to_sell_a_share_is_recorded_not_silent() -> None:
+    """One share cannot be halved. Doing nothing quietly would leave the
+    strategy believing it had reduced risk when it had not."""
+    document = doc(sizing={"type": "fixed_quantity", "quantity": 1})
+    document["states"][1]["transitions"][0] = {
+        "when": "close > 110", "exit": {"fraction": 0.5}, "goto": "running",
+    }
+    document["states"].append({
+        "name": "running",
+        "transitions": [{"when": "close < 95", "exit": {}, "goto": "flat"}],
+    })
+    result = run(document, [
+        (95, 96, 94, 101), (100, 101, 99, 111),
+        (100, 101, 99, 94), (100, 101, 99, 100),
+    ])
+    assert any(s.reason == "partial_below_one_share" for s in result.skipped)
+    assert [t.quantity for t in result.trades] == [1]
+
+
+def test_a_fraction_outside_zero_to_one_is_rejected() -> None:
+    document = doc()
+    document["states"][1]["transitions"][0] = {
+        "when": "close < 90", "exit": {"fraction": 1.5}, "goto": "flat",
+    }
+    with pytest.raises(Exception) as exc:
+        parse_machine(document)
+    assert "fraction" in str(exc.value)
+
+
+def test_a_short_scales_out_too() -> None:
+    document = doc(sizing={"type": "fixed_quantity", "quantity": 10})
+    document["states"][0]["transitions"][0] = {
+        "when": "close > 100", "enter": {"side": "short"}, "goto": "holding",
+    }
+    document["states"][1]["transitions"][0] = {
+        "when": "close < 95", "exit": {"fraction": 0.5}, "goto": "running",
+    }
+    document["states"].append({
+        "name": "running",
+        "transitions": [{"when": "close < 90", "exit": {}, "goto": "flat"}],
+    })
+    result = run(document, [
+        (95, 96, 94, 101),
+        (100, 101, 99, 94),     # short 10 @100; partial signal
+        (94, 95, 93, 89),       # partial 5 @94; full exit signal
+        (89, 90, 88, 89),       # runner 5 @89
+    ])
+    assert [t.quantity for t in result.trades] == [5, 5]
+    assert all(t.position_type == "short" for t in result.trades)
