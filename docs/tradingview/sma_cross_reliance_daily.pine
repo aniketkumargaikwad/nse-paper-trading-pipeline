@@ -1,0 +1,54 @@
+//@version=5
+// ===========================================================================
+// Comparison strategy — run this in TradingView, then compare its trade list
+// with docs/tradingview/sma_cross_reliance_daily.md
+//
+// Everything here is chosen to remove reasons the two tools could differ for
+// boring reasons, so that any difference that DOES show up means something:
+//
+//   SMA, not EMA   an EMA's value depends on how far back the chart's data
+//                  begins, and TradingView has years more history than we do.
+//                  An SMA only looks at the last N bars, so both tools must
+//                  compute exactly the same number.
+//   daily bars     hourly bars on NSE can be aligned differently by different
+//                  providers, which shifts signals by a bar for no real reason.
+//   no costs       fees and slippage are modelled differently everywhere. Set
+//                  to zero on both sides, so this compares SIGNAL TIMING only.
+//   stops far away 50% either side, so they never fire and cannot introduce
+//                  a difference in how intra-candle stop hits are handled.
+//   quantity 1     no position sizing to disagree about.
+//
+// Fills: both tools decide on the CLOSE of a bar and fill at the OPEN of the
+// next one. In TradingView that is the default, and the settings block below
+// keeps it that way.
+// ===========================================================================
+
+strategy("SMA 10/30 cross - engine comparison",
+     overlay              = true,
+     initial_capital      = 100000,
+     default_qty_type     = strategy.fixed,
+     default_qty_value    = 1,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0,
+     slippage             = 0,
+     pyramiding           = 0,
+     process_orders_on_close = false,
+     calc_on_every_tick   = false)
+
+fast = ta.sma(close, 10)
+slow = ta.sma(close, 30)
+
+// Trade only inside the window our own data covers, so neither side takes a
+// trade the other never had the chance to see.
+startTime = timestamp("Asia/Kolkata", 2024, 4,  1, 0,  0)
+endTime   = timestamp("Asia/Kolkata", 2026, 8, 21, 23, 59)
+inWindow  = time >= startTime and time <= endTime
+
+if inWindow and ta.crossover(fast, slow)
+    strategy.entry("Long", strategy.long)
+
+if inWindow and ta.crossunder(fast, slow)
+    strategy.close("Long")
+
+plot(fast, "SMA 10", color.new(color.blue,   0))
+plot(slow, "SMA 30", color.new(color.orange, 0))
