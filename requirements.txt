@@ -55,3 +55,14 @@ streamlit==1.41.1
 
 # Testing.
 pytest==8.3.4
+
+# Independent indicator libraries, used ONLY to check our own maths against
+# somebody else's — see tests/test_indicators_vs_reference.py. An RSI that
+# looks right but disagrees with every chart the owner reads is not an RSI,
+# and unrelated authors making the same mistake is unlikely.
+#
+# The test skips itself if these are absent, so a deploy that installs only
+# the runtime packages still works. They are pinned here so the check runs
+# the same way on any machine.
+pandas-ta-classic==0.6.52
+ta==0.11.0

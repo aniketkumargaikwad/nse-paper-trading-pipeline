@@ -103,12 +103,35 @@ Every `when:`, `set:`, `stop:` and `target:` is an expression **in quotes**.
 | call | outputs |
 |---|---|
 | `atr(period)` | one series |
+| `awesome()` | one series |
+| `cci(period)` | one series |
+| `cmf(period)` | one series |
+| `dema(period)` | one series |
 | `ema(period)` or `ema(series, period)` | one series |
+| `hma(period)` | one series |
+| `mfi(period)` | one series |
+| `momentum(period)` | one series |
+| `obv()` | one series |
+| `roc(period)` | one series |
 | `rsi(period)` | one series |
 | `sma(period)` or `sma(series, period)` | one series |
+| `stddev(period)` | one series |
+| `tema(period)` | one series |
+| `trix(period)` | one series |
+| `ultimate()` | one series |
 | `vwap()` | one series |
+| `vwma(period)` | one series |
+| `williams_r(period)` | one series |
+| `wma(period)` | one series |
+| `adx.<output>(period)` | `adx.adx(...)`, `adx.plus_di(...)`, `adx.minus_di(...)` |
+| `aroon.<output>(period)` | `aroon.up(...)`, `aroon.down(...)`, `aroon.oscillator(...)` |
 | `bbands.<output>(period, std)` | `bbands.upper(...)`, `bbands.middle(...)`, `bbands.lower(...)` |
+| `donchian.<output>(period)` | `donchian.upper(...)`, `donchian.middle(...)`, `donchian.lower(...)` |
+| `keltner.<output>(period, multiplier[, atr_period])` | `keltner.upper(...)`, `keltner.middle(...)`, `keltner.lower(...)` |
 | `macd.<output>(fast, slow, signal)` | `macd.line(...)`, `macd.signal(...)`, `macd.histogram(...)` |
+| `psar.<output>([step, max_step])` | `psar.sar(...)`, `psar.direction(...)` |
+| `stoch.<output>(k_period, d_period[, smooth])` | `stoch.k(...)`, `stoch.d(...)` |
+| `stochrsi.<output>(rsi_period, stoch_period[, k, d])` | `stochrsi.k(...)`, `stochrsi.d(...)` |
 | `supertrend.<output>(period, multiplier)` | `supertrend.line(...)`, `supertrend.direction(...)` |
 
 ### Swing points

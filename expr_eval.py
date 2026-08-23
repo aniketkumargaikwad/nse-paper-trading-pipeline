@@ -403,35 +403,89 @@ def _require_arg_count(node: Call, allowed: tuple[int, ...]) -> None:
         )
 
 
+def _series_or_close(
+    node: Call, position: int, df: pd.DataFrame, variables: Mapping[str, Any]
+) -> pd.Series:
+    """The series argument of a moving average, defaulting to close.
+
+    `sma(20)` averages close; `sma(volume, 20)` averages anything. Allowing an
+    arbitrary expression rather than a fixed list of sources means
+    `sma(high - low, 20)` works without anyone having to add it.
+    """
+    return _as_series(_eval(node.args[position], df, variables), df)
+
+
 def _simple_indicator(
     name: str, node: Call, df: pd.DataFrame, variables: Mapping[str, Any]
 ) -> pd.Series:
+    """One-line indicators, dispatched from the vocabulary's arity table.
+
+    Written as a table rather than a chain of ifs: the list is long now, and
+    a chain is where an indicator quietly ends up accepting the wrong number
+    of arguments because one branch was copied and half-edited.
+    """
+    allowed = EXPR_SIMPLE_INDICATORS.get(name)
+    if allowed is None:
+        raise EvaluationError(f"no implementation for indicator {name!r}")
+    _require_arg_count(node, allowed)
+    n = len(node.args)
+    close = df["close"].astype(float)
+
+    # --- no arguments -------------------------------------------------------
     if name == "vwap":
-        _require_arg_count(node, (0,))
         return indicators.vwap(df)
+    if name == "obv":
+        return indicators.obv(df)
+    if name == "awesome":
+        if n == 0:
+            return indicators.awesome_oscillator(df)
+        return indicators.awesome_oscillator(
+            df, _int_arg(node, node.args[0], 0), _int_arg(node, node.args[1], 1))
+    if name == "ultimate":
+        if n == 0:
+            return indicators.ultimate_oscillator(df)
+        return indicators.ultimate_oscillator(
+            df, _int_arg(node, node.args[0], 0), _int_arg(node, node.args[1], 1),
+            _int_arg(node, node.args[2], 2))
 
-    if name in ("sma", "ema"):
-        # Two shapes: sma(20) over close, or sma(volume, 20) over anything.
-        # The second is how "volume above its own average" is written, and
-        # keeping it as a general series argument means it works for any
-        # expression, not a fixed list of allowed sources.
-        _require_arg_count(node, (1, 2))
-        if len(node.args) == 1:
-            series = df["close"].astype(float)
-            period = _int_arg(node, node.args[0], 0)
-        else:
-            series = _as_series(_eval(node.args[0], df, variables), df)
-            period = _int_arg(node, node.args[1], 1)
-        fn = indicators.sma if name == "sma" else indicators.ema
-        return fn(series, period)
+    # --- moving averages over any series ------------------------------------
+    MOVING = {
+        "sma": indicators.sma, "ema": indicators.ema, "wma": indicators.wma,
+        "hma": indicators.hma, "dema": indicators.dema, "tema": indicators.tema,
+    }
+    if name in MOVING:
+        if n == 1:
+            return MOVING[name](close, _int_arg(node, node.args[0], 0))
+        return MOVING[name](
+            _series_or_close(node, 0, df, variables),
+            _int_arg(node, node.args[1], 1))
 
+    # --- takes any series, or close by default ------------------------------
+    OVER_SERIES = {
+        "roc": indicators.roc, "momentum": indicators.momentum,
+        "stddev": indicators.stddev,
+    }
+    if name in OVER_SERIES:
+        if n == 1:
+            return OVER_SERIES[name](close, _int_arg(node, node.args[0], 0))
+        return OVER_SERIES[name](
+            _series_or_close(node, 0, df, variables),
+            _int_arg(node, node.args[1], 1))
+
+    # --- close only ---------------------------------------------------------
     if name == "rsi":
-        _require_arg_count(node, (1,))
-        return indicators.rsi(df["close"].astype(float), _int_arg(node, node.args[0], 0))
+        return indicators.rsi(close, _int_arg(node, node.args[0], 0))
+    if name == "trix":
+        return indicators.trix(close, _int_arg(node, node.args[0], 0))
 
-    if name == "atr":
-        _require_arg_count(node, (1,))
-        return indicators.atr(df, _int_arg(node, node.args[0], 0))
+    # --- need the whole candle ----------------------------------------------
+    WHOLE_CANDLE = {
+        "atr": indicators.atr, "cci": indicators.cci,
+        "williams_r": indicators.williams_r, "mfi": indicators.mfi,
+        "cmf": indicators.cmf, "vwma": indicators.vwma,
+    }
+    if name in WHOLE_CANDLE:
+        return WHOLE_CANDLE[name](df, _int_arg(node, node.args[0], 0))
 
     raise EvaluationError(f"no implementation for indicator {name!r}")
 
@@ -440,6 +494,13 @@ def _multi_output_indicator(
     family: str, output: str, node: Call, df: pd.DataFrame,
     variables: Mapping[str, Any],
 ) -> pd.Series:
+    """Indicators that produce several lines at once.
+
+    Each returns a frame; the caller has already checked that `output` is one
+    of the columns the vocabulary says this family has.
+    """
+    close = df["close"].astype(float)
+
     if family == "macd":
         _require_arg_count(node, (3,))
         fast = _int_arg(node, node.args[0], 0)
@@ -447,25 +508,65 @@ def _multi_output_indicator(
         signal = _int_arg(node, node.args[2], 2)
         if fast >= slow:
             raise EvaluationError(
-                f"macd fast ({fast}) must be less than slow ({slow})"
-            )
-        return indicators.macd(df["close"].astype(float), fast, slow, signal)[output]
+                f"macd fast ({fast}) must be less than slow ({slow})")
+        return indicators.macd(close, fast, slow, signal)[output]
 
     if family == "bbands":
         _require_arg_count(node, (2,))
         return indicators.bollinger_bands(
-            df["close"].astype(float),
-            _int_arg(node, node.args[0], 0),
-            _float_arg(node, node.args[1], 1),
-        )[output]
+            close, _int_arg(node, node.args[0], 0),
+            _float_arg(node, node.args[1], 1))[output]
 
     if family == "supertrend":
         _require_arg_count(node, (2,))
         return indicators.supertrend(
-            df,
-            _int_arg(node, node.args[0], 0),
-            _float_arg(node, node.args[1], 1),
-        )[output]
+            df, _int_arg(node, node.args[0], 0),
+            _float_arg(node, node.args[1], 1))[output]
+
+    if family == "stoch":
+        # stoch.k(14, 3) or stoch.k(14, 3, 3) — TradingView's default smoothing
+        # is 3, so the two-argument form is the familiar one.
+        _require_arg_count(node, (2, 3))
+        smooth = _int_arg(node, node.args[2], 2) if len(node.args) == 3 else 3
+        return indicators.stochastic(
+            df, _int_arg(node, node.args[0], 0),
+            _int_arg(node, node.args[1], 1), smooth)[output]
+
+    if family == "stochrsi":
+        _require_arg_count(node, (2, 4))
+        k_smooth = _int_arg(node, node.args[2], 2) if len(node.args) == 4 else 3
+        d_smooth = _int_arg(node, node.args[3], 3) if len(node.args) == 4 else 3
+        return indicators.stoch_rsi(
+            close, _int_arg(node, node.args[0], 0),
+            _int_arg(node, node.args[1], 1), k_smooth, d_smooth)[output]
+
+    if family == "adx":
+        _require_arg_count(node, (1,))
+        return indicators.adx(df, _int_arg(node, node.args[0], 0))[output]
+
+    if family == "aroon":
+        _require_arg_count(node, (1,))
+        return indicators.aroon(df, _int_arg(node, node.args[0], 0))[output]
+
+    if family == "donchian":
+        _require_arg_count(node, (1,))
+        return indicators.donchian(df, _int_arg(node, node.args[0], 0))[output]
+
+    if family == "keltner":
+        _require_arg_count(node, (2, 3))
+        atr_period = _int_arg(node, node.args[2], 2) if len(node.args) == 3 else None
+        return indicators.keltner(
+            df, _int_arg(node, node.args[0], 0),
+            _float_arg(node, node.args[1], 1), atr_period)[output]
+
+    if family == "psar":
+        # psar.sar() with TradingView's defaults, or psar.sar(0.02, 0.2).
+        _require_arg_count(node, (0, 2))
+        if len(node.args) == 0:
+            return indicators.psar(df)[output]
+        return indicators.psar(
+            df, _float_arg(node, node.args[0], 0),
+            _float_arg(node, node.args[1], 1))[output]
 
     raise EvaluationError(f"no implementation for {family!r}")
 

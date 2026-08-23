@@ -92,11 +92,31 @@ POSITION_FIELDS: frozenset[str] = frozenset({
 #
 # name -> how many arguments it accepts.
 EXPR_SIMPLE_INDICATORS: dict[str, tuple[int, ...]] = {
-    "sma": (1, 2),      # sma(20) over close, or sma(volume, 20)
+    # Moving averages accept two shapes: sma(20) over close, or
+    # sma(volume, 20) over any series — that second form is how "volume above
+    # its own average" is written.
+    "sma": (1, 2),
     "ema": (1, 2),
+    "wma": (1, 2),
+    "hma": (1, 2),
+    "dema": (1, 2),
+    "tema": (1, 2),
+    "vwma": (1,),       # volume-weighted, so the series is not a free choice
+    # Oscillators and single-line readings.
     "rsi": (1,),
+    "cci": (1,),
+    "williams_r": (1,),
+    "roc": (1, 2),
+    "momentum": (1, 2),
+    "trix": (1,),
+    "stddev": (1, 2),
+    "mfi": (1,),
+    "cmf": (1,),
     "atr": (1,),
+    "obv": (0,),
     "vwap": (0,),
+    "awesome": (0, 2),
+    "ultimate": (0, 3),
 }
 
 # name -> the outputs it produces, each spelled as a dotted call.
@@ -104,6 +124,13 @@ EXPR_MULTI_OUTPUT: dict[str, tuple[str, ...]] = {
     "macd": ("line", "signal", "histogram"),
     "bbands": ("upper", "middle", "lower"),
     "supertrend": ("line", "direction"),
+    "stoch": ("k", "d"),
+    "stochrsi": ("k", "d"),
+    "adx": ("adx", "plus_di", "minus_di"),
+    "aroon": ("up", "down", "oscillator"),
+    "donchian": ("upper", "middle", "lower"),
+    "keltner": ("upper", "middle", "lower"),
+    "psar": ("sar", "direction"),
 }
 
 # Structural features of price rather than indicators over it. Kept separate

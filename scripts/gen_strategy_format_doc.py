@@ -378,12 +378,23 @@ def _v3_function_rows() -> str:
         else:
             call = f"`{name}(period)`"
         rows.append(f"| {call} | one series |")
+    # Argument names per family. A family missing here still renders — it just
+    # shows a generic placeholder — so adding an indicator can never crash the
+    # document generator, which is how this list went stale the first time.
+    ARGS = {
+        "macd": "fast, slow, signal",
+        "bbands": "period, std",
+        "supertrend": "period, multiplier",
+        "stoch": "k_period, d_period[, smooth]",
+        "stochrsi": "rsi_period, stoch_period[, k, d]",
+        "adx": "period",
+        "aroon": "period",
+        "donchian": "period",
+        "keltner": "period, multiplier[, atr_period]",
+        "psar": "[step, max_step]",
+    }
     for family, outputs in sorted(EXPR_MULTI_OUTPUT.items()):
-        params = {
-            "macd": "fast, slow, signal",
-            "bbands": "period, std",
-            "supertrend": "period, multiplier",
-        }[family]
+        params = ARGS.get(family, "...")
         spelled = ", ".join(f"`{family}.{o}(...)`" for o in outputs)
         rows.append(f"| `{family}.<output>({params})` | {spelled} |")
     return "\n".join(rows)
