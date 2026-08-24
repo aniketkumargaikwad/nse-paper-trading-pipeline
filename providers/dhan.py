@@ -36,8 +36,15 @@ from config import IST, STORED_TIMEFRAMES
 from dhan_auth import DHAN_API_BASE
 from providers.base import OHLCV_COLUMNS, ProviderError, canonical_frame, empty_frame
 
-# Dhan serves at most 90 days of intraday data per request.
+# Dhan serves at most 90 days of INTRADAY data per request, so long intraday
+# ranges are paged.
 MAX_DAYS_PER_REQUEST = 90
+
+# The DAILY endpoint has no such limit — it returns twenty years in a single
+# call. Paging it at 90 days anyway turned one 2-second request into 81
+# requests taking 73 seconds, measured; across fifty symbols that is an hour
+# instead of under two minutes, for identical candles.
+MAX_DAYS_PER_DAILY_REQUEST = 40 * 366
 
 # Documented history depth: 5 years of intraday, daily to inception.
 INTRADAY_HISTORY_DAYS = 5 * 365
@@ -168,8 +175,15 @@ class DhanProvider:
         security_id, segment, instrument_type = self._instruments.resolve(symbol)
         endpoint = HISTORICAL_ENDPOINT if timeframe == "day" else INTRADAY_ENDPOINT
 
+        page_days = (
+            MAX_DAYS_PER_DAILY_REQUEST if timeframe == "day"
+            else MAX_DAYS_PER_REQUEST
+        )
+
         frames: list[pd.DataFrame] = []
-        for i, (window_from, window_to) in enumerate(date_windows(from_utc, to_utc)):
+        for i, (window_from, window_to) in enumerate(
+            date_windows(from_utc, to_utc, page_days)
+        ):
             if i > 0:
                 self._sleep(_SECONDS_BETWEEN_PAGES)
             body: dict[str, Any] = {

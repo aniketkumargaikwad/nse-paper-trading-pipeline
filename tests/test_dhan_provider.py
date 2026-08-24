@@ -454,3 +454,26 @@ def test_an_unsubscribed_401_does_not_burn_a_token_refresh() -> None:
         )
     assert tokens.invalidated == 0
     assert len(http.calls) == 1
+
+
+def test_daily_is_not_paged_into_ninety_day_chunks() -> None:
+    """The 90-day limit is an INTRADAY limit. Dhan's daily endpoint returns
+    twenty years in one call, and paging it anyway turned a 2-second request
+    into 81 requests taking 73 seconds — an hour instead of two minutes across
+    fifty symbols, for byte-identical candles."""
+    from datetime import datetime, timedelta, timezone
+
+    from providers.dhan import (
+        MAX_DAYS_PER_DAILY_REQUEST,
+        MAX_DAYS_PER_REQUEST,
+        date_windows,
+    )
+
+    to = datetime(2026, 8, 21, tzinfo=timezone.utc)
+    frm = to - timedelta(days=20 * 365)
+
+    intraday_pages = date_windows(frm, to, MAX_DAYS_PER_REQUEST)
+    daily_pages = date_windows(frm, to, MAX_DAYS_PER_DAILY_REQUEST)
+
+    assert len(intraday_pages) > 50, "intraday must still page"
+    assert len(daily_pages) == 1, "twenty years of daily should be one request"

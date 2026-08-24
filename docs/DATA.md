@@ -28,19 +28,47 @@ limitation.
 
 ## 2. What we hold today
 
-| Candle size | Symbols | Oldest | Newest |
-|---|---|---|---|
-| 1 minute | **2** | 2026-05-22 | 2026-08-21 |
-| 5 minutes | 50 | 2022-08-15 | 2026-08-11 |
-| 1 day | 50 | 2024-01-31 | 2026-08-20 |
+| Candle size | Symbols | Oldest | Newest | Candles |
+|---|---|---|---|---|
+| 1 minute | **2** | 2026-05-22 | 2026-08-21 | ~47,000 |
+| 5 minutes | 50 | 2022-08-15 | 2026-08-11 | ~3.2 million |
+| 1 day | 50 | **2002-01-01** | 2026-08-21 | 226,892 |
+
+### Careful: `candle_coverage` is not "where the data starts"
+
+That table records the range we have ASKED Dhan for, so it will not re-ask.
+It is not a claim that candles exist across all of it. After backfilling
+twenty years, every row says 2006 — but JIOFIN only listed in 2023 and has
+746 candles, not twenty years of them.
+
+Both facts are correct and they answer different questions. To ask "how much
+history does this symbol really have", read the candles, not the coverage.
 
 The 5-minute history is uneven: **35 symbols reach back to 2022** (about four
 years) and **15 only to 2024** (about two). A backtest across all fifty is
 therefore only as long as its shortest symbol unless it is told otherwise.
 
-The daily history is **shorter than the 5-minute history**, which looks
-backwards and is worth understanding. It is not a Dhan limit — daily was
-backfilled with `--years 2.5` and simply never asked for more.
+Daily history was extended to twenty years on 2026-08-22. It no longer starts
+where the 5-minute data does; it goes far deeper, and costs almost nothing —
+the whole 226,892 daily candles added about 10 MB.
+
+**Companies do not all start at the same time**, and the young ones bound any
+long test across the universe:
+
+| Symbol | Listed | Candles |
+|---|---|---|
+| NSE:RELIANCE | 2002-01-01 | 6,126 |
+| NSE:INDIGO | 2015-11-10 | 2,671 |
+| NSE:SBILIFE | 2017-10-03 | 2,203 |
+| NSE:HDFCLIFE | 2017-11-17 | 2,171 |
+| NSE:MAXHEALTH | 2020-08-21 | 1,490 |
+| NSE:ETERNAL | 2021-07-23 | 1,261 |
+| NSE:JIOFIN | 2023-08-21 | 746 |
+
+Thirty-six of the fifty reach back to 2006. A "twenty year" backtest across
+the universe is therefore twenty years for most of them and three for JIOFIN.
+The run record stores exactly which symbols were used, so this is visible —
+but nothing corrects for it automatically.
 
 ---
 
