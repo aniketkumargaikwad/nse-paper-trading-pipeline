@@ -36,7 +36,27 @@ supabase==2.15.0
 
 # Data wrangling for candles and indicators.
 pandas==2.2.3
-numpy==1.26.4          # kept <2.0 for maximum wheel compatibility on free tiers
+# numpy 2.x, NOT <2.0. The old pin was 1.26.4 "for maximum wheel
+# compatibility on free tiers" - a line that stopped being true the moment
+# pandas-ta-classic was added below, because it requires numpy>=2.0.0. Those
+# two cannot both be satisfied on ANY Python version, so this file could not
+# be installed from scratch anywhere; it survived only on machines where a
+# working numpy already sat in the venv. Railway hit it on a clean build and
+# stopped at ResolutionImpossible.
+#
+# 2.4.6 is also simply what runs: the suite has been passing against it all
+# along, while this file named a version nobody had installed.
+#
+# Adding a dependency can therefore invalidate a pin far from it. Re-resolve
+# from empty after touching this file:
+#     pip install --dry-run --ignore-installed -r requirements.txt
+numpy==2.4.6
+
+# Parquet engine. pandas.read_parquet/to_parquet delegate to this, so
+# CANDLE_STORE=parquet cannot read or write a single candle without it. It
+# was missing from this file entirely while being installed locally, which
+# is the kind of gap that only shows up on a fresh machine.
+pyarrow==25.0.0
 
 # Strategy config parsing.
 PyYAML==6.0.2
