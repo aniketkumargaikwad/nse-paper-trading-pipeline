@@ -767,6 +767,21 @@ def run_backtest(
     cost_model = build_cost_model(settings)
     print(f"costs: {cost_model.describe()}")
 
+    # An unadjusted split is a 50% overnight collapse that never happened. It
+    # raises no error and looks like the strongest signal in the sample, so a
+    # run that spans one has to SAY so before its numbers are believed.
+    if store is not None:
+        from data_quality import describe_split_warning, splits_inside_window
+
+        warning = describe_split_warning(splits_inside_window(
+            store.quality_flags_for(all_instruments), all_instruments,
+            from_utc, now,
+        ))
+        if warning:
+            print()
+            print(warning, file=sys.stderr)
+            print()
+
     rows: list[dict[str, Any]] = []
     run_rows: list[dict[str, Any]] = []
     equity_rows: list[dict[str, Any]] = []

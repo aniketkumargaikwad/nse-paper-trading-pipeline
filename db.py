@@ -882,6 +882,42 @@ class SupabaseStore:
             self.save_strategy_document(doc)
         return len(documents)
 
+    def quality_flags_for(self, symbols) -> list[dict]:
+        """Recorded data-quality flags for these symbols, with symbol names.
+
+        Joined to instruments here rather than in the caller: the flags table
+        stores an id, and a warning that names an id instead of NSE:TCS helps
+        nobody.
+        """
+        if not symbols:
+            return []
+        by_name = self._candle_backend_symbols()
+        wanted = {by_name[s]: s for s in symbols if s in by_name}
+        if not wanted:
+            return []
+        try:
+            resp = (
+                self._table("data_quality_flags")
+                .select("instrument_id,timeframe,flag_type,ts,detail")
+                .in_("instrument_id", list(wanted))
+                .execute()
+            )
+        except APIError as exc:
+            if _is_missing_table(exc):
+                return []
+            raise self._wrap(exc, "reading data quality flags") from exc
+        out = []
+        for row in resp.data or []:
+            row = dict(row)
+            row["symbol"] = wanted.get(int(row["instrument_id"]))
+            out.append(row)
+        return out
+
+    def _candle_backend_symbols(self) -> dict:
+        from supabase_candle_backend import SupabaseCandleBackend
+
+        return SupabaseCandleBackend(self._client).known_symbols()
+
     # -- v3 machine state -----------------------------------------------------
 
     def get_machine_state(self, strategy_name: str, instrument: str) -> dict[str, Any] | None:

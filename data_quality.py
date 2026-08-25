@@ -31,7 +31,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -258,3 +258,82 @@ def detect_session_gaps(
                 detail={"missing_date": day.isoformat()},
             ))
     return flags
+
+
+# ---------------------------------------------------------------------------
+# Warning a run about known-bad candles
+# ---------------------------------------------------------------------------
+
+
+def splits_inside_window(
+    flags: Sequence[Mapping[str, Any]],
+    symbols: Sequence[str],
+    from_utc: datetime,
+    to_utc: datetime,
+) -> list[dict[str, Any]]:
+    """Confirmed splits that fall inside a backtest's window.
+
+    WHY A BACKTEST MUST BE TOLD
+    ---------------------------
+    An unadjusted split is a 50% overnight collapse that never happened. A
+    strategy spanning one does not error, does not look odd, and does not
+    report anything unusual — it simply finds the strongest breakout signal in
+    its entire sample and builds a result on it.
+
+    Nine years of 5-minute data contains eight of these across the NIFTY 50.
+    They are 4.5% of all candles, but 91% of TMPV's and 36% of EICHERMOT's, so
+    "a small fraction overall" is exactly the wrong way to think about it.
+
+    Only CONFIRMED splits are returned — ones where the adjusted daily feed
+    was consulted and disagreed. An unchecked flag means nobody looked yet,
+    which is a different statement and not grounds for a warning.
+    """
+    wanted = set(symbols)
+    found: list[dict[str, Any]] = []
+    for flag in flags:
+        if flag.get("flag_type") != "suspected_split":
+            continue
+        symbol = flag.get("symbol")
+        if symbol not in wanted:
+            continue
+        detail = flag.get("detail") or {}
+        if not detail.get("adjusted_daily_checked"):
+            continue
+        ts = flag.get("ts")
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if ts is None or not (from_utc <= ts <= to_utc):
+            continue
+        found.append({
+            "symbol": symbol,
+            "when": ts,
+            "ratio": detail.get("ratio"),
+            "previous_close": detail.get("previous_close"),
+            "close": detail.get("close"),
+        })
+    return sorted(found, key=lambda f: (f["symbol"], f["when"]))
+
+
+def describe_split_warning(found: Sequence[Mapping[str, Any]]) -> str:
+    """The warning text a run prints. Empty string when there is nothing wrong."""
+    if not found:
+        return ""
+    lines = [
+        f"WARNING: {len(found)} confirmed unadjusted corporate action(s) fall "
+        "inside this window.",
+        "  Prices before these dates are on a different basis, so the candle "
+        "across each one shows a",
+        "  crash that never happened. A breakout or momentum rule will read it "
+        "as its best-ever signal.",
+    ]
+    for f in found:
+        when = f["when"].astimezone(IST).date() if hasattr(f["when"], "astimezone") else f["when"]
+        lines.append(
+            f"    {f['symbol']:<16} {when}  "
+            f"{f.get('previous_close')} -> {f.get('close')} (x{f.get('ratio')})"
+        )
+    lines.append(
+        "  Either exclude these symbols, start the window after the date, or "
+        "treat the result as unsound."
+    )
+    return "\n".join(lines)

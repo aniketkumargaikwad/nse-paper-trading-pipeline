@@ -78,5 +78,14 @@ def describe_provider(settings: Settings) -> str:
         # running on parquet is a small lie that makes a slow run look
         # inexplicable.
         where = getattr(settings, "candle_store", "supabase")
-        return f"dhan (5 years of 5-minute history, cached in {where})"
+        # Depth is asked for rather than hard-coded: the old "5 years" here
+        # was the same myth that was capping backfills, and a banner that
+        # contradicts the data is worse than no banner.
+        from providers.dhan import INTRADAY_ARCHIVE_BEGINS
+
+        years = (date.today() - INTRADAY_ARCHIVE_BEGINS).days / 365.25
+        return (
+            f"dhan ({years:.1f} years of intraday history back to "
+            f"{INTRADAY_ARCHIVE_BEGINS}, cached in {where})"
+        )
     return "kite (Kite Connect; requires the daily login token)"
