@@ -30,3 +30,9 @@ Thumbs.db
 # Parquet candle files are DATA, not source. They are regenerable from the
 # provider and can reach gigabytes; the repo is not the place for them.
 data/candles/
+
+# Claude Code tooling, not part of the app
+.agents/
+.claude/skills/
+.mcp.json
+skills-lock.json
