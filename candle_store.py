@@ -36,6 +36,7 @@ import pandas as pd
 from config import UTC, source_timeframe_for
 from coverage_math import CoverageRange, extend_coverage, missing_ranges
 from data_quality import check_ohlc_sanity, detect_suspected_splits
+from price_adjust import Adjustment, apply_adjustments
 from providers.base import empty_frame
 from resample import resample_candles
 
@@ -62,6 +63,12 @@ class CandleBackend(Protocol):
     ) -> None: ...
     def write_quality_flags(self, rows: list[dict[str, Any]]) -> None: ...
 
+    # Optional: backends predating sql/010 may omit it, and CandleStore
+    # treats its absence as "no corrections known".
+    def read_price_adjustments(
+        self, instrument_id: int, timeframe: str
+    ) -> list[Adjustment]: ...
+
 
 class CandleProviderLike(Protocol):
     name: str
@@ -78,6 +85,11 @@ class CandleStore:
     def __init__(self, backend: CandleBackend, provider: CandleProviderLike) -> None:
         self._backend = backend
         self._provider = provider
+        # Corrections change only when detection is re-run, but get_candles is
+        # called once per symbol per backtest - re-reading them every time
+        # would add a database round trip to a path that is otherwise served
+        # entirely from cache.
+        self._adjustments: dict[tuple[int, str], list[Adjustment]] = {}
 
     # -- public API ----------------------------------------------------------
 
@@ -99,9 +111,47 @@ class CandleStore:
         if base is None or base.empty:
             return empty_frame()
 
+        # Corrections BEFORE resampling. A 1-hour candle built from raw
+        # 5-minute prices and then rescaled would be arithmetically the same
+        # here, but only because every factor is constant within a day; doing
+        # it in this order keeps that from being a thing anyone has to check.
+        base = apply_adjustments(
+            base, self._price_adjustments(instrument_id, stored_timeframe)
+        )
+
         if timeframe == stored_timeframe:
             return base
         return resample_candles(base, timeframe)
+
+    def _price_adjustments(
+        self, instrument_id: int, timeframe: str
+    ) -> list[Adjustment]:
+        """Corporate-action corrections for this instrument, memoised.
+
+        Dhan's daily feed is adjusted for splits and bonuses; its intraday
+        feed is raw, so EICHERMOT's 5-minute candles fall 90% overnight in
+        August 2020 for a 1:10 split that changed nobody's wealth. Eighteen
+        of the fifty NIFTY 50 symbols carry at least one such break, and a
+        backtest spanning one neither errors nor looks odd - it just finds
+        the strongest signal in its sample and reports the result.
+
+        Daily candles arrive from Dhan ALREADY adjusted, so they are refused
+        outright rather than merely expected to have no rows. sql/010 does
+        constrain the table to intraday timeframes, but a read path that
+        would silently halve nine years of daily prices if that constraint
+        ever moved is not one worth having: dividing an already-correct
+        2,178 by ten reinvents the very crash this removes.
+        """
+        if timeframe == "day":
+            return []
+
+        key = (instrument_id, timeframe)
+        if key not in self._adjustments:
+            reader = getattr(self._backend, "read_price_adjustments", None)
+            self._adjustments[key] = (
+                list(reader(instrument_id, timeframe)) if reader else []
+            )
+        return self._adjustments[key]
 
     def ensure_coverage(
         self,

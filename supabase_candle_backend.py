@@ -30,6 +30,7 @@ from postgrest.exceptions import APIError
 
 from config import UTC
 from coverage_math import CoverageRange
+from price_adjust import Adjustment
 from providers.base import OHLCV_COLUMNS, empty_frame
 
 # Supabase/PostgREST rejects very large payloads in one call; candle writes
@@ -154,6 +155,82 @@ class SupabaseCandleBackend:
             "does not exist, run sql/002_data_foundation.sql in the Supabase "
             "SQL editor."
         )
+
+    # -- price adjustments ------------------------------------------------------
+
+    def read_price_adjustments(
+        self, instrument_id: int, timeframe: str
+    ) -> list[Adjustment]:
+        """Corporate-action corrections for one instrument, oldest first.
+
+        Dhan's daily feed is adjusted for splits and bonuses; its intraday
+        feed is raw. These rows close that gap at read time - see
+        price_adjust.py for how the factors are measured and sql/010 for why
+        they live in a table instead of being multiplied into the candles.
+
+        A database without sql/010 applied returns nothing rather than
+        raising: uncorrected candles are what it had before, and a read path
+        that dies on a missing optional table would take the whole platform
+        down with it.
+        """
+        try:
+            resp = (
+                self._table("price_adjustments")
+                .select("effective_from,effective_to,price_factor,volume_factor,sample_days")
+                .eq("instrument_id", instrument_id)
+                .eq("timeframe", timeframe)
+                .order("effective_from")
+                .execute()
+            )
+        except APIError as exc:
+            if "does not exist" in str(exc) or "PGRST205" in str(exc):
+                return []
+            raise self._wrap(exc, "reading price adjustments") from exc
+
+        return [
+            Adjustment(
+                effective_from=date.fromisoformat(row["effective_from"]),
+                effective_to=date.fromisoformat(row["effective_to"]),
+                price_factor=float(row["price_factor"]),
+                volume_factor=float(row["volume_factor"] or 1.0),
+                sample_days=int(row["sample_days"]),
+            )
+            for row in (resp.data or [])
+        ]
+
+    def replace_price_adjustments(
+        self, instrument_id: int, timeframe: str, adjustments: Sequence[Adjustment]
+    ) -> int:
+        """Store one instrument's corrections, replacing whatever was there.
+
+        Replace rather than append: re-running detection over deeper history
+        legitimately moves the period boundaries, and leaving the old rows
+        behind would apply two overlapping corrections to the same candles.
+        """
+        try:
+            (
+                self._table("price_adjustments")
+                .delete()
+                .eq("instrument_id", instrument_id)
+                .eq("timeframe", timeframe)
+                .execute()
+            )
+            if adjustments:
+                self._table("price_adjustments").insert([
+                    {
+                        "instrument_id": instrument_id,
+                        "timeframe": timeframe,
+                        "effective_from": a.effective_from.isoformat(),
+                        "effective_to": a.effective_to.isoformat(),
+                        "price_factor": a.price_factor,
+                        "volume_factor": a.volume_factor,
+                        "sample_days": a.sample_days,
+                    }
+                    for a in adjustments
+                ]).execute()
+        except APIError as exc:
+            raise self._wrap(exc, "storing price adjustments") from exc
+        return len(adjustments)
 
     # -- instruments ------------------------------------------------------------
 

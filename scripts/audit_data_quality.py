@@ -83,6 +83,30 @@ def expected_trading_days(
     return days
 
 
+def correction_covers(
+    adjustments: Sequence[Any], previous_day: date, day: date
+) -> bool:
+    """Whether a stored correction spans this break, so read-time fixes it.
+
+    A split in the RAW candles is a true finding and stays reported - nothing
+    rewrites the stored feed. But whether it still reaches a backtest is the
+    thing you actually need to know, and those are different questions.
+
+    "Covers" means the two sides of the break fall in different correction
+    periods, or one side is inside a period and the other is not. Both sides
+    inside the SAME period means the correction rescales them together and
+    the break survives - which would be a correction that does not work.
+    """
+    before = next(
+        (a for a in adjustments if a.effective_from <= previous_day <= a.effective_to),
+        None,
+    )
+    after = next(
+        (a for a in adjustments if a.effective_from <= day <= a.effective_to), None
+    )
+    return before is not after
+
+
 def scan_instrument(
     intraday: pd.DataFrame,
     adjusted_daily: pd.DataFrame,
@@ -221,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
     per_symbol: list[tuple[str, int, int]] = []
     gap_dates: set[str] = set()
     confirmed = 0
+    covered = 0
+    uncovered = 0
     unchecked = 0
 
     for symbol in symbols:
@@ -255,6 +281,13 @@ def main(argv: list[str] | None = None) -> int:
             holidays,
             known_years,
         )
+        # Read-time corrections (sql/010). The raw candles below still carry
+        # every unadjusted split - that is deliberate - so each finding is
+        # cross-referenced against these to say whether it still reaches a
+        # backtest.
+        reader = getattr(backend, "read_price_adjustments", None)
+        adjustments = reader(instrument_id, args.timeframe) if reader else []
+
         flags = scan_instrument(intraday, adjusted_daily, expected)
         if not flags:
             continue
@@ -283,6 +316,24 @@ def main(argv: list[str] | None = None) -> int:
                     f"{detail.get('adjusted_ratio')}x over the same two "
                     "sessions -> CONFIRMED unadjusted corporate action"
                 )
+                previous_day = date.fromisoformat(str(detail.get("previous_date")))
+                if correction_covers(
+                    adjustments, previous_day, flag.ts.astimezone(IST).date()
+                ):
+                    covered += 1
+                    print(
+                        "             CORRECTED ON READ - a stored price "
+                        "adjustment spans this break, so backtests do not "
+                        "see it. The raw candles are left as the feed sent "
+                        "them."
+                    )
+                else:
+                    uncovered += 1
+                    print(
+                        "             NOT CORRECTED - backtests spanning "
+                        "this date see the fake move. Run "
+                        "scripts/detect_adjustments.py."
+                    )
             else:
                 unchecked += 1
                 print(
@@ -320,6 +371,10 @@ def main(argv: list[str] | None = None) -> int:
             f"       of those splits: {confirmed} CONFIRMED against the "
             f"adjusted daily feed, {unchecked} UNCHECKED (no daily candles)."
         )
+        print(
+            f"       of those confirmed: {covered} CORRECTED ON READ, "
+            f"{uncovered} still reaching backtests."
+        )
     if gap_dates and len(gap_dates) * len(per_symbol) >= gap_count:
         # The same dates missing for EVERY symbol is not 50 data problems.
         # It is one: either those sessions were never fetched, or they were
@@ -336,12 +391,24 @@ def main(argv: list[str] | None = None) -> int:
         print("Dry run: nothing was written.")
     else:
         print("Flags written to data_quality_flags for review.")
+    # The raw candles are never rewritten, so a split found here is not
+    # itself a problem - a split found here with no correction over it is.
+    if uncovered or unchecked:
+        print(
+            "\nNothing was changed. Review each UNCORRECTED split before "
+            "trusting a backtest that spans it: an unadjusted split is a fake "
+            "signal, and a strategy will happily 'discover' it. "
+            "scripts/detect_adjustments.py measures and stores the fix."
+        )
+        return 1
+
     print(
-        "\nNothing was changed. Review each split before trusting a backtest "
-        "that spans it: an unadjusted split is a fake signal, and a strategy "
-        "will happily 'discover' it."
+        "\nEvery confirmed split is corrected on read, so backtests do not "
+        "see them. The raw candles still contain the breaks by design - the "
+        "correction lives in price_adjustments, where it can be inspected "
+        "and undone."
     )
-    return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -163,6 +163,14 @@ class ParquetCandleBackend:
     def write_quality_flags(self, rows: list[dict[str, Any]]) -> None:
         self._inner.write_quality_flags(rows)
 
+    def read_price_adjustments(self, instrument_id: int, timeframe: str):
+        return self._inner.read_price_adjustments(instrument_id, timeframe)
+
+    def replace_price_adjustments(self, instrument_id: int, timeframe: str, adjustments):
+        return self._inner.replace_price_adjustments(
+            instrument_id, timeframe, adjustments
+        )
+
     # -- candles -------------------------------------------------------------
 
     def _dir(self, instrument_id: int, timeframe: str) -> str:

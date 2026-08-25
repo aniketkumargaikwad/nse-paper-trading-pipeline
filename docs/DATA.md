@@ -177,13 +177,42 @@ ideas, because the dips that never recovered are exactly the ones deleted. No
 point-in-time membership is recorded yet, and every day without it is a day
 that can never be tested honestly later.
 
-**Corporate actions.** Dhan's daily feed is adjusted for splits and bonuses;
-its intraday feed is not documented as adjusted. We detect the disagreement
-automatically — `scripts/audit_data_quality.py` compares the two and flags
-gaps the daily series does not corroborate. It found one real case:
-**NSE:TMPV** shows a 40% drop across 2025-10-13/14 intraday, while the
-adjusted daily feed moved 1.15%. Any backtest spanning that date on TMPV is
-reading a price break that never happened.
+**Corporate actions — found, and now corrected.** Dhan's daily feed is
+adjusted for splits and bonuses; its intraday feed is raw. So EICHERMOT's
+5-minute candles say 21,780 on 2020-08-21 and 2,178 the next morning: a 90%
+overnight collapse that never happened. It was a 1:10 split, and nobody lost
+a rupee.
+
+This is the worst kind of data problem, because nothing errors and nothing
+looks odd. A breakout rule simply finds the strongest signal in its entire
+sample and reports the result.
+
+**How bad it was:** 18 of the 50 NIFTY 50 symbols, 21 separate periods.
+EICHERMOT ×10, five 1:2 splits (TCS, INFY, HCLTECH, M&M, HDFCBANK), WIPRO
+twice, TMPV's demerger, ADANIENT three times, and a dozen smaller ones.
+
+**How it is fixed:** not by looking up split announcements. The daily feed is
+adjusted to *today's* basis, so the gap between the two feeds on any past day
+*is* the adjustment still owed to that day. `scripts/detect_adjustments.py`
+measures that gap and stores it in the `price_adjustments` table; every read
+through `CandleStore` applies it. Backtests never see the fake moves. Running
+detection a second time now finds nothing, which is the check that the
+corrections are self-consistent.
+
+**Two things worth knowing:**
+
+- *The stored candles are untouched.* Nothing was multiplied into the raw
+  feed, because a corrected price is indistinguishable from a real one. The
+  correction is 21 rows you can read, question, and delete. That is also why
+  `audit_data_quality.py` still reports 8 splits — it reads the raw feed on
+  purpose — but now marks each one **CORRECTED ON READ**.
+- *Volume is deliberately NOT corrected.* A split really does change volume,
+  so this looks like an oversight. It isn't. The measured volume gap tracks
+  changes in how the two feeds count volume, not corporate actions:
+  RELIANCE's is 0.50 across nine years and 1.01 over the last one, with no
+  price change at all. Applying it would have doubled nine years of RELIANCE
+  volume for nothing. **So volume-based rules are still wrong across a split
+  date** — a known limit, not a hidden one.
 
 **Holidays.** The NSE holiday list is a file we maintain, and it was wrong in
 five places until the candles themselves were used to check it — including a
