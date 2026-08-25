@@ -26,7 +26,7 @@ test_parser_handles_the_recorded_real_response stops skipping.
 from __future__ import annotations
 
 import time as time_module
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Protocol
 
 import pandas as pd
@@ -46,8 +46,22 @@ MAX_DAYS_PER_REQUEST = 90
 # instead of under two minutes, for identical candles.
 MAX_DAYS_PER_DAILY_REQUEST = 40 * 366
 
-# Documented history depth: 5 years of intraday, daily to inception.
-INTRADAY_HISTORY_DAYS = 5 * 365
+# Dhan's INTRADAY archive begins on a fixed DATE, not a rolling number of
+# days: both 1-minute and 5-minute stop at the same wall no matter how much
+# more is requested. Measured 2026-08-22 by asking for 7, 10, 12 and 15 years
+# of NSE:RELIANCE and getting the identical oldest candle every time.
+#
+# It matters that this is a date rather than a duration, because
+# CandleStore.ensure_coverage CLAMPS every request to max_history_days(). The
+# old value here was 5 years - the figure everyone repeats - and it silently
+# capped every backfill at five, no matter what was asked for. A fixed
+# duration also rots: each passing day puts one more day between now and the
+# archive floor.
+INTRADAY_ARCHIVE_BEGINS = date(2017, 4, 3)
+
+# Daily reaches back roughly twenty years; beyond that Dhan rejects outright.
+# Kept generous rather than exact - over-asking costs nothing, since Dhan
+# simply returns what it has, while under-asking loses history silently.
 DAILY_HISTORY_DAYS = 40 * 365
 
 # (connect, read) - a scalar would apply the full timeout to EACH phase.
@@ -159,7 +173,17 @@ class DhanProvider:
         self._sleep = sleep_fn
 
     def max_history_days(self, timeframe: str) -> int:
-        return DAILY_HISTORY_DAYS if timeframe == "day" else INTRADAY_HISTORY_DAYS
+        """How far back this provider can serve, in days from today.
+
+        Computed for intraday rather than fixed, so it tracks the archive's
+        fixed start date instead of drifting out of date. A small margin is
+        added because over-asking is free - Dhan returns what it has - while
+        under-asking loses history with no warning at all.
+        """
+        if timeframe == "day":
+            return DAILY_HISTORY_DAYS
+        since = (date.today() - INTRADAY_ARCHIVE_BEGINS).days
+        return max(since + 30, 365)
 
     def fetch(
         self, symbol: str, timeframe: str, from_utc: datetime, to_utc: datetime

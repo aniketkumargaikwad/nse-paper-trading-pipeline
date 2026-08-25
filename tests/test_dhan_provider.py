@@ -238,9 +238,37 @@ def test_derived_timeframe_is_refused() -> None:
 
 
 def test_max_history_days() -> None:
+    """Intraday depth is counted from the archive's fixed START DATE, not a
+    rolling five years.
+
+    This number is not cosmetic: CandleStore.ensure_coverage clamps every
+    request to it. While it said 5 years, every intraday backfill was silently
+    capped at five no matter what was asked for - and Dhan actually serves
+    back to 2017-04-03.
+    """
+    from datetime import date
+
+    from providers.dhan import INTRADAY_ARCHIVE_BEGINS
+
     p = make_provider(FakeHttp([]))
-    assert p.max_history_days("5m") == 5 * 365
-    assert p.max_history_days("day") > 5 * 365
+    expected = (date.today() - INTRADAY_ARCHIVE_BEGINS).days
+    assert p.max_history_days("5m") >= expected
+    assert p.max_history_days("1m") >= expected
+    # Comfortably more than the five years everyone repeats.
+    assert p.max_history_days("5m") > 6 * 365
+    assert p.max_history_days("day") > p.max_history_days("5m")
+
+
+def test_intraday_depth_grows_as_the_archive_recedes() -> None:
+    """A fixed duration rots: each passing day puts one more day between now
+    and a start date that does not move."""
+    from datetime import date, timedelta
+
+    from providers.dhan import INTRADAY_ARCHIVE_BEGINS
+
+    today = (date.today() - INTRADAY_ARCHIVE_BEGINS).days
+    next_year = (date.today() + timedelta(days=365) - INTRADAY_ARCHIVE_BEGINS).days
+    assert next_year == today + 365
 
 
 def test_provider_satisfies_the_candle_provider_protocol() -> None:
