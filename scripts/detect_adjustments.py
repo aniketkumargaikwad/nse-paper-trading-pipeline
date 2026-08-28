@@ -76,6 +76,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbol", action="append", dest="symbols")
     parser.add_argument(
+        "--universe", default="NIFTY200",
+        help="named universe to sweep when --symbol is not given "
+             "(default: NIFTY200)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="print what would be stored and change nothing",
@@ -100,7 +105,7 @@ def main() -> int:
         print(f"SETUP PROBLEM: {exc}", file=sys.stderr)
         return 1
 
-    symbols = args.symbols or list(load_constituents("NIFTY50").symbols)
+    symbols = args.symbols or list(load_constituents(args.universe).symbols)
 
     to_utc = datetime.now(tz=UTC)
     from_utc = to_utc - timedelta(days=int(9.5 * 365))
