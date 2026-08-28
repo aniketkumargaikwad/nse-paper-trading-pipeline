@@ -773,9 +773,35 @@ def run_backtest(
     if store is not None:
         from data_quality import describe_split_warning, splits_inside_window
 
+        # The flags describe the RAW candles, which still hold every break.
+        # Since sql/010 those are rescaled on read, so warn only about the
+        # ones a stored correction does NOT already cover - a warning that
+        # fires when nothing is wrong is worse than none, because the next
+        # one gets ignored too.
+        def _corrected(symbol: str, previous_day, day) -> bool:
+            try:
+                # client is the CandleStore-backed data client; the
+                # adjustment table hangs off its backend. getattr all the way
+                # down because a yfinance/kite client has neither.
+                backend = client._store._backend     # noqa: SLF001
+                reader = getattr(backend, "read_price_adjustments", None)
+                if reader is None:
+                    return False
+                spans = reader(backend.instrument_id(symbol), "5m")
+            except Exception:      # noqa: BLE001 - never block a run on this
+                return False
+            # Covered when the two sides of the break sit in different
+            # correction periods: that is what rescales them onto one basis.
+            before = next((a for a in spans
+                           if a.effective_from <= previous_day
+                           <= a.effective_to), None)
+            after = next((a for a in spans
+                          if a.effective_from <= day <= a.effective_to), None)
+            return before is not after
+
         warning = describe_split_warning(splits_inside_window(
             store.quality_flags_for(all_instruments), all_instruments,
-            from_utc, now,
+            from_utc, now, corrected=_corrected,
         ))
         if warning:
             print()

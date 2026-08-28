@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import date, datetime
-from typing import Any, Mapping, Sequence
+from datetime import date, datetime, timedelta
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -270,6 +270,7 @@ def splits_inside_window(
     symbols: Sequence[str],
     from_utc: datetime,
     to_utc: datetime,
+    corrected: Callable[[str, date, date], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Confirmed splits that fall inside a backtest's window.
 
@@ -287,6 +288,28 @@ def splits_inside_window(
     Only CONFIRMED splits are returned — ones where the adjusted daily feed
     was consulted and disagreed. An unchecked flag means nobody looked yet,
     which is a different statement and not grounds for a warning.
+
+    CORRECTED SPLITS ARE NOT WARNED ABOUT
+    -------------------------------------
+    The flags describe the RAW stored candles, which still contain every
+    break by design. Since sql/010 those breaks are rescaled on read, so a
+    flagged split usually never reaches the backtest at all.
+
+    `corrected(symbol, previous_trading_day, day) -> bool` says whether a
+    stored price adjustment already spans a break; when it does, the split is
+    dropped from the warning.
+
+    BOTH days are passed, and the earlier one comes from the flag rather than
+    being computed. A correction ends on the last TRADING day before the
+    split, so `day - 1` is wrong across every weekend: EICHERMOT split on
+    Monday 2020-08-24 with its correction ending Friday the 21st, and
+    subtracting one day asked about Sunday the 23rd, matched nothing, and
+    warned about a split that was properly corrected. Without this the run warns "treat the result as unsound" about a
+    result that is sound - and a warning that fires when nothing is wrong is
+    worse than none, because the next one gets ignored too.
+
+    Omitting `corrected` keeps the old behaviour of warning about every
+    confirmed split, which is right for a caller that cannot check.
     """
     wanted = set(symbols)
     found: list[dict[str, Any]] = []
@@ -303,6 +326,12 @@ def splits_inside_window(
         if isinstance(ts, str):
             ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         if ts is None or not (from_utc <= ts <= to_utc):
+            continue
+        day = ts.astimezone(IST).date()
+        previous_raw = detail.get("previous_date")
+        previous_day = (date.fromisoformat(previous_raw) if previous_raw
+                        else day - timedelta(days=1))
+        if corrected is not None and corrected(symbol, previous_day, day):
             continue
         found.append({
             "symbol": symbol,

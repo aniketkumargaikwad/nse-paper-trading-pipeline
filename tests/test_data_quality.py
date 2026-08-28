@@ -314,3 +314,114 @@ def test_flag_says_so_when_there_was_no_daily_series_to_check() -> None:
     detail = flags[0].detail
     assert detail["adjusted_daily_checked"] is False
     assert detail["adjusted_ratio"] is None
+
+
+# ---------------------------------------------------------------------------
+# Splits that are already corrected must not be warned about
+# ---------------------------------------------------------------------------
+
+
+def _split_flag(symbol: str, when_ist: str, previous_ist: str = "") -> dict:
+    """A confirmed-split flag as the audit writes one."""
+    from datetime import datetime as _dt
+    return {
+        "flag_type": "suspected_split",
+        "symbol": symbol,
+        "ts": _dt.fromisoformat(f"{when_ist}T09:15:00+05:30").isoformat(),
+        "detail": {
+            "adjusted_daily_checked": True,
+            "adjusted_ratio": 1.0115,
+            "ratio": 1.6833,
+            "previous_date": previous_ist or None,
+            "previous_close": 664.9,
+            "close": 395.0,
+        },
+    }
+
+
+def _window():
+    from datetime import datetime as _dt, timezone as _tz
+    return (_dt(2025, 1, 1, tzinfo=_tz.utc), _dt(2026, 1, 1, tzinfo=_tz.utc))
+
+
+def test_a_confirmed_split_is_warned_about_when_nothing_corrects_it():
+    from data_quality import splits_inside_window
+    lo, hi = _window()
+    found = splits_inside_window(
+        [_split_flag("NSE:TMPV", "2025-10-14")], ["NSE:TMPV"], lo, hi)
+    assert len(found) == 1
+
+
+def test_a_corrected_split_is_not_warned_about():
+    """The raw candles still hold the break; the backtest never sees it.
+
+    Warning anyway tells the operator to "treat the result as unsound" about
+    a result that is sound - and the next warning, the real one, gets
+    ignored too.
+    """
+    from data_quality import splits_inside_window
+    lo, hi = _window()
+    found = splits_inside_window(
+        [_split_flag("NSE:TMPV", "2025-10-14")], ["NSE:TMPV"], lo, hi,
+        corrected=lambda symbol, previous_day, day: True,
+    )
+    assert found == []
+
+
+def test_the_correction_check_is_asked_about_the_right_days():
+    """Asked in IST, and with the PREVIOUS TRADING day, not the day before.
+
+    Two off-by-ones live here. The flag's timestamp is 09:15 IST, which is the
+    previous day in UTC. And a correction ends on the last TRADING day before
+    a split, so subtracting one calendar day is wrong across every weekend -
+    EICHERMOT split on Monday 2020-08-24 with its correction ending Friday the
+    21st, and asking about Sunday the 23rd matched nothing and warned about a
+    split that was correctly handled.
+    """
+    from datetime import date as _date
+    from data_quality import splits_inside_window
+    lo, hi = _window()
+    asked: list[tuple] = []
+
+    splits_inside_window(
+        [_split_flag("NSE:TMPV", "2025-10-14", "2025-10-13")], ["NSE:TMPV"],
+        lo, hi,
+        corrected=lambda s_, p_, d_: asked.append((s_, p_, d_)) or False,
+    )
+    assert asked == [("NSE:TMPV", _date(2025, 10, 13), _date(2025, 10, 14))]
+
+
+def test_a_split_after_a_weekend_uses_the_friday():
+    """The EICHERMOT case, which the first version of this filter got wrong."""
+    from datetime import date as _date
+    from data_quality import splits_inside_window
+    from datetime import datetime as _dt, timezone as _tz
+    lo = _dt(2020, 1, 1, tzinfo=_tz.utc)
+    hi = _dt(2021, 1, 1, tzinfo=_tz.utc)
+    asked: list[tuple] = []
+
+    splits_inside_window(
+        [_split_flag("NSE:EICHERMOT", "2020-08-24", "2020-08-21")],
+        ["NSE:EICHERMOT"], lo, hi,
+        corrected=lambda s_, p_, d_: asked.append((p_, d_)) or False,
+    )
+    assert asked == [(_date(2020, 8, 21), _date(2020, 8, 24))], (
+        "must ask about the Friday, not the Sunday")
+
+
+def test_a_flag_without_a_previous_date_still_works():
+    """Older flags predate the field; fall back rather than crash."""
+    from data_quality import splits_inside_window
+    lo, hi = _window()
+    assert splits_inside_window(
+        [_split_flag("NSE:TMPV", "2025-10-14")], ["NSE:TMPV"], lo, hi,
+        corrected=lambda s_, p_, d_: True,
+    ) == []
+
+
+def test_omitting_the_check_keeps_warning_about_everything():
+    """A caller that cannot check corrections must still get the warning."""
+    from data_quality import splits_inside_window
+    lo, hi = _window()
+    assert len(splits_inside_window(
+        [_split_flag("NSE:TMPV", "2025-10-14")], ["NSE:TMPV"], lo, hi)) == 1
