@@ -113,20 +113,35 @@ def main() -> int:
     total = 0
     for symbol in symbols:
         try:
-            intraday = store.get_candles(symbol, STORED_TIMEFRAME, from_utc, to_utc)
-            daily = store.get_candles(symbol, "day", from_utc, to_utc)
+            instrument_id = backend.instrument_id(symbol)
+            # RAW candles, read from the backend rather than through
+            # CandleStore.
+            #
+            # CandleStore APPLIES stored corrections, and measuring a
+            # corrected symbol is a trap that destroys data: it measures
+            # clean - correctly, it IS clean - and this loop then stores the
+            # empty result, deleting the very corrections that made it look
+            # that way. The next run re-detects them, the one after deletes
+            # them again, and the store oscillates.
+            #
+            # That happened. It hid because the only re-runs were --dry-run,
+            # which never writes, so "detection converges" was measuring
+            # nothing at all.
+            #
+            # The raw gap between the two feeds is an absolute fact that does
+            # not change when corrections are stored, so measuring it is what
+            # actually makes this idempotent.
+            intraday = backend.read_candles(
+                instrument_id, STORED_TIMEFRAME, from_utc, to_utc)
+            daily = backend.read_candles(instrument_id, "day", from_utc, to_utc)
         except Exception as exc:  # noqa: BLE001 - one bad symbol must not stop the sweep
             print(f"{symbol:16} SKIP  {exc}")
             continue
 
-        if intraday.empty or daily.empty:
+        if intraday is None or daily is None or intraday.empty or daily.empty:
             print(f"{symbol:16} SKIP  no overlapping history")
             continue
 
-        # NOTE: get_candles already applies any corrections stored by a
-        # PREVIOUS run, so the ratio measured here is what remains AFTER them.
-        # That is what makes re-running safe and convergent: a correct set of
-        # rows measures back to 1.0 and produces nothing new.
         ratio = daily_ratio(_last_close_per_day(intraday), _daily_close(daily))
         if ratio.empty:
             print(f"{symbol:16} SKIP  no common trading days")
@@ -144,7 +159,7 @@ def main() -> int:
                 # Still write: an emptied set must clear stale rows from an
                 # earlier, worse detection run.
                 backend.replace_price_adjustments(
-                    backend.instrument_id(symbol), STORED_TIMEFRAME, []
+                    instrument_id, STORED_TIMEFRAME, []
                 )
             continue
 
@@ -157,7 +172,7 @@ def main() -> int:
 
         if not args.dry_run:
             backend.replace_price_adjustments(
-                backend.instrument_id(symbol), STORED_TIMEFRAME, found
+                instrument_id, STORED_TIMEFRAME, found
             )
 
     verb = "would store" if args.dry_run else "stored"
