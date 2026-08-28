@@ -31,8 +31,11 @@ limitation.
 | Candle size | Symbols | Oldest | Newest | Candles |
 |---|---|---|---|---|
 | 1 minute | **2** | 2026-05-22 | 2026-08-21 | ~47,000 |
-| 5 minutes | 50 | 2022-08-15 | 2026-08-11 | ~3.2 million |
-| 1 day | 50 | **2002-01-01** | 2026-08-21 | 226,892 |
+| 5 minutes | **200** | 2017-04-03 | 2026-08-25 | ~30.6 million |
+| 1 day | **200** | **2002-01-01** | 2026-08-21 | 785,325 |
+
+Expanded from NIFTY50 to NIFTY200 on 2026-08-28. The whole store is 660 MB of
+Parquet against Supabase Storage's 1 GB free tier, so this cost nothing.
 
 ### Careful: `candle_coverage` is not "where the data starts"
 
@@ -44,9 +47,20 @@ twenty years, every row says 2006 — but JIOFIN only listed in 2023 and has
 Both facts are correct and they answer different questions. To ask "how much
 history does this symbol really have", read the candles, not the coverage.
 
-The 5-minute history is uneven: **35 symbols reach back to 2022** (about four
-years) and **15 only to 2024** (about two). A backtest across all fifty is
-therefore only as long as its shortest symbol unless it is told otherwise.
+The 5-minute history is uneven, and more so at 200 symbols than it was at 50:
+
+| 5-minute history starts | Symbols |
+|---|---|
+| 2017 (the full 9.4 years) | **155** |
+| 2018-2020 | 17 |
+| 2021 | 12 |
+| 2023-2025 | 16 |
+
+**Forty-five of the 200 listed after the intraday archive begins**, and 13 of
+those have under three years - GROWW, ICICIAMC, SWIGGY, HYUNDAI and other
+recent IPOs. A backtest across the whole universe is only as long as its
+shortest symbol unless told otherwise, and those 13 contribute noise rather
+than evidence to a nine-year test.
 
 Daily history was extended to twenty years on 2026-08-22. It no longer starts
 where the 5-minute data does; it goes far deeper, and costs almost nothing —
@@ -65,7 +79,7 @@ long test across the universe:
 | NSE:ETERNAL | 2021-07-23 | 1,261 |
 | NSE:JIOFIN | 2023-08-21 | 746 |
 
-Thirty-six of the fifty reach back to 2006. A "twenty year" backtest across
+One hundred and twelve of the 200 reach back to 2006. A "twenty year" backtest across
 the universe is therefore twenty years for most of them and three for JIOFIN.
 The run record stores exactly which symbols were used, so this is visible —
 but nothing corrects for it automatically.
@@ -187,9 +201,16 @@ This is the worst kind of data problem, because nothing errors and nothing
 looks odd. A breakout rule simply finds the strongest signal in its entire
 sample and reports the result.
 
-**How bad it was:** 18 of the 50 NIFTY 50 symbols, 21 separate periods.
-EICHERMOT ×10, five 1:2 splits (TCS, INFY, HCLTECH, M&M, HDFCBANK), WIPRO
-twice, TMPV's demerger, ADANIENT three times, and a dozen smaller ones.
+**How bad it was:** 49 of the 200 symbols, 66 separate periods. EICHERMOT and
+APLAPOLLO ×10 (a 90% overnight "crash" in the raw data), six 1:5 splits
+(LAURUSLABS, UNITDSPR, SRF, CHOLAFIN, YESBANK, DIXON), GAIL three times, TMPV's
+demerger, and dozens more.
+
+**Mid-caps are worse than large-caps.** The original NIFTY50 contributed 21
+corrections; the 150 stocks added for NIFTY200 contributed 45 - more than
+twice as many from three times the symbols. Smaller companies split more
+often, so widening the universe raises this risk faster than it raises the
+symbol count.
 
 **How it is fixed:** not by looking up split announcements. The daily feed is
 adjusted to *today's* basis, so the gap between the two feeds on any past day
@@ -203,7 +224,7 @@ corrections are self-consistent.
 
 - *The stored candles are untouched.* Nothing was multiplied into the raw
   feed, because a corrected price is indistinguishable from a real one. The
-  correction is 21 rows you can read, question, and delete. That is also why
+  correction is 66 rows you can read, question, and delete. That is also why
   `audit_data_quality.py` still reports 8 splits — it reads the raw feed on
   purpose — but now marks each one **CORRECTED ON READ**.
 - *Volume is deliberately NOT corrected.* A split really does change volume,

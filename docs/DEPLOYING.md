@@ -371,7 +371,8 @@ It only sends what changed, so a routine run is quick.
 | | |
 |---|---|
 | Railway | ~$5/month for both services, billed by usage. Check current pricing — this may be out of date |
-| Supabase | Free up to ~500 MB. NIFTY50 uses ~215 MB, NIFTY100 ~429 MB. NIFTY500 (~2.1 GB) needs the paid plan |
+| Supabase database | Free up to 500 MB. Currently 18 MB - candles live in Storage, not rows |
+| Supabase Storage | Free up to 1 GB. NIFTY200 at 9.4 years uses 660 MB. NIFTY500 would need roughly 1.6 GB and exceed it |
 | Dhan Data APIs | ~₹499+GST/month, which you already pay |
 
 ---

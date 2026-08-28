@@ -4,7 +4,9 @@
 -- Dhan's daily feed is adjusted for corporate actions; its intraday feed is
 -- raw. So EICHERMOT's 5-minute candles fall from 21,780 to 2,178 overnight in
 -- August 2020 — a 90% collapse that never happened, it was a 1:10 split.
--- Eighteen of the fifty NIFTY 50 symbols carry at least one such break.
+-- Forty-nine of the 200 stored symbols carry at least one such break, and
+-- mid-caps are the worse half: NIFTY50 accounts for 21 of the 66 corrections,
+-- the 150 symbols added for NIFTY200 for the other 45.
 --
 -- WHY A TABLE RATHER THAN REWRITING THE CANDLES
 -- ---------------------------------------------
