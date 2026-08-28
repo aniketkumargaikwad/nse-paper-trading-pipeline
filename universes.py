@@ -1,4 +1,4 @@
-"""Named symbol universes: NIFTY50/100/500 and custom groups.
+"""Named symbol universes: NIFTY50/100/200/500 and custom groups.
 
 A strategy stores a universe NAME; this module turns that name into symbols.
 Resolution is deliberately separate from parsing, so validating a pasted
@@ -46,6 +46,7 @@ EQUITY_SERIES = frozenset({"EQ", "BE"})
 NSE_INDEX_URLS: dict[str, str] = {
     "NIFTY50": "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv",
     "NIFTY100": "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+    "NIFTY200": "https://nsearchives.nseindia.com/content/indices/ind_nifty200list.csv",
     "NIFTY500": "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv",
 }
 
@@ -63,13 +64,28 @@ _FETCH_TIMEOUT_SECONDS = 30
 
 _SNAPSHOT_RE = re.compile(r"^(?P<name>[A-Z0-9_]+)-(?P<date>\d{4}-\d{2}-\d{2})\.csv$")
 
-# Storage arithmetic, from the Phase 0 design (section 2.2): ~120 bytes per
-# row including index overhead, 75 five-minute candles per trading session, and
-# ~250 trading sessions a year.
-BYTES_PER_ROW = 120
+# Storage arithmetic. 75 five-minute candles per trading session, ~250
+# sessions a year.
+#
+# The per-candle cost depends entirely on WHERE candles are kept, and the two
+# answers differ by 5.6x - enough to turn "needs the $25/mo plan" into "fits
+# free", so projecting the wrong one is not a rounding error.
+#
+#   Postgres rows : ~120 bytes, against the 500 MB database quota
+#   Parquet+zstd  :  ~22 bytes, against the 1 GB Storage quota
+#
+# The Parquet figure is measured, not estimated: 8,344,034 five-minute candles
+# occupy 175.3 MB on disk today.
 CANDLES_PER_SESSION = 75
 SESSIONS_PER_YEAR = 250
-SUPABASE_FREE_TIER_MB = 500
+
+BYTES_PER_ROW = 120                 # Postgres, including index overhead
+BYTES_PER_CANDLE_PARQUET = 22       # measured on the real store
+
+# Storage and the database are SEPARATE free-tier quotas, so which one a
+# projection must fit depends on the backend too.
+SUPABASE_FREE_TIER_MB = 500         # database rows
+SUPABASE_STORAGE_FREE_TIER_MB = 1024  # files
 
 
 class UniverseError(ValueError):
@@ -122,26 +138,41 @@ class StorageProjection:
     years: float
     rows: int
     megabytes: float
+    store: str = "parquet"          # 'parquet' | 'supabase'
 
     @property
     def gigabytes(self) -> float:
         return self.megabytes / 1024
 
     @property
+    def quota_mb(self) -> int:
+        """The free-tier limit this projection is actually measured against."""
+        return (SUPABASE_STORAGE_FREE_TIER_MB if self.store == "parquet"
+                else SUPABASE_FREE_TIER_MB)
+
+    @property
     def exceeds_free_tier(self) -> bool:
-        return self.megabytes > SUPABASE_FREE_TIER_MB
+        return self.megabytes > self.quota_mb
 
     def summary(self) -> str:
+        where = "Storage" if self.store == "parquet" else "database rows"
         head = (
             f"{self.symbol_count} symbols x {self.years:g} years at 5m "
-            f"= ~{self.rows:,} rows (~{self.megabytes:,.0f} MB)"
+            f"= ~{self.rows:,} candles (~{self.megabytes:,.0f} MB as {where})"
         )
         if not self.exceeds_free_tier:
-            return head
+            return (
+                f"{head}, within the {self.quota_mb} MB free tier "
+                f"({self.quota_mb - self.megabytes:,.0f} MB spare). The "
+                "backfill will take a while: Dhan serves 90 days per request."
+            )
+        upgrade = ("Storage is $0.021/GB/mo beyond 1 GB"
+                   if self.store == "parquet"
+                   else "Pro is $25/mo for 8 GB")
         return (
-            f"{head}. That exceeds the Supabase free tier "
-            f"({SUPABASE_FREE_TIER_MB} MB) — Pro is $25/mo for 8 GB. The "
-            "backfill will also take a while: Dhan serves 90 days per request."
+            f"{head}. That exceeds the {self.quota_mb} MB free tier "
+            f"- {upgrade}. The backfill will also take a while: Dhan serves "
+            "90 days per request."
         )
 
 
@@ -297,10 +328,20 @@ def load_constituents(
     )
 
 
-def project_storage(*, symbol_count: int, years: float) -> StorageProjection:
-    """Projected rows and size for backfilling `symbol_count` at the 5m base."""
+def project_storage(
+    *, symbol_count: int, years: float, store: str = "parquet"
+) -> StorageProjection:
+    """Projected candles and size for backfilling `symbol_count` at the 5m base.
+
+    `store` decides both the per-candle cost and which free-tier quota the
+    answer is compared against. Defaulting to parquet matches what the
+    platform actually runs; passing 'supabase' gives the row-storage figure.
+    """
     rows = int(symbol_count * years * SESSIONS_PER_YEAR * CANDLES_PER_SESSION)
-    megabytes = rows * BYTES_PER_ROW / (1024 * 1024)
+    per_candle = (BYTES_PER_CANDLE_PARQUET if store == "parquet"
+                  else BYTES_PER_ROW)
+    megabytes = rows * per_candle / (1024 * 1024)
     return StorageProjection(
-        symbol_count=symbol_count, years=years, rows=rows, megabytes=megabytes
+        symbol_count=symbol_count, years=years, rows=rows,
+        megabytes=megabytes, store=store,
     )

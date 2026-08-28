@@ -213,11 +213,44 @@ def test_load_constituents_rejects_an_unknown_index_name(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_projection_matches_the_spec_figures_for_nifty500():
-    projection = project_storage(symbol_count=500, years=2.0)
+def test_projection_matches_the_spec_figures_for_nifty500_as_database_rows():
+    projection = project_storage(symbol_count=500, years=2.0, store="supabase")
     assert 18_000_000 < projection.rows < 20_000_000
     assert 2.0 < projection.gigabytes < 2.5
     assert projection.exceeds_free_tier is True
+
+
+def test_the_same_universe_fits_free_once_it_is_parquet():
+    """The choice of backend is worth 5.6x, which decides whether to pay.
+
+    Identical candle count, different answer: 393 MB of files against a 1 GB
+    Storage quota rather than 2.2 GB of rows against a 500 MB database one.
+    Projecting the wrong backend is how someone concludes they need the
+    $25/mo plan for a universe that fits free.
+    """
+    rows_ = project_storage(symbol_count=500, years=2.0, store="supabase")
+    files = project_storage(symbol_count=500, years=2.0, store="parquet")
+
+    assert files.rows == rows_.rows
+    assert files.megabytes < rows_.megabytes / 5
+    assert files.exceeds_free_tier is False
+    assert files.quota_mb == 1024 and rows_.quota_mb == 500
+
+
+def test_parquet_is_the_default_because_it_is_what_runs():
+    assert project_storage(symbol_count=10, years=1.0).store == "parquet"
+
+
+def test_nifty200_at_full_depth_fits_the_storage_free_tier():
+    """The measured case: 200 symbols x 9.4 years is ~740 MB of ~1024 MB.
+
+    Pinned because it is close enough to the limit that a change in the
+    per-candle figure should have to be noticed rather than discovered when
+    a backfill stops halfway.
+    """
+    projection = project_storage(symbol_count=200, years=9.4)
+    assert 700 < projection.megabytes < 800
+    assert projection.exceeds_free_tier is False
 
 
 def test_projection_for_nifty50_fits_the_free_tier():
@@ -226,5 +259,11 @@ def test_projection_for_nifty50_fits_the_free_tier():
 
 
 def test_projection_summary_names_the_free_tier_when_exceeded():
-    text = project_storage(symbol_count=500, years=2.0).summary()
+    text = project_storage(symbol_count=500, years=2.0, store="supabase").summary()
     assert "500 MB" in text and "free tier" in text.lower()
+
+
+def test_summary_says_how_much_room_is_left_when_it_fits():
+    """"Fits" without a number invites a backfill that stops halfway."""
+    text = project_storage(symbol_count=200, years=9.4).summary()
+    assert "1024 MB free tier" in text and "spare" in text

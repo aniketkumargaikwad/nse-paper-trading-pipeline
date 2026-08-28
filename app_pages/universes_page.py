@@ -158,5 +158,5 @@ def render(ctx: AppContext) -> None:
         st.info(
             "No NSE indices stored yet. Run "
             "`.venv\\Scripts\\python.exe scripts/refresh_universes.py` to pull "
-            "NIFTY50, NIFTY100 and NIFTY500."
+            "NIFTY50, NIFTY100, NIFTY200 and NIFTY500."
         )
