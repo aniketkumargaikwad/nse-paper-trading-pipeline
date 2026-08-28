@@ -59,6 +59,31 @@ def local_files(root: str) -> dict[str, int]:
     return found
 
 
+# Supabase Storage returns at most 100 entries per list() call and gives no
+# hint that it truncated. With 200 instrument directories under 5m/, an
+# unpaged listing silently sees half of them - which made --verify permanently
+# report ~2,400 files "missing" and the uploader re-send files already in the
+# bucket. Paginate explicitly; never trust one call to be the whole directory.
+_PAGE = 1000
+
+
+def _list_all(bucket, prefix: str) -> list:
+    """Every entry under `prefix`, following pages to the end."""
+    entries: list = []
+    offset = 0
+    while True:
+        try:
+            page = bucket.list(prefix, {"limit": _PAGE, "offset": offset})
+        except Exception:      # noqa: BLE001 - an absent prefix is normal
+            return entries
+        if not page:
+            return entries
+        entries.extend(page)
+        if len(page) < _PAGE:
+            return entries
+        offset += len(page)
+
+
 def remote_files(bucket) -> dict[str, int]:
     """Every object in the bucket, keyed by path, valued by size.
 
@@ -68,11 +93,7 @@ def remote_files(bucket) -> dict[str, int]:
     found: dict[str, int] = {}
 
     def walk(prefix: str, depth: int) -> None:
-        try:
-            entries = bucket.list(prefix)
-        except Exception:      # noqa: BLE001 - an absent prefix is normal
-            return
-        for entry in entries:
+        for entry in _list_all(bucket, prefix):
             name = entry.get("name") if isinstance(entry, dict) else getattr(entry, "name", "")
             if not name:
                 continue
