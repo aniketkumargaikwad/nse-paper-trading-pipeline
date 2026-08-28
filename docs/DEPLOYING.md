@@ -331,6 +331,41 @@ this is a perfectly reasonable place to stay for now.
 
 ---
 
+## Where the price history actually lives
+
+Three copies, and it is worth knowing which is which:
+
+| Copy | What it is | Size |
+|---|---|---|
+| `data/candles` on your laptop | What every backtest reads | 186 MB |
+| Supabase **Storage** bucket `candles` | The backup, and what a host would read | 186 MB |
+| Supabase **database** table `candles` | **Empty on purpose** | 0 |
+
+The database table used to hold a 5-minute-only copy covering 2022-2026. It
+was 483 MB of a 500 MB free tier, it was four years shorter than the files on
+disk, and nothing read it - `CANDLE_STORE=parquet` means backtests go to the
+files. It was cleared after checking every instrument's counts, spot-checking
+candle values, and testing a read back out of the bucket. The database now
+sits at 18 MB.
+
+Storage is a **separate quota** from the database: 1 GB of files beside
+500 MB of rows. That is why the backup is free.
+
+Back up again after any backfill:
+
+```bash
+.venv/Scripts/python.exe scripts/backup_candles_to_storage.py
+.venv/Scripts/python.exe scripts/backup_candles_to_storage.py --verify
+```
+
+It only sends what changed, so a routine run is quick.
+
+> **If your laptop dies**, set `CANDLE_ROOT=supabase://candles` and the app
+> reads history straight from the bucket. Slower than local disk, but nothing
+> is lost and nothing needs re-downloading from Dhan.
+
+---
+
 ## What this costs
 
 | | |
