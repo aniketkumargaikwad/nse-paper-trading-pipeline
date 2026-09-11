@@ -1,6 +1,6 @@
 # Autonomous Research Loop — Design
 
-**Status:** Draft, awaiting review · **Date:** 2026-09-11
+**Status:** Approved · **Date:** 2026-09-11
 
 A system that, every morning with no laptop and no money spent, invents a
 trading strategy, improves it up to seven times, tests it on every stock,
