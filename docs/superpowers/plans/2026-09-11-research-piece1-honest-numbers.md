@@ -1405,6 +1405,7 @@ def test_a_stored_combination_produces_trades(tmp_path):
     result = run(Combo("NSE:ABC", "day", False), reader(tmp_path))
     assert result.skipped_reason is None
     assert len(result.trades) >= 1
+    assert result.first_candle == daily_frame().index[0].to_pydatetime()
 
 
 def test_no_candles_is_a_skip_not_an_error(tmp_path):
@@ -1485,6 +1486,10 @@ class ComboResult:
     is_index: bool
     trades: tuple[SimTrade, ...]
     skipped_reason: str | None = None
+    # When this combination's candles actually begin inside the window. A
+    # stock listed in 2024 has far fewer training days than the window allows,
+    # and annualising its return over the whole window would understate it.
+    first_candle: datetime | None = None
 
     @property
     def net_pnl(self) -> float:
@@ -1523,7 +1528,10 @@ def run_combo(
         )
     except Exception as exc:        # noqa: BLE001 - becomes a recorded skip
         return skip(f"simulation failed: {exc!r}")
-    return ComboResult(combo.symbol, combo.timeframe, combo.is_index, tuple(result.trades))
+    return ComboResult(
+        combo.symbol, combo.timeframe, combo.is_index, tuple(result.trades),
+        first_candle=frame.index[0].to_pydatetime(),
+    )
 
 
 _WORKER: dict[str, Any] = {}
@@ -2224,7 +2232,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
-from config import UTC, get_settings, use_utf8_stdout
+from config import IST, UTC, get_settings, use_utf8_stdout
 
 BOOKKEEPING = ("status", "raw_source", "validation_errors")
 REFERENCE_SYMBOL = "NSE:RELIANCE"
@@ -2319,8 +2327,13 @@ def main(argv: list[str] | None = None) -> int:
     for r in sorted((r for r in results if r.skipped_reason is None), key=lambda r: -r.net_pnl)[:10]:
         print(f"  {r.symbol:22s} {r.timeframe:4s} trades={len(r.trades):5d}  net={_rupees(r.net_pnl)}")
 
-    pick = pick_best(results, cost_model,
-                     window_days_for=lambda r: windows.training_days(is_index=r.is_index, timeframe=r.timeframe))
+    pick = pick_best(
+        results, cost_model,
+        window_days_for=lambda r: windows.training_days(
+            is_index=r.is_index, timeframe=r.timeframe,
+            data_from=r.first_candle.astimezone(IST).date() if r.first_candle else None,
+        ),
+    )
     if pick is None:
         print("\nNo qualifying pick (needs 30+ training trades and a worst dip within 30%). "
               "Locked year not opened.")
@@ -2415,3 +2428,28 @@ git commit -m "docs(spec): piece 1 built, with the measured sweep time
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
+
+---
+
+## Amendments after review
+
+Recorded here because the task texts above were written before review; where
+they differ, the committed code and this section win.
+
+- **Task 4** (`8bbbab0`): `VOLUME_INPUTS` is a public frozenset and the volume
+  regex is built from it; a guard test fails if `strategy/vocabulary.py` gains
+  an indicator that is not classified as volume or not-volume.
+  `research_combos` rejects a bare string or an unknown timeframe.
+- **Task 5**: a day is complete only with a candle starting exactly 15:25 IST;
+  `DATA_END` is the latest date complete in BOTH stored timeframes;
+  `ResearchWindows` rejects a non-`date` `data_end`; `training_start` rejects
+  an unknown timeframe; `training_days(..., data_from=None)` shortens the
+  window to when a combination's candles really begin.
+- **Task 8** (text above already amended): `ComboResult.first_candle` records
+  the first candle read for the combination.
+- **Task 12** (text above already amended): the pick annualises each
+  combination over `training_days(..., data_from=first candle's IST date)`.
+- **Watch in Task 12 review:** the locked evaluation simulates the full window
+  and keeps trades entered in the locked year, so a position still open at the
+  boundary can delay the first locked-year entry. Accepted for piece 1; noted
+  so it is judged deliberately.
