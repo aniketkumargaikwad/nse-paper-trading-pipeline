@@ -1,0 +1,97 @@
+"""The frozen calendar: where prices end, where training ends, what is locked."""
+
+from __future__ import annotations
+
+import sys
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from research.windows import (  # noqa: E402
+    ResearchWindows,
+    data_end_from,
+    ist_midnight,
+    training_start,
+    trim_to_data_end,
+)
+
+IST = ZoneInfo("Asia/Kolkata")
+UTC = ZoneInfo("UTC")
+TICK = timedelta(microseconds=1)
+
+
+def five_min(day: date, last: time) -> pd.DatetimeIndex:
+    t = datetime.combine(day, time(9, 15), tzinfo=IST)
+    stamps = []
+    while t.time() <= last:
+        stamps.append(t.astimezone(UTC))
+        t += timedelta(minutes=5)
+    return pd.DatetimeIndex(stamps)
+
+
+def daily(*days: date) -> pd.DatetimeIndex:
+    return pd.DatetimeIndex([ist_midnight(d) for d in days])
+
+
+def test_india_midnight_is_1830_utc_the_day_before():
+    assert ist_midnight(date(2026, 8, 27)) == datetime(2026, 8, 26, 18, 30, tzinfo=UTC)
+
+
+def test_a_day_that_stops_before_the_last_candle_is_not_data_end():
+    idx = five_min(date(2026, 8, 27), time(15, 25)).append(five_min(date(2026, 8, 28), time(15, 10)))
+    assert data_end_from(idx, daily(date(2026, 8, 27), date(2026, 8, 28))) == date(2026, 8, 27)
+
+
+def test_data_end_is_limited_by_the_daily_candles():
+    idx = five_min(date(2026, 8, 27), time(15, 25)).append(five_min(date(2026, 8, 28), time(15, 25)))
+    assert data_end_from(idx, daily(date(2026, 8, 27))) == date(2026, 8, 27)
+
+
+def test_empty_history_is_refused():
+    with pytest.raises(ValueError):
+        data_end_from(pd.DatetimeIndex([], tz="UTC"), daily(date(2026, 8, 27)))
+
+
+def test_the_locked_year_is_365_days_ending_on_data_end():
+    w = ResearchWindows(date(2026, 8, 27))
+    assert w.locked_from == date(2025, 8, 28)
+    assert w.locked_from_utc == ist_midnight(date(2025, 8, 28))
+
+
+def test_training_ends_one_tick_before_the_locked_year():
+    w = ResearchWindows(date(2026, 8, 27))
+    start, end = w.training(is_index=False, timeframe="15m")
+    assert start == ist_midnight(date(2017, 4, 3))
+    assert end + TICK == w.locked_from_utc
+
+
+def test_the_full_window_ends_at_the_last_moment_of_data_end():
+    w = ResearchWindows(date(2026, 8, 27))
+    _, end = w.full(is_index=True, timeframe="60m")
+    assert end + TICK == ist_midnight(date(2026, 8, 28))
+
+
+def test_training_start_depends_on_kind_and_timeframe():
+    assert training_start(is_index=False, timeframe="day") == date(2010, 1, 1)
+    assert training_start(is_index=True, timeframe="day") == date(2010, 1, 1)
+    assert training_start(is_index=True, timeframe="60m") == date(2023, 10, 4)
+    assert training_start(is_index=False, timeframe="5m") == date(2017, 4, 3)
+
+
+def test_training_days_counts_calendar_days():
+    w = ResearchWindows(date(2026, 8, 27))
+    assert w.training_days(is_index=True, timeframe="60m") == (date(2025, 8, 28) - date(2023, 10, 4)).days
+
+
+def test_trim_keeps_data_end_and_drops_later_candles():
+    idx = pd.DatetimeIndex([
+        datetime(2026, 8, 27, 15, 25, tzinfo=IST).astimezone(UTC),
+        datetime(2026, 8, 28, 9, 15, tzinfo=IST).astimezone(UTC),
+    ])
+    frame = pd.DataFrame({"close": [1.0, 2.0]}, index=idx)
+    assert list(trim_to_data_end(frame, date(2026, 8, 27))["close"]) == [1.0]
