@@ -7,13 +7,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest  # noqa: E402
+
 from research.universe import (  # noqa: E402
     INDEX_TIMEFRAMES,
     INDEXES,
     STOCK_TIMEFRAMES,
+    VOLUME_INPUTS,
     Combo,
     document_uses_volume,
     research_combos,
+)
+from strategy.vocabulary import (  # noqa: E402
+    EXPR_MULTI_OUTPUT,
+    EXPR_SIMPLE_INDICATORS,
+    EXPR_STRUCTURE,
+    INDICATOR_PARAMS,
+    PRICE_SOURCES,
 )
 
 
@@ -59,3 +69,61 @@ def test_a_name_mentioning_volume_does_not_count():
            "entry": {"all": [{"indicator": "close", "operator": ">", "value": 1}]},
            "exit": {"any": [{"indicator": "close", "operator": "<", "value": 1}]}}
     assert not document_uses_volume(doc)
+
+
+# A new indicator in vocabulary.py must be classified here, or a volume-based
+# one would slip past the index skip and be tested on Yahoo's fake index
+# volume with no test failing to catch it.
+NOT_VOLUME = {
+    "open", "high", "low", "close", "ema", "sma", "wma", "hma", "dema", "tema",
+    "rsi", "cci", "williams_r", "roc", "momentum", "trix", "stddev", "atr",
+    "awesome", "ultimate", "macd", "bbands", "supertrend", "stoch", "stochrsi",
+    "adx", "aroon", "donchian", "keltner", "psar", "swing",
+}
+
+
+def test_every_vocabulary_name_is_classified_as_volume_or_not():
+    """A new indicator in vocabulary.py must be classified here, or a
+    volume-based one would be tested on Yahoo's fake index volume."""
+    vocabulary_names = (
+        set(PRICE_SOURCES)
+        | set(INDICATOR_PARAMS)
+        | set(EXPR_SIMPLE_INDICATORS)
+        | set(EXPR_MULTI_OUTPUT)
+        | set(EXPR_STRUCTURE)
+    )
+    for name in vocabulary_names:
+        assert (name in VOLUME_INPUTS) ^ (name in NOT_VOLUME), name
+    for name in VOLUME_INPUTS:
+        assert name in vocabulary_names, name
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        {"version": 3, "states": [{"name": "a", "transitions": [
+            {"when": "daily.volume > 0", "goto": "a"}]}]},
+        {"version": 3, "states": [{"name": "a", "transitions": [
+            {"when": "vwma(20) > close", "goto": "a"}]}]},
+        {"version": 3, "states": [{"name": "a", "transitions": [
+            {"when": "obv() > 0", "goto": "a"}]}]},
+        {"version": 3, "states": [{"name": "a", "transitions": [
+            {"when": "MFI(14) < 20", "goto": "a"}]}]},
+        {"version": 3, "states": [{"name": "a", "transitions": [
+            {"set": {"x": "cmf(20)"}, "goto": "a"}]}]},
+        {"version": 3, "states": [{"name": "a", "transitions": [
+            {"enter": {"side": "long", "stop": "vwap()"}, "goto": "a"}]}]},
+    ],
+)
+def test_every_volume_word_is_detected_in_v3_expressions(doc):
+    assert document_uses_volume(doc)
+
+
+def test_bare_string_stock_timeframes_is_rejected():
+    with pytest.raises(TypeError):
+        research_combos(["NSE:A"], include_indexes=False, stock_timeframes="day")
+
+
+def test_unknown_stock_timeframe_is_rejected():
+    with pytest.raises(ValueError):
+        research_combos(["NSE:A"], include_indexes=False, stock_timeframes=("1h",))
