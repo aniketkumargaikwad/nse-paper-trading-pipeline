@@ -86,7 +86,7 @@ from config import (
     get_settings,
     use_utf8_stdout,
 )
-from costs import CostModel, FlatCostModel
+from costs import CostModel, FlatCostModel, HoldingCostModel
 from data_provider import create_data_client, describe_provider
 from db import SupabaseStore
 from kite_client import KiteClientError, TokenExpiredError
@@ -136,11 +136,17 @@ def _make_trade(
 
     # An itemised model prices this trade's OWN turnover; the flat fallback
     # ignores it. Defaulting to flat keeps every existing result reproducible.
-    costs = (
-        cost_model.round_trip(entry_price, exit_price, quantity)
-        if cost_model is not None
-        else cost_per_trade_inr
-    )
+    # A holding-aware model also needs to know whether the trade crossed a
+    # day, because an overnight position pays delivery charges.
+    if cost_model is None:
+        costs = cost_per_trade_inr
+    elif getattr(cost_model, "prices_by_holding", False):
+        costs = cost_model.round_trip(
+            entry_price, exit_price, quantity,
+            entry_ts=entry_fill_ts, exit_ts=exit_fill_ts,
+        )
+    else:
+        costs = cost_model.round_trip(entry_price, exit_price, quantity)
     return SimTrade(
         entry_signal_ts=entry_signal_ts, entry_fill_ts=entry_fill_ts,
         exit_signal_ts=exit_signal_ts, exit_fill_ts=exit_fill_ts,
@@ -514,7 +520,10 @@ def build_cost_model(settings: Settings):
     switches to real Indian intraday charges, which scale with turnover -
     at Rs 100,000 notional they are roughly Rs 83, not Rs 30.
     """
-    if getattr(settings, "cost_model", "flat") == "itemised":
+    choice = getattr(settings, "cost_model", "flat")
+    if choice == "holding":
+        return HoldingCostModel()
+    if choice == "itemised":
         return CostModel()
     return FlatCostModel(settings.cost_per_trade_inr)
 
