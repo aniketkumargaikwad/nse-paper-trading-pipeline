@@ -2228,8 +2228,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from config import IST, UTC, get_settings, use_utf8_stdout
@@ -2237,6 +2238,10 @@ from config import IST, UTC, get_settings, use_utf8_stdout
 BOOKKEEPING = ("status", "raw_source", "validation_errors")
 FAR_PAST = datetime(2000, 1, 1, tzinfo=UTC)
 FAR_FUTURE = datetime(2100, 1, 1, tzinfo=UTC)
+# How far back to scan 5-minute candles when placing DATA_END. Only the tail
+# of a history can carry the answer, and reading nine years for 200 stocks
+# costs about seven minutes before the sweep even starts.
+SCAN_DAYS = 180
 
 
 def strategy_document(docs: Sequence[Mapping[str, Any]], name: str) -> dict[str, Any]:
@@ -2304,15 +2309,27 @@ def main(argv: list[str] | None = None) -> int:
     # DATA_END comes from the whole universe, never one reference symbol. In
     # August 2026, 184 of 200 stocks lost their closing candles every day; a
     # single symbol would have let that month into the locked year.
+    #
+    # Daily candles are small, so they are read in full; the 5-minute scan
+    # starts SCAN_DAYS before the newest daily candle, because only the tail
+    # of a history can decide where it ends.
+    day_index = {s: reader.candles(s, "day", FAR_PAST, FAR_FUTURE).index for s in stocks}
+    newest_daily = max((idx.max() for idx in day_index.values() if len(idx)), default=None)
+    if newest_daily is None:
+        print("ERROR: no daily candles for any stock, so DATA_END cannot be placed",
+              file=sys.stderr)
+        return 1
+    scan_from = newest_daily - timedelta(days=SCAN_DAYS)
+
     symbol_ends = []
     for symbol in stocks:
         try:
             symbol_ends.append(data_end_from(
-                reader.candles(symbol, "5m", FAR_PAST, FAR_FUTURE).index,
-                reader.candles(symbol, "day", FAR_PAST, FAR_FUTURE).index,
+                reader.candles(symbol, "5m", scan_from, FAR_FUTURE).index,
+                day_index[symbol],
             ))
         except ValueError:
-            continue        # no complete session at all: counts against coverage
+            continue        # no complete session in the scan window: counts against coverage
     data_end = universe_data_end(symbol_ends)
     windows = ResearchWindows(data_end)
     volume_rules = document_uses_volume(doc)
@@ -2371,6 +2388,14 @@ def main(argv: list[str] | None = None) -> int:
           + ("  (the market's move; this strategy is short)" if strategy.position_type == "short" else ""))
     print(f"  {locked.trades} trades ({locked.trades / 12:.1f}/month) · won {win_rate:.0f}% · "
           f"worst dip {locked.worst_dip_pct:.1f}%")
+    # Coverage is a floor, so up to 10% of stocks may end before DATA_END. If
+    # the winner is one of them, its locked year is partly empty while still
+    # being judged over a full 365 days.
+    pick_last = frame.index[-1].astimezone(IST).date() if len(frame) else None
+    if pick_last is not None and pick_last < data_end:
+        print(f"  NOTE: this combination's candles stop {pick_last}, before DATA_END "
+              f"{data_end} - its locked year is only partly covered")
+
     beat = hold is not None and locked.end_value > hold
     print(f"  verdict: {'PASSED' if passed(locked) else 'FAILED'} · beat holding: {'yes' if beat else 'no'}")
     print(f"  broad or lucky: profitable in {counts.profitable} of {counts.tested} training combinations")
@@ -2479,3 +2504,9 @@ they differ, the committed code and this section win.
 - **Task 11 still downloads index history through 2026-08-27.** Candles after
   DATA_END are simply never read, and keeping them costs nothing if the August
   stock data is ever repaired.
+- **Task 12 places DATA_END from the tail only** (`SCAN_DAYS = 180` before the
+  newest daily candle). Reading every stock's full 5-minute history cost about
+  seven minutes per run; daily candles are small enough to read whole.
+- **Task 12 warns when the pick's own candles stop before DATA_END.** Coverage
+  is a floor, so up to 10% of stocks may end earlier; such a winner would be
+  scored over a locked year it does not fully have.
