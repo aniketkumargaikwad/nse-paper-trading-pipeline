@@ -80,10 +80,10 @@ def universe_data_end(symbol_ends: Sequence[date], *, coverage: float = DATA_END
     """
     if not 0 < coverage <= 1:
         raise ValueError(f"coverage must be above 0 and at most 1, got {coverage}")
-    if not symbol_ends:
-        raise ValueError("no symbol produced a complete session, so DATA_END cannot be placed")
     ordered = sorted(symbol_ends)
-    index = int((1 - coverage) * len(ordered))
+    if not ordered:
+        raise ValueError("no symbol produced a complete session, so DATA_END cannot be placed")
+    index = int((1 - coverage) * len(ordered) + 1e-9)
     return ordered[min(index, len(ordered) - 1)]
 
 

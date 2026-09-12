@@ -196,6 +196,24 @@ def test_coverage_outside_zero_to_one_is_refused():
         universe_data_end([date(2026, 7, 31)], coverage=1.5)
 
 
+def test_small_universe_rounding_does_not_over_tighten_the_cut():
+    # 1 - 0.9 is slightly under 0.1 in floating point, so a naive
+    # int((1 - coverage) * n) on n=10 gives 19/... i.e. index 0, demanding
+    # all 10 symbols be complete instead of 9 of them.
+    ends = [date(2025, 1, 2)] + [date(2026, 7, 31)] * 9
+    assert universe_data_end(ends) == date(2026, 7, 31)
+
+
+def test_empty_generator_is_refused_with_the_same_message():
+    with pytest.raises(ValueError, match="no symbol"):
+        universe_data_end(iter([]))
+
+
+def test_small_universe_with_no_stragglers_is_its_own_date():
+    ends = [date(2026, 7, 31)] * 10
+    assert universe_data_end(ends) == date(2026, 7, 31)
+
+
 def test_closed_interval_boundaries_match_what_the_backend_expects():
     idx = pd.DatetimeIndex([ist_midnight(date(2025, 8, 27)), ist_midnight(date(2025, 8, 28))])
     frame = pd.DataFrame({"close": [1.0, 2.0]}, index=idx)
