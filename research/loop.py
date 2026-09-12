@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
+from research.brain import BrainStopped
+
 MAX_VERSIONS = 7
 REPAIR_ATTEMPTS = 3
 DEFAULT_BUDGET_SECONDS = 5 * 60 * 60
@@ -43,6 +45,9 @@ class LoopOutcome:
     stopped_because: str
     repairs: int = 0
     ideas_dropped: int = 0
+    # What the brain said when it refused - a usage limit, or a dead
+    # credential. Empty for every ordinary ending.
+    stop_detail: str = ""
 
 
 def run_versions(
@@ -68,6 +73,14 @@ def run_versions(
     change_hint: str | None = None
     slowest = 0.0
 
+    def cut_short(exc: BrainStopped) -> LoopOutcome:
+        """The allowance or the credential gave out. Keep what is finished.
+
+        The versions already tested are real results, and the locked year
+        needs no AI, so the caller carries on with them (design 8).
+        """
+        return LoopOutcome(versions, "stopped_limit", repairs, ideas_dropped, str(exc))
+
     while True:
         if len(versions) >= max_versions:
             return LoopOutcome(versions, "version_limit", repairs, ideas_dropped)
@@ -83,10 +96,13 @@ def run_versions(
         proposal: dict[str, Any] = {}
 
         for attempt in range(REPAIR_ATTEMPTS + 1):
-            proposal = brain.propose(
-                notes=notes, ideas_tried=ideas_tried, previous=previous_summary,
-                change_hint=change_hint, error=error,
-            )
+            try:
+                proposal = brain.propose(
+                    notes=notes, ideas_tried=ideas_tried, previous=previous_summary,
+                    change_hint=change_hint, error=error,
+                )
+            except BrainStopped as exc:
+                return cut_short(exc)
             try:
                 checked = check(
                     proposal.get("strategy_yaml", ""),
@@ -121,9 +137,12 @@ def run_versions(
         slowest = max(slowest, now() - version_started)
 
         versions_left = max_versions - len(versions)
-        review = brain.review(
-            summary=attempt_row.summary, version=len(versions), versions_left=versions_left,
-        )
+        try:
+            review = brain.review(
+                summary=attempt_row.summary, version=len(versions), versions_left=versions_left,
+            )
+        except BrainStopped as exc:
+            return cut_short(exc)
         attempt_row.review = review
         decision = review.get("decision", "stop")
 

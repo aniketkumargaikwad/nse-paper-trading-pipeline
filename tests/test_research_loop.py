@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from research.brain import BrainStopped  # noqa: E402
 from research.checker import CheckError  # noqa: E402
 from research.loop import MAX_VERSIONS, REPAIR_ATTEMPTS, run_versions  # noqa: E402
 
@@ -137,3 +138,52 @@ def test_a_max_versions_override_is_respected_for_cheap_live_tests():
     brain = FakeBrain([proposal()] * 2, [review("next_version")] * 2)
     outcome = run(brain, max_versions=2)
     assert len(outcome.versions) == 2 and outcome.stopped_because == "version_limit"
+
+
+# --- the allowance or the credential giving out ------------------------------
+
+
+class StoppingBrain(FakeBrain):
+    """Answers normally until the named call, then refuses like Claude does."""
+
+    def __init__(self, proposals, reviews, *, stop_on, after=0):
+        super().__init__(proposals, reviews)
+        self.stop_on, self.after = stop_on, after
+
+    def _maybe_stop(self, kind):
+        if kind != self.stop_on:
+            return
+        if self.after:
+            self.after -= 1
+            return
+        raise BrainStopped("Claude usage limit reached")
+
+    def propose(self, **kwargs):
+        self._maybe_stop("propose")
+        return super().propose(**kwargs)
+
+    def review(self, **kwargs):
+        self._maybe_stop("review")
+        return super().review(**kwargs)
+
+
+def test_a_refusal_mid_review_keeps_the_version_it_had_just_tested():
+    brain = StoppingBrain([proposal()], [], stop_on="review")
+    outcome = run(brain)
+    assert len(outcome.versions) == 1
+    assert outcome.versions[0].summary == "summary-for-checked:a strategy-v1"
+    assert outcome.stopped_because == "stopped_limit"
+    assert "usage limit" in outcome.stop_detail
+
+
+def test_a_refusal_before_the_next_idea_keeps_the_finished_ones():
+    brain = StoppingBrain(
+        [proposal("first")], [review("new_idea")], stop_on="propose", after=1,
+    )
+    outcome = run(brain)
+    assert [v.title for v in outcome.versions] == ["first"]
+    assert outcome.stopped_because == "stopped_limit"
+
+
+def test_an_ordinary_ending_carries_no_stop_detail():
+    assert run(FakeBrain([proposal()], [review("stop")])).stop_detail == ""
