@@ -19,13 +19,18 @@ from typing import Any
 
 import pandas as pd
 
-from config import source_timeframe_for
+from config import MINUTE_TIMEFRAME, SUPPORTED_TIMEFRAMES, ConfigError, source_timeframe_for
 from parquet_candle_backend import ParquetCandleBackend
 from price_adjust import Adjustment, apply_adjustments
 from providers.base import empty_frame
 from resample import resample_candles
 
 _CHUNK = 100   # symbols or ids per Supabase `in` filter
+
+# PostgREST returns at most 1,000 rows per request by default. A page this
+# full is a sign the result was truncated, not that an instrument genuinely
+# has that many corrections - see the check in load_adjustments.
+_POSTGREST_PAGE_LIMIT = 1000
 
 
 @dataclass(frozen=True)
@@ -35,13 +40,39 @@ class FrozenPriceReader:
     adjustments: dict[int, list[Adjustment]]    # 5-minute corrections by instrument id
     index_symbols: frozenset[str]
 
+    def __post_init__(self) -> None:
+        if "://" in self.root:
+            raise ValueError(
+                f"FrozenPriceReader root {self.root!r} looks like a remote "
+                "store URL; research reads a local parquet store only, so a "
+                "misconfigured root should fail once here rather than on "
+                "every worker's first call."
+            )
+
     def candles(
         self, symbol: str, timeframe: str, from_utc: datetime, to_utc: datetime
     ) -> pd.DataFrame:
         """Candles in [from_utc, to_utc]. Empty when nothing is stored.
 
-        Raises KeyError for a symbol with no instrument id.
+        Raises KeyError for a symbol with no instrument id, config.ConfigError
+        for an unsupported timeframe (checked up front so a stock symbol and
+        an index symbol fail identically - a typo must never read as "no
+        data"), and ValueError for the unsupported 1-minute timeframe.
         """
+        if timeframe not in SUPPORTED_TIMEFRAMES:
+            raise ConfigError(
+                f"Unsupported timeframe {timeframe!r}. "
+                f"Allowed: {', '.join(SUPPORTED_TIMEFRAMES)}"
+            )
+        if timeframe == MINUTE_TIMEFRAME:
+            raise ValueError(
+                "1m candles are not supported by FrozenPriceReader: 1m is not "
+                "resampled from the 5-minute base (config.STORED_TIMEFRAMES "
+                "keeps it independent), so the 5-minute corrections loaded by "
+                "load_adjustments cannot be applied to it, and only two "
+                "symbols hold 1-minute data at all."
+            )
+
         instrument_id = self.instrument_ids[symbol]
         backend = ParquetCandleBackend(None, self.root)
 
@@ -72,7 +103,7 @@ def load_instrument_ids(client: Any, symbols: Iterable[str]) -> dict[str, int]:
     for chunk in _chunks(wanted, _CHUNK):
         rows = (
             client.table("instruments").select("id,symbol")
-            .in_("symbol", list(chunk)).execute().data
+            .in_("symbol", chunk).execute().data
         )
         ids.update({row["symbol"]: int(row["id"]) for row in rows})
     missing = [s for s in wanted if s not in ids]
@@ -82,18 +113,33 @@ def load_instrument_ids(client: Any, symbols: Iterable[str]) -> dict[str, int]:
 
 
 def load_adjustments(client: Any, instrument_ids: Iterable[int]) -> dict[int, list[Adjustment]]:
-    """5-minute corporate-action corrections, oldest first, for every id."""
+    """5-minute corporate-action corrections, oldest first, for every id.
+
+    Deliberately diverges from supabase_candle_backend.read_price_adjustments,
+    which swallows a missing price_adjustments table and returns []. That is
+    right for the live platform, where an optional table should not take the
+    whole thing down. It is wrong here: silently returning uncorrected
+    intraday prices across a split is exactly what price_adjust.py exists to
+    prevent, so a failure here propagates instead of being swallowed.
+    """
     wanted = sorted(set(instrument_ids))
     out: dict[int, list[Adjustment]] = {i: [] for i in wanted}
     for chunk in _chunks(wanted, _CHUNK):
         rows = (
             client.table("price_adjustments")
             .select("instrument_id,effective_from,effective_to,price_factor,volume_factor,sample_days")
-            .in_("instrument_id", list(chunk))
+            .in_("instrument_id", chunk)
             .eq("timeframe", "5m")
             .order("effective_from")
             .execute().data
         )
+        if len(rows) >= _POSTGREST_PAGE_LIMIT:
+            raise RuntimeError(
+                f"price_adjustments returned {len(rows)} rows for one chunk, "
+                f"which looks like a truncated PostgREST page rather than "
+                f"genuine data - lower _CHUNK in research/prices.py so a "
+                f"chunk's adjustments cannot reach this limit."
+            )
         for row in rows:
             out[int(row["instrument_id"])].append(Adjustment(
                 effective_from=date.fromisoformat(row["effective_from"]),

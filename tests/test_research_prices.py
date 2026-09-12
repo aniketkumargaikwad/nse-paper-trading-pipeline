@@ -90,3 +90,131 @@ def test_an_unknown_symbol_is_a_key_error(tmp_path):
 def test_the_reader_can_be_sent_to_a_worker_process(tmp_path):
     reader = FrozenPriceReader(str(tmp_path), {"NSE:ABC": 7}, {7: [HALF]}, frozenset({"NSE:NIFTY"}))
     assert pickle.loads(pickle.dumps(reader)) == reader
+
+
+def test_an_unsupported_timeframe_is_a_config_error_for_stock_and_index(tmp_path):
+    from config import ConfigError
+
+    reader = FrozenPriceReader(
+        str(tmp_path), {"NSE:ABC": 7, "NSE:NIFTY": 9}, {}, frozenset({"NSE:NIFTY"})
+    )
+    with pytest.raises(ConfigError):
+        reader.candles("NSE:ABC", "45m", FROM, TO)
+    with pytest.raises(ConfigError):
+        reader.candles("NSE:NIFTY", "45m", FROM, TO)
+
+
+def test_1m_is_refused(tmp_path):
+    reader = FrozenPriceReader(str(tmp_path), {"NSE:ABC": 7}, {}, frozenset())
+    with pytest.raises(ValueError):
+        reader.candles("NSE:ABC", "1m", FROM, TO)
+
+
+def test_a_remote_candle_root_is_rejected(tmp_path):
+    with pytest.raises(ValueError):
+        FrozenPriceReader("supabase://candles", {}, {}, frozenset())
+
+
+def test_the_reader_matches_candle_store_get_candles(tmp_path):
+    """The reader must never drift from the production read path.
+
+    Runs candle_store.CandleStore.get_candles and FrozenPriceReader.candles
+    over the SAME fixture parquet root and asserts identical frames - the
+    behavioural proof that reading the files directly reproduces exactly what
+    production would have returned, corrections and resampling included.
+    """
+    from candle_store import CandleStore
+    from coverage_math import CoverageRange
+
+    instrument_id = 7
+    write(tmp_path, instrument_id, "5m", bars(datetime(2026, 8, 3, 9, 15, tzinfo=IST), 6, 5))
+    real_backend = ParquetCandleBackend(None, str(tmp_path))
+
+    class StubProvider:
+        name = "stub"
+
+        def fetch(self, symbol, timeframe, from_utc, to_utc):
+            raise AssertionError("research must never fetch")
+
+        def max_history_days(self, timeframe):
+            return 100_000
+
+    class StubBackend:
+        def instrument_id(self, symbol):
+            return instrument_id
+
+        def read_candles(self, iid, timeframe, from_utc, to_utc):
+            return real_backend.read_candles(iid, timeframe, from_utc, to_utc)
+
+        def write_candles(self, iid, timeframe, df):
+            real_backend.write_candles(iid, timeframe, df)
+
+        def read_coverage(self, iid, timeframe):
+            # Already spans the requested window, so ensure_coverage has
+            # nothing to fetch.
+            return CoverageRange(FROM, TO)
+
+        def write_coverage(self, *args, **kwargs):
+            pass
+
+        def write_quality_flags(self, rows):
+            pass
+
+        def read_price_adjustments(self, iid, timeframe):
+            return [HALF]
+
+    store = CandleStore(StubBackend(), StubProvider())
+    reader = FrozenPriceReader(
+        str(tmp_path), {"NSE:ABC": instrument_id}, {instrument_id: [HALF]}, frozenset()
+    )
+
+    from_store = store.get_candles("NSE:ABC", "15m", FROM, TO)
+    from_reader = reader.candles("NSE:ABC", "15m", FROM, TO)
+
+    pd.testing.assert_frame_equal(from_store, from_reader)
+
+
+def test_a_truncated_price_adjustments_page_is_a_runtime_error(tmp_path):
+    from research.prices import load_adjustments
+
+    class StubExecuteResult:
+        def __init__(self, data):
+            self.data = data
+
+    class StubQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def select(self, *args, **kwargs):
+            return self
+
+        def in_(self, *args, **kwargs):
+            return self
+
+        def eq(self, *args, **kwargs):
+            return self
+
+        def order(self, *args, **kwargs):
+            return self
+
+        def execute(self):
+            return StubExecuteResult(self._rows)
+
+    class StubClient:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def table(self, name):
+            return StubQuery(self._rows)
+
+    row = {
+        "instrument_id": 7,
+        "effective_from": "2026-08-01",
+        "effective_to": "2026-08-31",
+        "price_factor": 0.5,
+        "volume_factor": 1.0,
+        "sample_days": 10,
+    }
+    client = StubClient([row] * 1000)
+    with pytest.raises(RuntimeError):
+        load_adjustments(client, [7])
