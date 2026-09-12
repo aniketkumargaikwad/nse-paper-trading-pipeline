@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
+
+from config import IST
 
 from backtest_types import SimTrade
 from costs import HoldingCostModel
@@ -94,3 +97,62 @@ def passed(locked: LakhResult) -> bool:
         and locked.trades >= MIN_LOCKED_TRADES
         and locked.worst_dip_pct <= MAX_LOCKED_DIP_PCT
     )
+
+
+def equity_series(
+    trades: Sequence[SimTrade],
+    cost_model: HoldingCostModel,
+    *,
+    day_index: pd.DatetimeIndex,
+    closes: pd.Series | None = None,
+    start_value: float = START_VALUE,
+) -> list[dict[str, Any]]:
+    """Daily Rs 1 lakh balance, and just-holding beside it when closes are given.
+
+    The balance changes only when a trade closes and is carried flat between
+    trades, which is what the account would really show: money earns nothing
+    while it waits. The final point equals `compound(...).end_value` by
+    construction - the same walk, sampled daily.
+
+    Just-holding subtracts its one round trip of fees at every point, so the
+    last point matches the headline figure. The Rs 1 lakh path instead pays
+    each trade's fee as that trade closes.
+    """
+    if len(day_index) == 0:
+        return []
+
+    days = sorted({ts.astimezone(IST).date() for ts in day_index})
+
+    balance_on: dict[Any, float] = {}
+    balance = start_value
+    for t in sorted(trades, key=lambda tr: tr.entry_fill_ts):
+        notional = t.entry_price * t.quantity
+        gross_return = t.gross_pnl / notional if notional else 0.0
+        units = balance / t.entry_price
+        fees = cost_model.round_trip(
+            t.entry_price, t.exit_price, units,
+            entry_ts=t.entry_fill_ts, exit_ts=t.exit_fill_ts,
+        )
+        balance = max(balance + balance * gross_return - fees, 0.0)
+        balance_on[t.exit_fill_ts.astimezone(IST).date()] = balance
+
+    hold_by_day: dict[Any, float] = {}
+    if closes is not None and len(closes) >= 1:
+        first_close = float(closes.iloc[0])
+        last_close = float(closes.iloc[-1])
+        units = start_value / first_close
+        fees = cost_model.delivery.round_trip(first_close, last_close, units)
+        for ts, close in closes.items():
+            hold_by_day[ts.astimezone(IST).date()] = round(
+                start_value + units * (float(close) - first_close) - fees, 2
+            )
+
+    out: list[dict[str, Any]] = []
+    running = start_value
+    for day in days:
+        running = balance_on.get(day, running)
+        row: dict[str, Any] = {"day": day, "lakh_balance": round(running, 2)}
+        if hold_by_day:
+            row["hold_balance"] = hold_by_day.get(day)
+        out.append(row)
+    return out

@@ -26,6 +26,9 @@ FAR_FUTURE = datetime(2100, 1, 1, tzinfo=UTC)
 # of a history can carry the answer, and reading nine years for 200 stocks
 # costs about two minutes before the sweep even starts.
 SCAN_DAYS = 180
+# The children are built before the run row exists; save_run replaces this with
+# the real id. Naming it beats a bare empty string in a row that must not ship.
+_PENDING = "pending"
 
 
 def strategy_document(docs: Sequence[Mapping[str, Any]], name: str) -> dict[str, Any]:
@@ -50,13 +53,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--max-stocks", type=int, default=0, help="test only the first N stocks (quick run)")
     parser.add_argument("--stock-timeframes", default="", help="comma-separated, e.g. day,60m (quick run)")
+    parser.add_argument("--no-save", action="store_true",
+                        help="print the result without storing it")
     args = parser.parse_args(argv)
+    started_at = datetime.now(UTC)
 
     from backtest import simulate_any
     from costs import HoldingCostModel
     from db import SupabaseStore
-    from research.lakh import compound, just_holding, passed
+    from research.lakh import compound, equity_series, just_holding, passed
     from research.picker import pick_best
+    from research.records import combo_rows, equity_rows, locked_trade_rows, run_row
+    from research.store import ResearchStoreError, save_run
     from research.prices import FrozenPriceReader, load_adjustments, load_instrument_ids
     from research.sweep import count_results, run_sweep
     from research.universe import INDEXES, STOCK_TIMEFRAMES, document_uses_volume, research_combos
@@ -141,16 +149,36 @@ def main(argv: list[str] | None = None) -> int:
     for r in sorted((r for r in results if r.skipped_reason is None), key=lambda r: -r.net_pnl)[:10]:
         print(f"  {r.symbol:22s} {r.timeframe:4s} trades={len(r.trades):5d}  net={_rupees(r.net_pnl)}")
 
-    pick = pick_best(
-        results, cost_model,
-        window_days_for=lambda r: windows.training_days(
+    def window_days_for(r) -> int:
+        return windows.training_days(
             is_index=r.is_index, timeframe=r.timeframe,
             data_from=r.first_candle.astimezone(IST).date() if r.first_candle else None,
-        ),
-    )
+        )
+
+    pick = pick_best(results, cost_model, window_days_for=window_days_for)
     if pick is None:
         print("\nNo qualifying pick (needs 30+ training trades and a worst dip within 30%). "
               "Locked year not opened.")
+        if args.no_save:
+            print("\nnot saved (--no-save)")
+            return 0
+        try:
+            saved = save_run(
+                store._client,
+                run=run_row(
+                    started_at=started_at, finished_at=datetime.now(UTC), status="completed",
+                    data_end=data_end, locked_from=windows.locked_from,
+                    strategy_name=args.strategy, pick_symbol=None, pick_timeframe=None,
+                    locked=None, hold_end_value=None,
+                    combos_profitable=counts.profitable, combos_tested=counts.tested,
+                    warnings=[f"no qualifying pick among {counts.tested} combinations"],
+                ),
+                combos=combo_rows(_PENDING, results, cost_model, window_days_for=window_days_for),
+            )
+        except ResearchStoreError as exc:
+            print(f"\nWARNING: the result was NOT stored: {exc}", file=sys.stderr)
+            return 1
+        print(f"\nsaved as run {saved}")
         return 0
 
     p = pick.result
@@ -184,9 +212,45 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  verdict: {'PASSED' if passed(locked) else 'FAILED'} · beat holding: {'yes' if beat else 'no'}")
     print(f"  broad or lucky: profitable in {counts.profitable} of {counts.tested} training combinations")
 
+    warnings = [
+        f"prices frozen at {data_end}; today's NIFTY200 list applied to the past (survivorship)",
+        f"{counts.tested} combinations tried: some look good in training by luck alone",
+    ]
+    if pick_last is not None and pick_last < data_end:
+        warnings.append(f"the pick's candles stop {pick_last}, before DATA_END {data_end}")
+
     print("\nWARNINGS")
-    print(f"  prices frozen at {data_end}; today's NIFTY200 list applied to the past (survivorship)")
-    print(f"  {counts.tested} combinations tried: some look good in training by luck alone")
+    for line in warnings:
+        print(f"  {line}")
+
+    if args.no_save:
+        print("\nnot saved (--no-save)")
+        return 0
+
+    day_candles = reader.candles(p.symbol, "day", windows.locked_from_utc, windows.end_utc)
+    try:
+        saved = save_run(
+            store._client,
+            run=run_row(
+                started_at=started_at, finished_at=datetime.now(UTC), status="completed",
+                data_end=data_end, locked_from=windows.locked_from,
+                strategy_name=args.strategy, pick_symbol=p.symbol, pick_timeframe=p.timeframe,
+                locked=locked, hold_end_value=hold,
+                combos_profitable=counts.profitable, combos_tested=counts.tested,
+                warnings=warnings,
+            ),
+            combos=combo_rows(_PENDING, results, cost_model, window_days_for=window_days_for),
+            locked_trades=locked_trade_rows(_PENDING, locked_trades, cost_model),
+            equity=equity_rows(_PENDING, equity_series(
+                locked_trades, cost_model,
+                day_index=day_candles.index,
+                closes=day_candles["close"] if not day_candles.empty else None,
+            )),
+        )
+    except ResearchStoreError as exc:
+        print(f"\nWARNING: the result was NOT stored: {exc}", file=sys.stderr)
+        return 1
+    print(f"\nsaved as run {saved}")
     return 0
 
 

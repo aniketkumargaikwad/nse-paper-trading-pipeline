@@ -503,7 +503,14 @@ Each piece gets its own implementation plan and works on its own.
    1,213 rather than 1,218 because five indexes lost daily testing — their
    Yahoo daily series is missing the locked year's final fortnight.
 2. **Research page** — §6 migrations, store, grid and detail view. *Done
-   when:* a hand-run result appears as a clickable row.
+   when:* a hand-run result appears as a clickable row. **BUILT 2026-09-12.**
+   `sql/011_research.sql` applied; `research.evaluate` now stores every run.
+   A full run writes 1 grid row, 1,213 combination rows (36 of them skipped),
+   71 locked-year trades and 246 daily balances. The page renders the grid,
+   the ₹1 lakh against just-holding chart, the combination table, the trades
+   and the warnings. The detail view reads children filtered BY RUN in the
+   database: fetching whole child tables would have silently stopped reaching
+   older runs after about four of them.
 3. **AI loop** — prompts, brain, checker, loop, notes. *Done when:* a laptop
    run completes a full day with real Opus calls and writes a row.
 4. **Going hosted** — workflow, cache, secrets, journal commit, messages,

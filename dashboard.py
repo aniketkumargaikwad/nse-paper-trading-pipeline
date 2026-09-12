@@ -12,6 +12,7 @@ PAGES
   Overview       health, headline P&L, what to do next
   Strategies     view / build / edit; one click to go live or pause
   Backtest       run tests on history; read kill rules
+  Research       what the daily research loop found: one row per run
   Paper trading  open positions, equity curve, today's trades
   Trade log      full filterable history + CSV export
   System         engine runs, configuration, upgrade path
@@ -62,6 +63,7 @@ def _app() -> None:  # pragma: no cover — exercised by `streamlit run`
         backtest_page,
         overview,
         paper_trading,
+        research_page,
         strategies,
         system,
         trade_log,
@@ -83,6 +85,7 @@ def _app() -> None:  # pragma: no cover — exercised by `streamlit run`
         page(strategies, "Strategies", "🧠", "strategies"),
         page(universes_page, "Universes", "🌐", "universes"),
         page(backtest_page, "Backtest", "🔬", "backtest"),
+        page(research_page, "Research", "🧪", "research"),
         page(paper_trading, "Paper trading", "📈", "paper-trading"),
         page(trade_log, "Trade log", "📜", "trade-log"),
         page(system, "System", "⚙️", "system"),
