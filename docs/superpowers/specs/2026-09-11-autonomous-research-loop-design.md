@@ -495,8 +495,13 @@ Each piece gets its own implementation plan and works on its own.
 
 1. **Honest numbers** — delivery fees, parallel sweep, windows, picker, ₹1
    lakh, one-time index download. *Done when:* a hand-run CLI prints the pick
-   and locked-year result for an existing strategy across all 1,218
-   combinations.
+   and locked-year result for an existing strategy across all 1,213
+   combinations. **BUILT 2026-09-12.** `python -m research.evaluate --strategy
+   NAME` took **929 s** for 1,213 combinations on this laptop (8 logical CPUs),
+   of which 1,177 were testable and 36 skipped. DATA_END measured at
+   2026-07-31, so the locked year is 2025-08-01 → 2026-07-31. The count is
+   1,213 rather than 1,218 because five indexes lost daily testing — their
+   Yahoo daily series is missing the locked year's final fortnight.
 2. **Research page** — §6 migrations, store, grid and detail view. *Done
    when:* a hand-run result appears as a clickable row.
 3. **AI loop** — prompts, brain, checker, loop, notes. *Done when:* a laptop

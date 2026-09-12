@@ -49,7 +49,8 @@ DEFAULT_SLIPPAGE_PCT = 0.05        # 0.05% adverse move applied to every fill
 # behaviour); 'parquet' writes columnar files and is 5.6x smaller and ~34x
 # faster to read, measured on real data. Metadata stays in Supabase either way.
 # 'flat' charges a fixed rupee amount per round trip; 'itemised' models real
-# Indian intraday charges, which scale with turnover. Flat is the default so
+# Indian intraday charges, which scale with turnover; 'holding' is itemised
+# plus delivery charges for any trade held overnight. Flat is the default so
 # existing results stay reproducible - see costs.py for why flat is wrong at
 # every trade size but one.
 DEFAULT_COST_MODEL = "flat"

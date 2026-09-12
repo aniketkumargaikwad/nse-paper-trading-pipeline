@@ -1405,6 +1405,7 @@ def test_a_stored_combination_produces_trades(tmp_path):
     result = run(Combo("NSE:ABC", "day", False), reader(tmp_path))
     assert result.skipped_reason is None
     assert len(result.trades) >= 1
+    assert result.first_candle == daily_frame().index[0].to_pydatetime()
 
 
 def test_no_candles_is_a_skip_not_an_error(tmp_path):
@@ -1459,7 +1460,7 @@ its window. Results come back in the order the combinations were given.
 
 A combination that cannot be read or simulated becomes a skip with a reason,
 never an exception that ends the run: one young stock with too little history
-for an ATR must not cost the other 1,217 results.
+for an ATR must not cost the other 1,212 results.
 """
 
 from __future__ import annotations
@@ -1485,6 +1486,10 @@ class ComboResult:
     is_index: bool
     trades: tuple[SimTrade, ...]
     skipped_reason: str | None = None
+    # When this combination's candles actually begin inside the window. A
+    # stock listed in 2024 has far fewer training days than the window allows,
+    # and annualising its return over the whole window would understate it.
+    first_candle: datetime | None = None
 
     @property
     def net_pnl(self) -> float:
@@ -1523,7 +1528,10 @@ def run_combo(
         )
     except Exception as exc:        # noqa: BLE001 - becomes a recorded skip
         return skip(f"simulation failed: {exc!r}")
-    return ComboResult(combo.symbol, combo.timeframe, combo.is_index, tuple(result.trades))
+    return ComboResult(
+        combo.symbol, combo.timeframe, combo.is_index, tuple(result.trades),
+        first_candle=frame.index[0].to_pydatetime(),
+    )
 
 
 _WORKER: dict[str, Any] = {}
@@ -2220,16 +2228,20 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from config import UTC, get_settings, use_utf8_stdout
+from config import IST, UTC, get_settings, use_utf8_stdout
 
 BOOKKEEPING = ("status", "raw_source", "validation_errors")
-REFERENCE_SYMBOL = "NSE:RELIANCE"
 FAR_PAST = datetime(2000, 1, 1, tzinfo=UTC)
 FAR_FUTURE = datetime(2100, 1, 1, tzinfo=UTC)
+# How far back to scan 5-minute candles when placing DATA_END. Only the tail
+# of a history can carry the answer, and reading nine years for 200 stocks
+# costs about seven minutes before the sweep even starts.
+SCAN_DAYS = 180
 
 
 def strategy_document(docs: Sequence[Mapping[str, Any]], name: str) -> dict[str, Any]:
@@ -2266,7 +2278,12 @@ def main(argv: list[str] | None = None) -> int:
     from research.prices import FrozenPriceReader, load_adjustments, load_instrument_ids
     from research.sweep import count_results, run_sweep
     from research.universe import INDEXES, STOCK_TIMEFRAMES, document_uses_volume, research_combos
-    from research.windows import LOCKED_DAYS, ResearchWindows, data_end_from
+    from research.windows import (
+        LOCKED_DAYS,
+        ResearchWindows,
+        data_end_from,
+        universe_data_end,
+    )
     from strategy.v3 import is_v3_document, parse_machine
     from strategy_schema import parse_strategy_dict
     from universes import newest_snapshot, parse_constituent_csv
@@ -2284,22 +2301,44 @@ def main(argv: list[str] | None = None) -> int:
         stocks = stocks[: args.max_stocks]
     timeframes = tuple(t.strip() for t in args.stock_timeframes.split(",") if t.strip()) or STOCK_TIMEFRAMES
 
-    ids = load_instrument_ids(store._client, [*stocks, *INDEXES, REFERENCE_SYMBOL])
-    stock_ids = [ids[s] for s in {*stocks, REFERENCE_SYMBOL}]
+    ids = load_instrument_ids(store._client, [*stocks, *INDEXES])
+    stock_ids = [ids[s] for s in stocks]
     reader = FrozenPriceReader(settings.candle_root, ids, load_adjustments(store._client, stock_ids),
                                frozenset(INDEXES))
 
-    data_end = data_end_from(
-        reader.candles(REFERENCE_SYMBOL, "5m", FAR_PAST, FAR_FUTURE).index,
-        reader.candles(REFERENCE_SYMBOL, "day", FAR_PAST, FAR_FUTURE).index,
-    )
+    # DATA_END comes from the whole universe, never one reference symbol. In
+    # August 2026, 184 of 200 stocks lost their closing candles every day; a
+    # single symbol would have let that month into the locked year.
+    #
+    # Daily candles are small, so they are read in full; the 5-minute scan
+    # starts SCAN_DAYS before the newest daily candle, because only the tail
+    # of a history can decide where it ends.
+    day_index = {s: reader.candles(s, "day", FAR_PAST, FAR_FUTURE).index for s in stocks}
+    newest_daily = max((idx.max() for idx in day_index.values() if len(idx)), default=None)
+    if newest_daily is None:
+        print("ERROR: no daily candles for any stock, so DATA_END cannot be placed",
+              file=sys.stderr)
+        return 1
+    scan_from = newest_daily - timedelta(days=SCAN_DAYS)
+
+    symbol_ends = []
+    for symbol in stocks:
+        try:
+            symbol_ends.append(data_end_from(
+                reader.candles(symbol, "5m", scan_from, FAR_FUTURE).index,
+                day_index[symbol],
+            ))
+        except ValueError:
+            continue        # no complete session in the scan window: counts against coverage
+    data_end = universe_data_end(symbol_ends)
     windows = ResearchWindows(data_end)
     volume_rules = document_uses_volume(doc)
     combos = research_combos(stocks, include_indexes=not volume_rules, stock_timeframes=timeframes)
     cost_model = HoldingCostModel()
 
     print(f"strategy   {args.strategy}")
-    print(f"prices     frozen at {data_end} (DATA_END)")
+    print(f"prices     frozen at {data_end} (DATA_END, complete for "
+          f"{len(symbol_ends)} of {len(stocks)} stocks)")
     print(f"training   before {windows.locked_from}")
     print(f"locked     {windows.locked_from} -> {data_end}  (opened once, at the end)")
     print(f"universe   NIFTY200 as of {as_of} ({len(stocks)} stocks)"
@@ -2319,8 +2358,13 @@ def main(argv: list[str] | None = None) -> int:
     for r in sorted((r for r in results if r.skipped_reason is None), key=lambda r: -r.net_pnl)[:10]:
         print(f"  {r.symbol:22s} {r.timeframe:4s} trades={len(r.trades):5d}  net={_rupees(r.net_pnl)}")
 
-    pick = pick_best(results, cost_model,
-                     window_days_for=lambda r: windows.training_days(is_index=r.is_index, timeframe=r.timeframe))
+    pick = pick_best(
+        results, cost_model,
+        window_days_for=lambda r: windows.training_days(
+            is_index=r.is_index, timeframe=r.timeframe,
+            data_from=r.first_candle.astimezone(IST).date() if r.first_candle else None,
+        ),
+    )
     if pick is None:
         print("\nNo qualifying pick (needs 30+ training trades and a worst dip within 30%). "
               "Locked year not opened.")
@@ -2344,6 +2388,14 @@ def main(argv: list[str] | None = None) -> int:
           + ("  (the market's move; this strategy is short)" if strategy.position_type == "short" else ""))
     print(f"  {locked.trades} trades ({locked.trades / 12:.1f}/month) · won {win_rate:.0f}% · "
           f"worst dip {locked.worst_dip_pct:.1f}%")
+    # Coverage is a floor, so up to 10% of stocks may end before DATA_END. If
+    # the winner is one of them, its locked year is partly empty while still
+    # being judged over a full 365 days.
+    pick_last = frame.index[-1].astimezone(IST).date() if len(frame) else None
+    if pick_last is not None and pick_last < data_end:
+        print(f"  NOTE: this combination's candles stop {pick_last}, before DATA_END "
+              f"{data_end} - its locked year is only partly covered")
+
     beat = hold is not None and locked.end_value > hold
     print(f"  verdict: {'PASSED' if passed(locked) else 'FAILED'} · beat holding: {'yes' if beat else 'no'}")
     print(f"  broad or lucky: profitable in {counts.profitable} of {counts.tested} training combinations")
@@ -2366,14 +2418,14 @@ Expected: all PASS.
 - [ ] **Step 5: Quick real run**
 
 Run: `./.venv/Scripts/python.exe -m research.evaluate --strategy N200-PULLBACK-DAY --max-stocks 5 --stock-timeframes day --workers 2`
-Expected, in order: `prices     frozen at 2026-08-27 (DATA_END)`, `locked     2025-08-28 -> 2026-08-27`, `testing    23 combinations` (5 stocks × day + 9 indexes × 2), a `TRAINING` line, then either a `PICK` block with `LOCKED YEAR` or `No qualifying pick`. No traceback.
+Expected, in order: `prices     frozen at 2026-07-31`, `locked     2025-08-01 -> 2026-07-31`, `testing    23 combinations` (5 stocks × day + 9 indexes × 2), a `TRAINING` line, then either a `PICK` block with `LOCKED YEAR` or `No qualifying pick`. No traceback.
 
-If `DATA_END` prints anything other than `2026-08-27`, STOP and report: the reference symbol's stored data differs from what the spec measured.
+`--max-stocks 5` places DATA_END from those five stocks alone, so a quick run can legitimately print a later date than the full run. If the FULL run (Step 6) prints anything other than `2026-07-31`, STOP and report: the stored data has changed since it was measured on 2026-09-12.
 
 - [ ] **Step 6: Full run**
 
 Run: `./.venv/Scripts/python.exe -m research.evaluate --strategy N200-PULLBACK-DAY`
-Expected: `testing    1218 combinations on 8 worker(s)...` (worker count = this machine's logical CPUs), then the full report. Note the `TRAINING` elapsed seconds — piece 4 needs it for the time budget.
+Expected: `testing    1213 combinations on 8 worker(s)...` (worker count = this machine's logical CPUs), then the full report. Note the `TRAINING` elapsed seconds — piece 4 needs it for the time budget.
 
 - [ ] **Step 7: Commit**
 
@@ -2415,3 +2467,63 @@ git commit -m "docs(spec): piece 1 built, with the measured sweep time
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
+
+---
+
+## Amendments after review
+
+Recorded here because the task texts above were written before review; where
+they differ, the committed code and this section win.
+
+- **Task 4** (`8bbbab0`): `VOLUME_INPUTS` is a public frozenset and the volume
+  regex is built from it; a guard test fails if `strategy/vocabulary.py` gains
+  an indicator that is not classified as volume or not-volume.
+  `research_combos` rejects a bare string or an unknown timeframe.
+- **Task 5**: a day is complete only with a candle starting exactly 15:25 IST;
+  `DATA_END` is the latest date complete in BOTH stored timeframes;
+  `ResearchWindows` rejects a non-`date` `data_end`; `training_start` rejects
+  an unknown timeframe; `training_days(..., data_from=None)` shortens the
+  window to when a combination's candles really begin.
+- **Task 8** (text above already amended): `ComboResult.first_candle` records
+  the first candle read for the combination.
+- **Task 12** (text above already amended): the pick annualises each
+  combination over `training_days(..., data_from=first candle's IST date)`.
+- **Watch in Task 12 review:** the locked evaluation simulates the full window
+  and keeps trades entered in the locked year, so a position still open at the
+  boundary can delay the first locked-year entry. Accepted for piece 1; noted
+  so it is judged deliberately.
+
+- **DATA_END is 2026-07-31, decided across the universe** (owner's decision,
+  2026-09-12). Measured from the stored files: every stock has all 23 July
+  sessions complete, but in August 161 stocks have no complete session at all,
+  23 have one, and only 16 run to the end of the month; 50 stocks' daily
+  candles stop on 2026-08-21. The locked year is therefore
+  **2025-08-01 → 2026-07-31**. `research/windows.py` gained
+  `universe_data_end(symbol_ends, coverage=0.9)`, and Task 12 places DATA_END
+  from every stock rather than from NSE:RELIANCE.
+- **Task 11 still downloads index history through 2026-08-27.** Candles after
+  DATA_END are simply never read, and keeping them costs nothing if the August
+  stock data is ever repaired.
+- **Task 12 places DATA_END from the tail only** (`SCAN_DAYS = 180` before the
+  newest daily candle). Reading every stock's full 5-minute history cost about
+  seven minutes per run; daily candles are small enough to read whole.
+- **Task 12 warns when the pick's own candles stop before DATA_END.** Coverage
+  is a floor, so up to 10% of stocks may end earlier; such a winner would be
+  scored over a locked year it does not fully have.
+- **Five indexes are excluded from DAILY testing** (`INDEX_DAILY_UNRELIABLE` in
+  `research/universe.py`, commit `6cc527e`): NIFTYAUTO, NIFTYFMCG, NIFTYMETAL,
+  FINNIFTY and NIFTYMID100FREE. Measured 2026-09-12 after the Yahoo download:
+  234 daily bars inside the locked year against NIFTY's 245, the 11 missing
+  days forming one block over 17-31 July 2026 - the final two weeks of the
+  locked year. Their 60-minute series are complete, so they are still tested
+  there. **The combination count is therefore 1213, not 1218**:
+  200 stocks x 6 timeframes + 4 indexes x 2 + 5 indexes x 1.
+
+- **First full run, 2026-09-12** (`N200-PULLBACK-DAY`): 1,213 combinations in
+  **929 s** on 8 workers; 1,177 testable, 36 skipped, 137 profitable in
+  training. The pick was NSE:SWIGGY on 15m, a recent listing whose training
+  window is short, and the locked year turned Rs 1,00,000 into Rs 72,980
+  (holding the same stock: Rs 72,395). Verdict FAILED, which is correct.
+  **For piece 2:** the pick rule rewards annualised return, so a short, lucky
+  window can outrank a long steady one. Consider requiring a minimum training
+  span (two years, say) before a combination may be picked.

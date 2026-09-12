@@ -35,7 +35,11 @@ at until it is needed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import ClassVar
+
+from config import IST
 
 # Rates as understood on 2026-08-21, expressed as fractions of turnover.
 # Sources are the standard published NSE/SEBI schedules; RE-VERIFY before
@@ -49,6 +53,13 @@ GST_RATE = 0.18               # on brokerage + exchange + SEBI
 # Dhan's intraday plan: whichever is lower, per order.
 DEFAULT_BROKERAGE_PER_ORDER = 20.0
 DEFAULT_BROKERAGE_PCT = 0.0003          # 0.03%
+
+# Delivery (CNC): a position still held after the day it was opened.
+# As understood on 2026-09-11; RE-VERIFY before trusting a rupee figure.
+STT_DELIVERY = 0.001                 # 0.1% on BOTH legs (intraday: sell only)
+STAMP_DUTY_DELIVERY_BUY = 0.00015    # 0.015% on the buy side
+DEFAULT_DELIVERY_BROKERAGE_PER_ORDER = 0.0   # Dhan charges no delivery brokerage
+DEFAULT_DP_CHARGE_PER_SELL = 15.0            # depository charge per sell incl. GST (approx.)
 
 
 @dataclass(frozen=True)
@@ -106,6 +117,92 @@ class CostModel:
             f"stamp {self.stamp_duty_buy * 100:g}% buy, "
             f"GST {self.gst_rate * 100:g}%"
         )
+
+
+@dataclass(frozen=True)
+class DeliveryCostModel:
+    """Charges for a round trip held overnight.
+
+    Differs from intraday in three places that matter: STT on BOTH legs at a
+    much higher rate, a higher stamp duty, and a depository charge on the sale.
+    Charging an overnight position intraday rates flattered every multi-day
+    backtest by roughly 0.15% per trade (docs/research/2026-08-30 §4).
+    """
+
+    brokerage_per_order: float = DEFAULT_DELIVERY_BROKERAGE_PER_ORDER
+    stt: float = STT_DELIVERY
+    exchange_txn: float = EXCHANGE_TXN
+    sebi_fees: float = SEBI_FEES
+    stamp_duty_buy: float = STAMP_DUTY_DELIVERY_BUY
+    gst_rate: float = GST_RATE
+    dp_charge_per_sell: float = DEFAULT_DP_CHARGE_PER_SELL
+
+    def round_trip(self, entry_price: float, exit_price: float, quantity: float) -> float:
+        """Total charges for a completed overnight trade, in rupees."""
+        if quantity <= 0:
+            return 0.0
+
+        buy_turnover = entry_price * quantity
+        sell_turnover = exit_price * quantity
+        turnover = buy_turnover + sell_turnover
+
+        brokerage = 2 * self.brokerage_per_order
+        exchange = turnover * self.exchange_txn
+        sebi = turnover * self.sebi_fees
+        stt = turnover * self.stt                      # both legs
+        stamp = buy_turnover * self.stamp_duty_buy     # buy side only
+        gst = (brokerage + exchange + sebi) * self.gst_rate
+
+        return round(
+            brokerage + exchange + sebi + stt + stamp + gst + self.dp_charge_per_sell, 4
+        )
+
+    def describe(self) -> str:
+        return (
+            f"delivery: STT {self.stt * 100:g}% both legs, "
+            f"stamp {self.stamp_duty_buy * 100:g}% buy, "
+            f"DP Rs{self.dp_charge_per_sell:g}/sell, "
+            f"brokerage Rs{self.brokerage_per_order:g}/order"
+        )
+
+
+@dataclass(frozen=True)
+class HoldingCostModel:
+    """Intraday charges for a same-day trade, delivery charges otherwise.
+
+    Decided per TRADE, not per strategy: an intraday strategy that happens to
+    hold a position overnight pays delivery charges for that trade, which is
+    what a broker would actually charge. The day boundary is India midnight.
+    """
+
+    intraday: CostModel = field(default_factory=CostModel)
+    delivery: DeliveryCostModel = field(default_factory=DeliveryCostModel)
+
+    # Read by backtest._make_trade: this model needs the trade's timestamps.
+    prices_by_holding: ClassVar[bool] = True
+
+    def is_delivery(self, entry_ts: datetime, exit_ts: datetime) -> bool:
+        return entry_ts.astimezone(IST).date() != exit_ts.astimezone(IST).date()
+
+    def round_trip(
+        self,
+        entry_price: float,
+        exit_price: float,
+        quantity: float,
+        *,
+        entry_ts: datetime | None = None,
+        exit_ts: datetime | None = None,
+    ) -> float:
+        if entry_ts is None or exit_ts is None:
+            raise ValueError(
+                "HoldingCostModel needs entry_ts and exit_ts: without them it "
+                "cannot tell a same-day trade from an overnight one."
+            )
+        model = self.delivery if self.is_delivery(entry_ts, exit_ts) else self.intraday
+        return model.round_trip(entry_price, exit_price, quantity)
+
+    def describe(self) -> str:
+        return f"same day: {self.intraday.describe()}; overnight: {self.delivery.describe()}"
 
 
 @dataclass(frozen=True)
