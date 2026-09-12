@@ -2235,7 +2235,6 @@ from typing import Any
 from config import IST, UTC, get_settings, use_utf8_stdout
 
 BOOKKEEPING = ("status", "raw_source", "validation_errors")
-REFERENCE_SYMBOL = "NSE:RELIANCE"
 FAR_PAST = datetime(2000, 1, 1, tzinfo=UTC)
 FAR_FUTURE = datetime(2100, 1, 1, tzinfo=UTC)
 
@@ -2274,7 +2273,12 @@ def main(argv: list[str] | None = None) -> int:
     from research.prices import FrozenPriceReader, load_adjustments, load_instrument_ids
     from research.sweep import count_results, run_sweep
     from research.universe import INDEXES, STOCK_TIMEFRAMES, document_uses_volume, research_combos
-    from research.windows import LOCKED_DAYS, ResearchWindows, data_end_from
+    from research.windows import (
+        LOCKED_DAYS,
+        ResearchWindows,
+        data_end_from,
+        universe_data_end,
+    )
     from strategy.v3 import is_v3_document, parse_machine
     from strategy_schema import parse_strategy_dict
     from universes import newest_snapshot, parse_constituent_csv
@@ -2292,22 +2296,32 @@ def main(argv: list[str] | None = None) -> int:
         stocks = stocks[: args.max_stocks]
     timeframes = tuple(t.strip() for t in args.stock_timeframes.split(",") if t.strip()) or STOCK_TIMEFRAMES
 
-    ids = load_instrument_ids(store._client, [*stocks, *INDEXES, REFERENCE_SYMBOL])
-    stock_ids = [ids[s] for s in {*stocks, REFERENCE_SYMBOL}]
+    ids = load_instrument_ids(store._client, [*stocks, *INDEXES])
+    stock_ids = [ids[s] for s in stocks]
     reader = FrozenPriceReader(settings.candle_root, ids, load_adjustments(store._client, stock_ids),
                                frozenset(INDEXES))
 
-    data_end = data_end_from(
-        reader.candles(REFERENCE_SYMBOL, "5m", FAR_PAST, FAR_FUTURE).index,
-        reader.candles(REFERENCE_SYMBOL, "day", FAR_PAST, FAR_FUTURE).index,
-    )
+    # DATA_END comes from the whole universe, never one reference symbol. In
+    # August 2026, 184 of 200 stocks lost their closing candles every day; a
+    # single symbol would have let that month into the locked year.
+    symbol_ends = []
+    for symbol in stocks:
+        try:
+            symbol_ends.append(data_end_from(
+                reader.candles(symbol, "5m", FAR_PAST, FAR_FUTURE).index,
+                reader.candles(symbol, "day", FAR_PAST, FAR_FUTURE).index,
+            ))
+        except ValueError:
+            continue        # no complete session at all: counts against coverage
+    data_end = universe_data_end(symbol_ends)
     windows = ResearchWindows(data_end)
     volume_rules = document_uses_volume(doc)
     combos = research_combos(stocks, include_indexes=not volume_rules, stock_timeframes=timeframes)
     cost_model = HoldingCostModel()
 
     print(f"strategy   {args.strategy}")
-    print(f"prices     frozen at {data_end} (DATA_END)")
+    print(f"prices     frozen at {data_end} (DATA_END, complete for "
+          f"{len(symbol_ends)} of {len(stocks)} stocks)")
     print(f"training   before {windows.locked_from}")
     print(f"locked     {windows.locked_from} -> {data_end}  (opened once, at the end)")
     print(f"universe   NIFTY200 as of {as_of} ({len(stocks)} stocks)"
@@ -2379,9 +2393,9 @@ Expected: all PASS.
 - [ ] **Step 5: Quick real run**
 
 Run: `./.venv/Scripts/python.exe -m research.evaluate --strategy N200-PULLBACK-DAY --max-stocks 5 --stock-timeframes day --workers 2`
-Expected, in order: `prices     frozen at 2026-08-27 (DATA_END)`, `locked     2025-08-28 -> 2026-08-27`, `testing    23 combinations` (5 stocks × day + 9 indexes × 2), a `TRAINING` line, then either a `PICK` block with `LOCKED YEAR` or `No qualifying pick`. No traceback.
+Expected, in order: `prices     frozen at 2026-07-31`, `locked     2025-08-01 -> 2026-07-31`, `testing    23 combinations` (5 stocks × day + 9 indexes × 2), a `TRAINING` line, then either a `PICK` block with `LOCKED YEAR` or `No qualifying pick`. No traceback.
 
-If `DATA_END` prints anything other than `2026-08-27`, STOP and report: the reference symbol's stored data differs from what the spec measured.
+`--max-stocks 5` places DATA_END from those five stocks alone, so a quick run can legitimately print a later date than the full run. If the FULL run (Step 6) prints anything other than `2026-07-31`, STOP and report: the stored data has changed since it was measured on 2026-09-12.
 
 - [ ] **Step 6: Full run**
 
@@ -2453,3 +2467,15 @@ they differ, the committed code and this section win.
   and keeps trades entered in the locked year, so a position still open at the
   boundary can delay the first locked-year entry. Accepted for piece 1; noted
   so it is judged deliberately.
+
+- **DATA_END is 2026-07-31, decided across the universe** (owner's decision,
+  2026-09-12). Measured from the stored files: every stock has all 23 July
+  sessions complete, but in August 161 stocks have no complete session at all,
+  23 have one, and only 16 run to the end of the month; 50 stocks' daily
+  candles stop on 2026-08-21. The locked year is therefore
+  **2025-08-01 → 2026-07-31**. `research/windows.py` gained
+  `universe_data_end(symbol_ends, coverage=0.9)`, and Task 12 places DATA_END
+  from every stock rather than from NSE:RELIANCE.
+- **Task 11 still downloads index history through 2026-08-27.** Candles after
+  DATA_END are simply never read, and keeping them costs nothing if the August
+  stock data is ever repaired.
