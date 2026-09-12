@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -95,3 +96,37 @@ def test_empty_children_write_nothing():
     client = FakeClient()
     save_run(client, **payload(combos=0, trades=0, equity=0))
     assert totals(client.log) == {"research_runs": 1}
+
+
+def test_dates_and_timestamps_are_sent_as_iso_text():
+    """PostgREST sends JSON, which cannot carry a datetime object."""
+    captured: dict[str, list] = {}
+    save_run(
+        FakeClient(captured=captured),
+        run={
+            "status": "completed",
+            "started_at": datetime(2026, 9, 12, 1, 0, tzinfo=timezone.utc),
+            "data_end": date(2026, 7, 31),
+        },
+        locked_trades=[{"entry_at": datetime(2025, 8, 4, 4, 30, tzinfo=timezone.utc)}],
+        equity=[{"day": date(2025, 8, 1), "lakh_balance": 100_000.0}],
+    )
+    run = captured["research_runs"][0]
+    assert run["started_at"] == "2026-09-12T01:00:00+00:00"
+    assert run["data_end"] == "2026-07-31"
+    assert captured["research_locked_trades"][0]["entry_at"] == "2025-08-04T04:30:00+00:00"
+    assert captured["research_locked_equity"][0]["day"] == "2025-08-01"
+    assert captured["research_locked_equity"][0]["lakh_balance"] == 100_000.0
+
+
+def test_json_conversion_leaves_everything_else_alone():
+    captured: dict[str, list] = {}
+    save_run(
+        FakeClient(captured=captured),
+        run={"status": "completed", "started_at": None,
+             "warnings": ["frozen prices"], "combos_tested": 1213, "verdict_passed": False},
+    )
+    run = captured["research_runs"][0]
+    assert run["warnings"] == ["frozen prices"]
+    assert run["combos_tested"] == 1213
+    assert run["verdict_passed"] is False

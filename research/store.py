@@ -9,6 +9,7 @@ names the run id so the rest can be re-attached by hand if it ever matters.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 from typing import Any
 
 from db import to_native
@@ -26,8 +27,27 @@ class ResearchStoreError(RuntimeError):
     """A research row could not be written. The message says which table."""
 
 
+def _jsonable(value: Any) -> Any:
+    """Dates and timestamps as ISO text.
+
+    `to_native` handles numpy scalars but leaves datetime objects alone, and
+    PostgREST sends JSON - so a row carrying a real `datetime` fails at the
+    insert with "Object of type datetime is not JSON serializable", after the
+    whole run has been computed. Converted here, at the database boundary, so
+    the builders stay typed and testable.
+    """
+    if isinstance(value, datetime):     # checked first: datetime is a date
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
 def _insert(client: Any, table: str, rows: Sequence[Mapping[str, Any]], run_id: str | None):
-    payload = [to_native(dict(r)) for r in rows]
+    payload = [
+        {key: _jsonable(value) for key, value in to_native(dict(r)).items()}
+        for r in rows
+    ]
     try:
         return client.table(table).insert(payload).execute()
     except Exception as exc:        # noqa: BLE001 - re-raised with context
