@@ -1,0 +1,124 @@
+"""Build what Opus is asked, from training-side facts only.
+
+Every input here is a TrainingSummary, a research note, or a format document.
+None of them carries a locked-year number, which is the whole of design 2.4:
+the builder cannot use what it cannot see. A test asserts the built text
+mentions nothing from the locked year.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from typing import Any
+
+from research.summary import TrainingSummary
+
+PROPOSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["title", "description", "hypothesis", "strategy_yaml", "change_note"],
+    "properties": {
+        "title": {"type": "string", "maxLength": 80},
+        "description": {"type": "string", "maxLength": 400},
+        "hypothesis": {"type": "string", "maxLength": 600},
+        "strategy_yaml": {"type": "string"},
+        "change_note": {"type": "string", "maxLength": 400},
+    },
+}
+
+REVIEW_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["why_failed", "why_worked", "lessons", "decision"],
+    "properties": {
+        "why_failed": {"type": "string", "maxLength": 800},
+        "why_worked": {"type": "string", "maxLength": 800},
+        "lessons": {"type": "string", "maxLength": 800},
+        "decision": {"type": "string", "enum": ["next_version", "new_idea", "stop"]},
+        "change_hint": {"type": "string", "maxLength": 400},
+    },
+}
+
+RULES = """\
+Rules the tool applies to whatever you write, so do not spend words on them:
+- sizing is forced to notional, 100000 rupees per trade
+- the symbols and timeframe you write are replaced: every strategy is tested on
+  200 NSE stocks across 5m, 15m, 25m, 30m, 60m and day, and on 9 indexes at 60m
+  and day
+- enabled is forced to false; nothing you write can trade real or paper money
+- a short strategy MUST set session.square_off, e.g. "15:10"
+- fees are charged per trade, and a position held overnight pays delivery
+  charges (about 0.21% of turnover) rather than intraday ones
+"""
+
+
+def _summary_block(summary: TrainingSummary) -> str:
+    return json.dumps(summary.as_dict(), indent=2, default=str)
+
+
+def propose_prompt(
+    *,
+    formats: Sequence[str],
+    notes: Sequence[dict[str, Any]],
+    ideas_tried: Sequence[str],
+    previous: TrainingSummary | None = None,
+    change_hint: str | None = None,
+    error: str | None = None,
+) -> str:
+    """The ask for a strategy: a first idea, or the next version of one."""
+    parts = [
+        "You are designing ONE trading strategy to be tested on Indian equities.",
+        "",
+        RULES,
+    ]
+    if notes:
+        parts.append("\nWhat earlier days learned:")
+        for note in notes:
+            parts.append(f"- {note.get('day')}: {note.get('idea_title')} — {note.get('lessons')}")
+    if ideas_tried:
+        parts.append("\nIdeas already tried (do not repeat one that failed the same way):")
+        parts.extend(f"- {line}" for line in ideas_tried)
+    if previous is not None:
+        parts.append("\nHow your previous version did on the training years:")
+        parts.append(_summary_block(previous))
+    if change_hint:
+        parts.append(f"\nThe change to make this time: {change_hint}")
+    if error:
+        parts.append(
+            "\nYour last attempt was rejected by the checker. Fix exactly this "
+            f"and return the whole strategy again:\n{error}"
+        )
+    parts.append("\nStrategy format reference:")
+    parts.extend(formats)
+    parts.append(
+        "\nReturn the strategy as YAML in strategy_yaml. Write change_note as an "
+        "empty string for a first version, otherwise say in one line what you "
+        "changed and why."
+    )
+    return "\n".join(parts)
+
+
+def review_prompt(*, summary: TrainingSummary, version: int, versions_left: int) -> str:
+    """The ask for a verdict on a tested version, and what to do next."""
+    parts = [
+        f"Your version {version} was tested on the training years. Here is how it did.",
+        "",
+        _summary_block(summary),
+        "",
+        "Judge it honestly. A strategy that made money while simply holding the "
+        "same stocks made more has no edge; say so.",
+        "",
+        "Then set decision to one of:",
+        "- next_version: keep this idea and change one thing (say what in change_hint)",
+        "- new_idea: this idea is not worth more versions; start a different one",
+        "- stop: nothing further is worth trying today",
+    ]
+    if versions_left <= 0:
+        parts.append(
+            "\nThis was the LAST VERSION allowed today, so decision MUST be "
+            '"stop". The tool will use this version as the day\'s final one.'
+        )
+    else:
+        parts.append(f"\nVersions left today: {versions_left}.")
+    return "\n".join(parts)
