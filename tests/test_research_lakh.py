@@ -115,3 +115,52 @@ def test_the_verdict_needs_profit_ten_trades_and_a_dip_no_deeper_than_20():
     assert not passed(result(100_000.0, 10, 5.0))
     assert not passed(result(120_000.0, 9, 5.0))
     assert not passed(result(120_000.0, 30, 20.01))
+
+
+# ---------------------------------------------------------------------------
+# Daily balances for the locked-year chart
+# ---------------------------------------------------------------------------
+
+from datetime import date  # noqa: E402
+
+from research.lakh import equity_series  # noqa: E402
+
+
+def ist_days(*day_numbers: int) -> pd.DatetimeIndex:
+    return pd.DatetimeIndex([
+        datetime(2025, 1, d, 0, 0, tzinfo=IST).astimezone(UTC) for d in day_numbers
+    ])
+
+
+def test_equity_series_holds_the_balance_between_trades():
+    got = equity_series([same_day(3, 10)], FREE, day_index=ist_days(2, 3, 6, 7))
+    assert [row["day"] for row in got] == [date(2025, 1, 2), date(2025, 1, 3),
+                                           date(2025, 1, 6), date(2025, 1, 7)]
+    assert [row["lakh_balance"] for row in got] == [100_000.0, 110_000.0, 110_000.0, 110_000.0]
+
+
+def test_equity_series_ends_where_compound_ends():
+    trades = [same_day(2, 10), same_day(3, -20)]
+    series = equity_series(trades, FREE, day_index=ist_days(2, 3, 6))
+    assert series[-1]["lakh_balance"] == pytest.approx(
+        compound(trades, FREE, window_days=365).end_value
+    )
+
+
+def test_equity_series_adds_holding_when_closes_are_given():
+    days = ist_days(2, 3)
+    closes = pd.Series([100.0, 120.0], index=days)
+    got = equity_series([], FREE, day_index=days, closes=closes)
+    assert got[0]["hold_balance"] == pytest.approx(100_000.0)
+    assert got[-1]["hold_balance"] == pytest.approx(120_000.0)
+
+
+def test_holding_in_the_series_matches_the_headline_figure():
+    days = ist_days(2, 3)
+    closes = pd.Series([100.0, 120.0], index=days)
+    series = equity_series([], FREE, day_index=days, closes=closes)
+    assert series[-1]["hold_balance"] == pytest.approx(just_holding(day_candles([100, 120]), FREE))
+
+
+def test_equity_series_without_days_is_empty():
+    assert equity_series([same_day(2, 10)], FREE, day_index=pd.DatetimeIndex([])) == []
