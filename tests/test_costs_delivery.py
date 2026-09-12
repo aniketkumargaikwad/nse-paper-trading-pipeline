@@ -7,13 +7,22 @@ on the wrong leg is a silent bias in every result.
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from costs import CostModel, DeliveryCostModel  # noqa: E402
+from costs import CostModel, DeliveryCostModel, HoldingCostModel  # noqa: E402
+
+IST = ZoneInfo("Asia/Kolkata")
+UTC = ZoneInfo("UTC")
+
+
+def ist(y, mo, d, h, mi):
+    return datetime(y, mo, d, h, mi, tzinfo=IST)
 
 
 def test_delivery_stt_applies_to_both_legs():
@@ -52,3 +61,34 @@ def test_one_lakh_round_trip_is_about_a_fifth_of_a_percent():
 
 def test_zero_quantity_costs_nothing():
     assert DeliveryCostModel().round_trip(1000.0, 1100.0, 0) == 0.0
+
+
+def test_same_day_trade_is_charged_intraday():
+    got = HoldingCostModel().round_trip(
+        1000.0, 1010.0, 100, entry_ts=ist(2026, 8, 3, 9, 30), exit_ts=ist(2026, 8, 3, 15, 20)
+    )
+    assert got == pytest.approx(CostModel().round_trip(1000.0, 1010.0, 100))
+
+
+def test_trade_held_overnight_is_charged_delivery():
+    got = HoldingCostModel().round_trip(
+        1000.0, 1010.0, 100, entry_ts=ist(2026, 8, 3, 15, 0), exit_ts=ist(2026, 8, 4, 10, 0)
+    )
+    assert got == pytest.approx(DeliveryCostModel().round_trip(1000.0, 1010.0, 100))
+
+
+def test_the_day_boundary_is_india_midnight_not_utc():
+    entry, exit_ = ist(2026, 8, 3, 23, 50), ist(2026, 8, 4, 0, 10)
+    assert entry.astimezone(UTC).date() == exit_.astimezone(UTC).date()
+    assert HoldingCostModel().is_delivery(entry, exit_)
+
+
+def test_missing_timestamps_are_refused():
+    with pytest.raises(ValueError, match="entry_ts and exit_ts"):
+        HoldingCostModel().round_trip(1000.0, 1010.0, 100)
+
+
+def test_only_the_holding_model_asks_for_timestamps():
+    assert HoldingCostModel.prices_by_holding is True
+    assert not getattr(CostModel(), "prices_by_holding", False)
+    assert not getattr(DeliveryCostModel(), "prices_by_holding", False)

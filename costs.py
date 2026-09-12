@@ -35,7 +35,11 @@ at until it is needed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import ClassVar
+
+from config import IST
 
 # Rates as understood on 2026-08-21, expressed as fractions of turnover.
 # Sources are the standard published NSE/SEBI schedules; RE-VERIFY before
@@ -160,6 +164,45 @@ class DeliveryCostModel:
             f"DP Rs{self.dp_charge_per_sell:g}/sell, "
             f"brokerage Rs{self.brokerage_per_order:g}/order"
         )
+
+
+@dataclass(frozen=True)
+class HoldingCostModel:
+    """Intraday charges for a same-day trade, delivery charges otherwise.
+
+    Decided per TRADE, not per strategy: an intraday strategy that happens to
+    hold a position overnight pays delivery charges for that trade, which is
+    what a broker would actually charge. The day boundary is India midnight.
+    """
+
+    intraday: CostModel = field(default_factory=CostModel)
+    delivery: DeliveryCostModel = field(default_factory=DeliveryCostModel)
+
+    # Read by backtest._make_trade: this model needs the trade's timestamps.
+    prices_by_holding: ClassVar[bool] = True
+
+    def is_delivery(self, entry_ts: datetime, exit_ts: datetime) -> bool:
+        return entry_ts.astimezone(IST).date() != exit_ts.astimezone(IST).date()
+
+    def round_trip(
+        self,
+        entry_price: float,
+        exit_price: float,
+        quantity: float,
+        *,
+        entry_ts: datetime | None = None,
+        exit_ts: datetime | None = None,
+    ) -> float:
+        if entry_ts is None or exit_ts is None:
+            raise ValueError(
+                "HoldingCostModel needs entry_ts and exit_ts: without them it "
+                "cannot tell a same-day trade from an overnight one."
+            )
+        model = self.delivery if self.is_delivery(entry_ts, exit_ts) else self.intraday
+        return model.round_trip(entry_price, exit_price, quantity)
+
+    def describe(self) -> str:
+        return f"same day: {self.intraday.describe()}; overnight: {self.delivery.describe()}"
 
 
 @dataclass(frozen=True)
