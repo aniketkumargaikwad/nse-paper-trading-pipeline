@@ -1460,7 +1460,7 @@ its window. Results come back in the order the combinations were given.
 
 A combination that cannot be read or simulated becomes a skip with a reason,
 never an exception that ends the run: one young stock with too little history
-for an ATR must not cost the other 1,217 results.
+for an ATR must not cost the other 1,212 results.
 """
 
 from __future__ import annotations
@@ -2425,7 +2425,7 @@ Expected, in order: `prices     frozen at 2026-07-31`, `locked     2025-08-01 ->
 - [ ] **Step 6: Full run**
 
 Run: `./.venv/Scripts/python.exe -m research.evaluate --strategy N200-PULLBACK-DAY`
-Expected: `testing    1218 combinations on 8 worker(s)...` (worker count = this machine's logical CPUs), then the full report. Note the `TRAINING` elapsed seconds — piece 4 needs it for the time budget.
+Expected: `testing    1213 combinations on 8 worker(s)...` (worker count = this machine's logical CPUs), then the full report. Note the `TRAINING` elapsed seconds — piece 4 needs it for the time budget.
 
 - [ ] **Step 7: Commit**
 
@@ -2510,3 +2510,11 @@ they differ, the committed code and this section win.
 - **Task 12 warns when the pick's own candles stop before DATA_END.** Coverage
   is a floor, so up to 10% of stocks may end earlier; such a winner would be
   scored over a locked year it does not fully have.
+- **Five indexes are excluded from DAILY testing** (`INDEX_DAILY_UNRELIABLE` in
+  `research/universe.py`, commit `6cc527e`): NIFTYAUTO, NIFTYFMCG, NIFTYMETAL,
+  FINNIFTY and NIFTYMID100FREE. Measured 2026-09-12 after the Yahoo download:
+  234 daily bars inside the locked year against NIFTY's 245, the 11 missing
+  days forming one block over 17-31 July 2026 - the final two weeks of the
+  locked year. Their 60-minute series are complete, so they are still tested
+  there. **The combination count is therefore 1213, not 1218**:
+  200 stocks x 6 timeframes + 4 indexes x 2 + 5 indexes x 1.
