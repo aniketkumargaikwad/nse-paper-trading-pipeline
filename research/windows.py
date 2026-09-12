@@ -8,6 +8,7 @@ ParquetCandleBackend.read_candles expects.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
@@ -17,6 +18,7 @@ from config import IST, SUPPORTED_TIMEFRAMES, UTC
 
 LAST_BAR_START_IST = time(15, 25)     # the final 5-minute candle of an NSE session
 LOCKED_DAYS = 365
+DATA_END_COVERAGE = 0.9
 
 DAILY_TRAINING_START = date(2010, 1, 1)
 STOCK_INTRADAY_TRAINING_START = date(2017, 4, 3)    # where Dhan's intraday archive begins
@@ -66,6 +68,23 @@ def data_end_from(five_min_index: pd.DatetimeIndex, day_index: pd.DatetimeIndex)
     if not both:
         raise ValueError("no date is complete in both the 5-minute and the daily candles")
     return max(both)
+
+
+def universe_data_end(symbol_ends: Sequence[date], *, coverage: float = DATA_END_COVERAGE) -> date:
+    """The latest date at least `coverage` of symbols are complete through.
+
+    A plain minimum would let one stale or delisted symbol drag the whole
+    universe back a year; a maximum would admit a month that only a handful of
+    symbols actually have. In August 2026, 184 of 200 stocks lost their closing
+    candles, so the honest answer for the universe is July.
+    """
+    if not 0 < coverage <= 1:
+        raise ValueError(f"coverage must be above 0 and at most 1, got {coverage}")
+    if not symbol_ends:
+        raise ValueError("no symbol produced a complete session, so DATA_END cannot be placed")
+    ordered = sorted(symbol_ends)
+    index = int((1 - coverage) * len(ordered))
+    return ordered[min(index, len(ordered) - 1)]
 
 
 def trim_to_data_end(frame: pd.DataFrame, data_end: date) -> pd.DataFrame:

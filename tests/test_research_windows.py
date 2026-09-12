@@ -18,6 +18,7 @@ from research.windows import (  # noqa: E402
     ist_midnight,
     training_start,
     trim_to_data_end,
+    universe_data_end,
 )
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -157,6 +158,42 @@ def test_trim_keeps_data_end_and_drops_later_candles():
     ])
     frame = pd.DataFrame({"close": [1.0, 2.0]}, index=idx)
     assert list(trim_to_data_end(frame, date(2026, 8, 27))["close"]) == [1.0]
+
+
+def test_universe_data_end_ignores_a_few_stragglers():
+    ends = [date(2026, 7, 31)] * 161 + [date(2026, 8, 6)] * 23 + [date(2026, 8, 27)] * 4 + [date(2026, 8, 28)] * 12
+    assert universe_data_end(ends) == date(2026, 7, 31)
+
+
+def test_one_stale_symbol_does_not_drag_the_whole_universe_back():
+    ends = [date(2025, 1, 2)] + [date(2026, 7, 31)] * 199
+    assert universe_data_end(ends) == date(2026, 7, 31)
+
+
+def test_coverage_is_a_floor_not_an_average():
+    """90% coverage means at least 90% of symbols are complete through the date."""
+    ends = [date(2026, 1, 1)] * 30 + [date(2026, 7, 31)] * 70
+    assert universe_data_end(ends) == date(2026, 1, 1)
+
+
+def test_a_stricter_coverage_picks_an_earlier_date():
+    ends = [date(2026, 1, 1)] * 5 + [date(2026, 7, 31)] * 95
+    assert universe_data_end(ends, coverage=1.0) == date(2026, 1, 1)
+    assert universe_data_end(ends, coverage=0.9) == date(2026, 7, 31)
+
+
+def test_a_single_symbol_is_its_own_data_end():
+    assert universe_data_end([date(2026, 7, 31)]) == date(2026, 7, 31)
+
+
+def test_no_symbol_ends_is_refused():
+    with pytest.raises(ValueError, match="no symbol"):
+        universe_data_end([])
+
+
+def test_coverage_outside_zero_to_one_is_refused():
+    with pytest.raises(ValueError, match="coverage"):
+        universe_data_end([date(2026, 7, 31)], coverage=1.5)
 
 
 def test_closed_interval_boundaries_match_what_the_backend_expects():
