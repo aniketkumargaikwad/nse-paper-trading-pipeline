@@ -2518,3 +2518,12 @@ they differ, the committed code and this section win.
   locked year. Their 60-minute series are complete, so they are still tested
   there. **The combination count is therefore 1213, not 1218**:
   200 stocks x 6 timeframes + 4 indexes x 2 + 5 indexes x 1.
+
+- **First full run, 2026-09-12** (`N200-PULLBACK-DAY`): 1,213 combinations in
+  **929 s** on 8 workers; 1,177 testable, 36 skipped, 137 profitable in
+  training. The pick was NSE:SWIGGY on 15m, a recent listing whose training
+  window is short, and the locked year turned Rs 1,00,000 into Rs 72,980
+  (holding the same stock: Rs 72,395). Verdict FAILED, which is correct.
+  **For piece 2:** the pick rule rewards annualised return, so a short, lucky
+  window can outrank a long steady one. Consider requiring a minimum training
+  span (two years, say) before a combination may be picked.
