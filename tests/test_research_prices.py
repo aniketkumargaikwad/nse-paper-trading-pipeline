@@ -218,3 +218,77 @@ def test_a_truncated_price_adjustments_page_is_a_runtime_error(tmp_path):
     client = StubClient([row] * 1000)
     with pytest.raises(RuntimeError):
         load_adjustments(client, [7])
+
+
+# ---------------------------------------------------------------------------
+# The loaders: chunked Supabase reads, run once in the parent process.
+#
+# FakeClient below FILTERS, unlike the deliberately dumb StubClient above, so
+# these tests can check which rows each query actually asked for.
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from research.prices import load_adjustments, load_instrument_ids  # noqa: E402
+
+
+class FakeQuery:
+    def __init__(self, rows, log):
+        self._rows, self._log, self._filters = rows, log, []
+
+    def select(self, columns):
+        self._log.append(("select", columns))
+        return self
+
+    def in_(self, column, values):
+        self._filters.append(("in", column, list(values)))
+        return self
+
+    def eq(self, column, value):
+        self._filters.append(("eq", column, value))
+        return self
+
+    def order(self, column):
+        return self
+
+    def execute(self):
+        rows = self._rows
+        for kind, column, value in self._filters:
+            rows = [r for r in rows if (r[column] in value if kind == "in" else r[column] == value)]
+        return SimpleNamespace(data=rows)
+
+
+class FakeClient:
+    def __init__(self, tables):
+        self.tables, self.log = tables, []
+
+    def table(self, name):
+        return FakeQuery(self.tables[name], self.log)
+
+
+def test_instrument_ids_are_looked_up_in_chunks():
+    rows = [{"id": i, "symbol": f"NSE:S{i}"} for i in range(250)]
+    client = FakeClient({"instruments": rows})
+    ids = load_instrument_ids(client, [r["symbol"] for r in rows])
+    assert ids["NSE:S249"] == 249
+    assert sum(1 for entry in client.log if entry[0] == "select") == 3
+
+
+def test_a_missing_instrument_is_named():
+    client = FakeClient({"instruments": [{"id": 1, "symbol": "NSE:A"}]})
+    with pytest.raises(LookupError, match="NSE:B"):
+        load_instrument_ids(client, ["NSE:A", "NSE:B"])
+
+
+def test_adjustments_are_grouped_by_instrument_and_only_5_minute():
+    rows = [
+        {"instrument_id": 1, "timeframe": "5m", "effective_from": "2020-01-01",
+         "effective_to": "2020-06-30", "price_factor": 0.1, "volume_factor": None, "sample_days": 5},
+        {"instrument_id": 1, "timeframe": "1m", "effective_from": "2020-01-01",
+         "effective_to": "2020-06-30", "price_factor": 0.1, "volume_factor": 10.0, "sample_days": 5},
+    ]
+    got = load_adjustments(FakeClient({"price_adjustments": rows}), [1, 2])
+    assert got[2] == []
+    assert len(got[1]) == 1
+    assert got[1][0].effective_from == date(2020, 1, 1)
+    assert got[1][0].volume_factor == 1.0
