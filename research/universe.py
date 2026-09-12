@@ -33,6 +33,18 @@ INDEXES: dict[str, str] = {
     "NSE:NIFTYMID100FREE": "NIFTY_MIDCAP_100.NS",
 }
 
+# Indexes whose Yahoo DAILY series is missing 17-31 July 2026 - the last two
+# weeks of the locked year. Measured 2026-09-12: 234 daily bars inside the
+# locked year against NIFTY's 245, while their 60-minute series are complete.
+# A daily result here would be scored over a year missing its own ending.
+INDEX_DAILY_UNRELIABLE: frozenset[str] = frozenset({
+    "NSE:NIFTYAUTO",
+    "NSE:NIFTYFMCG",
+    "NSE:NIFTYMETAL",
+    "NSE:FINNIFTY",
+    "NSE:NIFTYMID100FREE",
+})
+
 # Everything that reads volume, by name, in either strategy format. Kept as a
 # public constant (rather than embedded in the regex) so a test can check it
 # against strategy.vocabulary and catch a new volume-based indicator that
@@ -86,5 +98,10 @@ def research_combos(
         )
     combos = [Combo(s, tf, False) for s in stocks for tf in stock_timeframes]
     if include_indexes:
-        combos += [Combo(s, tf, True) for s in INDEXES for tf in INDEX_TIMEFRAMES]
+        combos += [
+            Combo(s, tf, True)
+            for s in INDEXES
+            for tf in INDEX_TIMEFRAMES
+            if tf != "day" or s not in INDEX_DAILY_UNRELIABLE
+        ]
     return combos

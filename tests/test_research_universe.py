@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest  # noqa: E402
 
 from research.universe import (  # noqa: E402
+    INDEX_DAILY_UNRELIABLE,
     INDEX_TIMEFRAMES,
     INDEXES,
     STOCK_TIMEFRAMES,
@@ -27,11 +28,18 @@ from strategy.vocabulary import (  # noqa: E402
 )
 
 
-def test_two_hundred_stocks_and_nine_indexes_make_1218_combinations():
+def test_two_hundred_stocks_and_nine_indexes_make_1213_combinations():
     stocks = [f"NSE:S{i}" for i in range(200)]
     combos = research_combos(stocks, include_indexes=True)
     assert len(INDEXES) == 9
-    assert len(combos) == 200 * len(STOCK_TIMEFRAMES) + 9 * len(INDEX_TIMEFRAMES) == 1218
+    reliable_daily = len(INDEXES) - len(INDEX_DAILY_UNRELIABLE)
+    assert (
+        len(combos)
+        == 200 * len(STOCK_TIMEFRAMES)
+        + reliable_daily * len(INDEX_TIMEFRAMES)
+        + len(INDEX_DAILY_UNRELIABLE) * 1
+        == 1213
+    )
 
 
 def test_indexes_are_only_tested_on_hourly_and_daily():
@@ -127,3 +135,23 @@ def test_bare_string_stock_timeframes_is_rejected():
 def test_unknown_stock_timeframe_is_rejected():
     with pytest.raises(ValueError):
         research_combos(["NSE:A"], include_indexes=False, stock_timeframes=("1h",))
+
+
+def test_index_daily_unreliable_symbols_are_keys_of_indexes():
+    """A typo here would silently exclude nothing."""
+    assert INDEX_DAILY_UNRELIABLE <= set(INDEXES)
+
+
+def test_sparse_daily_indexes_are_tested_hourly_but_not_daily():
+    combos = research_combos([], include_indexes=True)
+    for symbol in INDEX_DAILY_UNRELIABLE:
+        timeframes = {c.timeframe for c in combos if c.symbol == symbol}
+        assert timeframes == {"60m"}
+
+
+def test_reliable_daily_indexes_are_tested_both_hourly_and_daily():
+    reliable = set(INDEXES) - INDEX_DAILY_UNRELIABLE
+    combos = research_combos([], include_indexes=True)
+    for symbol in reliable:
+        timeframes = {c.timeframe for c in combos if c.symbol == symbol}
+        assert timeframes == {"60m", "day"}
