@@ -10,7 +10,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from research.brain import BrainError, BrainStopped, Claude, build_command  # noqa: E402
+from research.brain import (  # noqa: E402
+    BrainError,
+    BrainStopped,
+    Claude,
+    build_command,
+)
 
 SCHEMA = {"type": "object", "required": ["a"], "properties": {"a": {"type": "string"}}}
 
@@ -27,47 +32,82 @@ class FakeRun:
         return self
 
 
-def envelope(structured=None, result="ok"):
-    body = {"result": result, "session_id": "s1", "total_cost_usd": 0.12}
-    if structured is not None:
-        body["structured_output"] = structured
-    return json.dumps(body)
+def envelope(result="ok"):
+    return json.dumps({"result": result, "session_id": "s1", "total_cost_usd": 0.12})
+
+
+def answered(**fields):
+    """What Claude replies with: the JSON object as plain text."""
+    return envelope(json.dumps(fields))
 
 
 def test_the_command_removes_every_tool():
-    command = build_command("do it", SCHEMA, model="opus")
+    command = build_command("do it", model="opus")
     assert "--disallowed-tools" in command
     assert command[command.index("--disallowed-tools") + 1] == "*"
     assert "--safe-mode" in command
     assert "--bare" not in command          # bare mode refuses the Pro login
 
 
-def test_the_command_asks_for_the_schema_and_json():
-    command = build_command("do it", SCHEMA, model="opus")
+def test_the_command_asks_for_json_in_words_not_with_the_schema_flag():
+    """--json-schema is a TOOL, and the denylist blocks it. See brain.py."""
+    command = build_command("do it", model="opus")
     assert command[command.index("--output-format") + 1] == "json"
-    assert json.loads(command[command.index("--json-schema") + 1]) == SCHEMA
+    assert "--json-schema" not in command
+    assert command[command.index("-p") + 1] == "do it"
 
 
-def test_the_command_names_the_model_and_allows_one_turn():
-    command = build_command("do it", SCHEMA, model="opus")
+def test_the_schema_travels_on_stdin_not_in_an_argument():
+    """A brace-heavy argument loses later flags on Windows. See brain.py."""
+    run = FakeRun(stdout=answered(a="hello"))
+    Claude(runner=run).ask("the context", SCHEMA)
+    command, kwargs = run.calls[0]
+    assert json.dumps(SCHEMA) in kwargs["input"]
+    assert not any(json.dumps(SCHEMA) in part for part in command)
+
+
+def test_the_command_names_the_model_and_caps_the_turns():
+    command = build_command("do it", model="opus")
     assert command[command.index("--model") + 1] == "opus"
-    assert command[command.index("--max-turns") + 1] == "1"
+    assert command[command.index("--max-turns") + 1] == "2"
 
 
-def test_a_structured_reply_comes_back_as_a_dict():
-    run = FakeRun(stdout=envelope({"a": "hello"}))
+def test_a_json_reply_comes_back_as_a_dict():
+    run = FakeRun(stdout=answered(a="hello"))
+    assert Claude(runner=run).ask("prompt", SCHEMA) == {"a": "hello"}
+
+
+def test_a_fenced_reply_is_still_read():
+    run = FakeRun(stdout=envelope('```json\n{"a": "hello"}\n```'))
+    assert Claude(runner=run).ask("prompt", SCHEMA) == {"a": "hello"}
+
+
+def test_a_reply_wrapped_in_chat_is_still_read():
+    run = FakeRun(stdout=envelope('Sure! {"a": "hello"} — hope that helps.'))
     assert Claude(runner=run).ask("prompt", SCHEMA) == {"a": "hello"}
 
 
 def test_the_prompt_is_piped_on_stdin():
-    run = FakeRun(stdout=envelope({"a": "hello"}))
+    run = FakeRun(stdout=answered(a="hello"))
     Claude(runner=run).ask("a very long context", SCHEMA)
-    assert run.calls[0][1]["input"] == "a very long context"
+    assert run.calls[0][1]["input"].startswith("a very long context")
 
 
-def test_a_reply_without_structured_output_is_an_error():
-    run = FakeRun(stdout=envelope(None, result="I cannot do that"))
-    with pytest.raises(BrainError, match="no structured output"):
+def test_a_reply_missing_a_required_field_is_an_error_that_names_it():
+    run = FakeRun(stdout=answered(b="hello"))
+    with pytest.raises(BrainError, match="missing a"):
+        Claude(runner=run).ask("prompt", SCHEMA)
+
+
+def test_a_reply_that_is_not_json_is_an_error_that_quotes_it():
+    run = FakeRun(stdout=envelope("I cannot do that"))
+    with pytest.raises(BrainError, match="I cannot do that"):
+        Claude(runner=run).ask("prompt", SCHEMA)
+
+
+def test_an_empty_reply_says_why_it_was_empty():
+    run = FakeRun(stdout=json.dumps({"result": "", "subtype": "error_max_turns"}))
+    with pytest.raises(BrainError, match="error_max_turns"):
         Claude(runner=run).ask("prompt", SCHEMA)
 
 
@@ -84,7 +124,7 @@ def test_unreadable_output_is_an_error_that_quotes_it():
     "Failed to authenticate: OAuth session expired and could not be refreshed",
 ])
 def test_a_usage_or_auth_failure_stops_the_day(text):
-    run = FakeRun(stdout=envelope(None, result=text), returncode=1)
+    run = FakeRun(stdout=envelope(text), returncode=1)
     with pytest.raises(BrainStopped):
         Claude(runner=run).ask("prompt", SCHEMA)
 
@@ -92,7 +132,7 @@ def test_a_usage_or_auth_failure_stops_the_day(text):
 def test_an_auth_failure_says_how_to_fix_it():
     """A credential problem has one fix, and the message should name it."""
     run = FakeRun(
-        stdout=envelope(None, result="Failed to authenticate: OAuth session expired"),
+        stdout=envelope("Failed to authenticate: OAuth session expired"),
         returncode=1,
     )
     with pytest.raises(BrainStopped, match="claude setup-token"):
@@ -100,7 +140,7 @@ def test_an_auth_failure_says_how_to_fix_it():
 
 
 def test_a_usage_limit_message_is_not_buried_in_login_advice():
-    run = FakeRun(stdout=envelope(None, result="Claude usage limit reached"), returncode=1)
+    run = FakeRun(stdout=envelope("Claude usage limit reached"), returncode=1)
     with pytest.raises(BrainStopped) as caught:
         Claude(runner=run).ask("prompt", SCHEMA)
     assert "setup-token" not in str(caught.value)

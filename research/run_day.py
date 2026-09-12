@@ -30,7 +30,13 @@ from pathlib import Path
 from typing import Any
 
 from config import IST, UTC, get_settings, use_utf8_stdout
+from research.brain import BrainError, BrainStopped
 from research.evaluate import _PENDING, _rupees, locked_year, prepare_run
+
+# How many times a reply we cannot read is asked for again. The answer shape
+# is asked for in words rather than enforced by the CLI (see research.brain),
+# so a stray sentence around the JSON is possible, and cheap to re-ask.
+BRAIN_ATTEMPTS = 3
 
 # How much history the prompt builder is given. Thirty days of notes is what
 # design §4 asks for; the idea index goes wider because its lines are short
@@ -137,6 +143,23 @@ class OpusBrain:
     def __init__(self, claude: Any, formats: Sequence[str], *, echo: Any = print) -> None:
         self._claude, self._formats, self._echo = claude, formats, echo
 
+    def _ask(self, prompt: str, schema: dict[str, Any], instruction: str) -> dict[str, Any]:
+        """Ask once, and again if the reply cannot be read.
+
+        One unreadable reply is a stray sentence around the JSON. Three in a
+        row is the day being over: raised as a stop so the versions already
+        finished are kept and the locked year is still opened, rather than as
+        a crash that would throw the morning away.
+        """
+        last: BrainError | None = None
+        for attempt in range(1, BRAIN_ATTEMPTS + 1):
+            try:
+                return self._claude.ask(prompt, schema, instruction=instruction)
+            except BrainError as exc:
+                last = exc
+                self._echo(f"  unreadable reply ({attempt}/{BRAIN_ATTEMPTS}): {str(exc)[:160]}")
+        raise BrainStopped(f"Claude's reply could not be read {BRAIN_ATTEMPTS} times: {last}")
+
     def propose(self, *, notes, ideas_tried, previous, change_hint, error) -> dict[str, Any]:
         from research.prompts import PROPOSE_SCHEMA, propose_prompt
 
@@ -146,13 +169,13 @@ class OpusBrain:
             formats=self._formats, notes=notes, ideas_tried=ideas_tried,
             previous=previous, change_hint=change_hint, error=error,
         )
-        return self._claude.ask(prompt, PROPOSE_SCHEMA, instruction=PROPOSE_INSTRUCTION)
+        return self._ask(prompt, PROPOSE_SCHEMA, PROPOSE_INSTRUCTION)
 
     def review(self, *, summary, version, versions_left) -> dict[str, Any]:
         from research.prompts import REVIEW_SCHEMA, review_prompt
 
         prompt = review_prompt(summary=summary, version=version, versions_left=versions_left)
-        return self._claude.ask(prompt, REVIEW_SCHEMA, instruction=REVIEW_INSTRUCTION)
+        return self._ask(prompt, REVIEW_SCHEMA, REVIEW_INSTRUCTION)
 
 
 class DryBrain:
