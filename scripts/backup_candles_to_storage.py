@@ -40,73 +40,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from candle_backup import BUCKET, LOCAL_ROOT, local_files, remote_files  # noqa: E402
 from config import use_utf8_stdout  # noqa: E402
-
-LOCAL_ROOT = "data/candles"
-BUCKET = "candles"
-
-
-def local_files(root: str) -> dict[str, int]:
-    """Every parquet file under `root`, keyed by its bucket path."""
-    found: dict[str, int] = {}
-    for dirpath, _dirs, names in os.walk(root):
-        for name in names:
-            if not name.endswith(".parquet"):
-                continue
-            full = os.path.join(dirpath, name)
-            key = os.path.relpath(full, root).replace(os.sep, "/")
-            found[key] = os.path.getsize(full)
-    return found
-
-
-# Supabase Storage returns at most 100 entries per list() call and gives no
-# hint that it truncated. With 200 instrument directories under 5m/, an
-# unpaged listing silently sees half of them - which made --verify permanently
-# report ~2,400 files "missing" and the uploader re-send files already in the
-# bucket. Paginate explicitly; never trust one call to be the whole directory.
-_PAGE = 1000
-
-
-def _list_all(bucket, prefix: str) -> list:
-    """Every entry under `prefix`, following pages to the end."""
-    entries: list = []
-    offset = 0
-    while True:
-        try:
-            page = bucket.list(prefix, {"limit": _PAGE, "offset": offset})
-        except Exception:      # noqa: BLE001 - an absent prefix is normal
-            return entries
-        if not page:
-            return entries
-        entries.extend(page)
-        if len(page) < _PAGE:
-            return entries
-        offset += len(page)
-
-
-def remote_files(bucket) -> dict[str, int]:
-    """Every object in the bucket, keyed by path, valued by size.
-
-    Storage lists one directory level at a time, so this walks the same
-    {timeframe}/{instrument_id}/{year}.parquet shape the writer produces.
-    """
-    found: dict[str, int] = {}
-
-    def walk(prefix: str, depth: int) -> None:
-        for entry in _list_all(bucket, prefix):
-            name = entry.get("name") if isinstance(entry, dict) else getattr(entry, "name", "")
-            if not name:
-                continue
-            path = f"{prefix}/{name}" if prefix else name
-            meta = entry.get("metadata") if isinstance(entry, dict) else None
-            size = (meta or {}).get("size")
-            if size is not None:
-                found[path] = int(size)
-            elif depth < 3:
-                walk(path, depth + 1)
-
-    walk("", 0)
-    return found
 
 
 def main() -> int:

@@ -9,7 +9,12 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app_pages.research_page import GRID_COLUMNS, grid_frame, verdict_label  # noqa: E402
+from app_pages.research_page import (  # noqa: E402
+    GRID_COLUMNS,
+    grid_frame,
+    verdict_label,
+    version_timeline,
+)
 
 
 def runs_frame(**over):
@@ -84,3 +89,36 @@ def test_newest_run_comes_first():
 def test_grid_of_no_runs_is_empty_but_shaped():
     got = grid_frame(pd.DataFrame(), {})
     assert got.empty and list(got.columns) == GRID_COLUMNS
+
+
+# --- the version timeline (design 7.2) ---------------------------------------
+
+
+def test_version_rows_become_a_readable_timeline():
+    rows = [
+        {"idea_no": 1, "version_no": 1, "strategy_name": "R-A-v1", "valid": True,
+         "change_note": "", "decision": "next_version", "lessons": "too few trades",
+         "training_summary": {"combos_tested": 1177, "combos_profitable": 53,
+                              "combos_beating_hold": 0}},
+        {"idea_no": 1, "version_no": 2, "strategy_name": "R-A-v2", "valid": False,
+         "change_note": "widened the stop", "decision": None,
+         "error": "entry: unknown indicator", "training_summary": None},
+    ]
+    timeline = version_timeline(rows)
+    assert timeline[0]["Version"] == "1.1"
+    assert timeline[0]["Training"] == "53 of 1177 profitable, 0 beat holding"
+    assert timeline[0]["Decision"] == "next_version"
+    assert timeline[1]["Version"] == "1.2"
+    assert timeline[1]["Training"] == "rejected: entry: unknown indicator"
+
+
+def test_a_run_with_no_versions_has_no_timeline():
+    assert version_timeline([]) == []
+
+
+def test_a_version_from_before_the_excess_ranking_claims_no_count():
+    """Saying "0 beat holding" would be a measurement nobody made."""
+    rows = [{"idea_no": 1, "version_no": 1, "strategy_name": "R-old-v1", "valid": True,
+             "decision": "stop", "training_summary": {"combos_tested": 18,
+                                                      "combos_profitable": 9}}]
+    assert version_timeline(rows)[0]["Training"] == "9 of 18 profitable"

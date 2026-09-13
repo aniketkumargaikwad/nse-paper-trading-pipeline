@@ -406,3 +406,102 @@ Occasional maintenance, not day-to-day:
 
 Both write to the same Supabase database the deployment reads, so anything you
 backfill locally shows up in the hosted dashboard straight away.
+
+---
+
+## The daily research run (GitHub Actions)
+
+This is separate from everything above. The research loop does not run on
+Railway or on your laptop — it runs on GitHub's machines at 06:00 IST, spends
+about 80 minutes sweeping 1,213 stock-and-timeframe combinations, and sends
+you a Telegram message when it is done. It costs nothing beyond the Claude Pro
+plan you already pay for.
+
+### Why the repository has to be public
+
+Free GitHub runners give a public repository **4 CPUs and 6-hour jobs**. A
+private one gets 2 CPUs and 2,000 minutes a month — about 66 minutes a day,
+which will not fit even one full version. Public means anyone can read your
+strategies, your research notes and Opus's reasoning. Your secrets stay safe:
+they are not available to pull requests from forks, and this workflow triggers
+only on `schedule` and `workflow_dispatch`. Your commit author name and email
+become visible, as they do in any public repository.
+
+### Secrets (Settings → Secrets and variables → Actions → Secrets)
+
+| Secret | What it is |
+|---|---|
+| `SUPABASE_URL` | the same one your `.env` uses |
+| `SUPABASE_SERVICE_ROLE_KEY` | the same one your `.env` uses |
+| `CLAUDE_CODE_OAUTH_TOKEN` | from `claude setup-token`, **not** the value in `.env` |
+| `TELEGRAM_BOT_TOKEN` | from @BotFather |
+| `TELEGRAM_CHAT_ID` | your own chat id (see below) |
+| `GMAIL_USER` | optional — only if you also want email |
+| `GMAIL_APP_PASSWORD` | optional — a Gmail app password, not your password |
+| `NOTIFY_EMAIL` | optional — where the email goes |
+
+### Variables (same page → Variables)
+
+| Variable | What it is |
+|---|---|
+| `DATA_END` | `2026-07-31` — the candle cache key. Change it only when you top prices up. |
+| `DASHBOARD_URL` | the Streamlit address, so the message can link to it |
+| `CLAUDE_TOKEN_CREATED` | the day you ran `claude setup-token`, as `YYYY-MM-DD`. Yours: `2026-09-13`, so it expires 13 Sep 2027. |
+
+### The Claude token
+
+Run `claude setup-token` in a terminal and paste the result into
+`CLAUDE_CODE_OAUTH_TOKEN`. An interactive login cannot be refreshed on a
+runner, which is why this long-lived token exists. It lasts **a year**, and
+`CLAUDE_TOKEN_CREATED` is the only thing that knows when the clock started —
+from inside a run a dead token looks exactly like a usage limit, so without
+that variable every morning would quietly stop early instead of telling you
+why. Every message carries a warning for the last 30 days of its life.
+
+### Setting up Telegram
+
+1. Message `@BotFather`, send `/newbot`, follow the prompts, copy the token.
+2. Send any message to your new bot — a bot cannot start a conversation.
+3. Get your chat id:
+   ```bash
+   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates"
+   ```
+   The number at `result[0].message.chat.id` is `TELEGRAM_CHAT_ID`.
+
+### Where the candles come from
+
+The sweep needs the 663 MB Parquet store, which is far too big for git. It
+lives in the Supabase Storage bucket `candles`, filled by
+`scripts/backup_candles_to_storage.py` from your laptop. Each run restores a
+GitHub Actions cache keyed on `DATA_END`, then runs
+`scripts/restore_candles_from_storage.py` to fill any gaps — which normally
+downloads nothing.
+
+Supabase's free tier allows **5 GB of egress a month**, which is about **seven
+full restores**. The cache is what keeps ordinary days from spending any of
+it, and cache entries are evicted after 7 days unused. If you ever see the
+download step take minutes rather than seconds every day, the cache is
+missing and that budget is being spent.
+
+### The daily journal commit
+
+Every run writes `research/journal/YYYY-MM-DD.md` and commits it. That is not
+only bookkeeping: GitHub **disables scheduled workflows in a public repository
+after 60 days without activity**, and this commit is the activity.
+
+### If a run goes wrong
+
+- **The Claude allowance runs out mid-run** — the day stops cleanly, keeps the
+  versions it finished, still opens the locked year (that needs no AI) and
+  still stores a row with status `stopped_limit`. The message says so. This is
+  the design working, not a failure.
+- **Supabase refuses the write** — the whole day is written to
+  `research-fallback.json` and kept as a workflow artifact for 30 days, so 40
+  minutes of sweeping and six Opus calls are not lost.
+- **The candle download fails** — the run stops before any AI call, and the
+  message says the run stored nothing.
+
+### Running one by hand
+
+Actions → research → Run workflow. Set **max_versions** to 1 for a cheap
+check; it spends two Opus calls and about 25 minutes.

@@ -9,6 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -98,6 +99,16 @@ def test_results_come_back_in_the_order_the_combinations_were_given(tmp_path):
     got = run_sweep(strategy(), combos, rdr, lambda c: WINDOW,
                     slippage_pct=0.05, cost_model=HoldingCostModel(), workers=2)
     assert [r.symbol for r in got] == ["NSE:DEF", "NSE:EMPTY", "NSE:ABC"]
+
+
+def test_a_result_records_what_simply_holding_would_have_returned(tmp_path):
+    result = run(Combo("NSE:ABC", "day", False), reader(tmp_path))
+    first, last = CLOSES[0], CLOSES[-1]
+    assert result.hold_return_pct == pytest.approx(100 * (last - first) / first, abs=0.01)
+
+
+def test_a_skipped_combination_has_no_hold_return(tmp_path):
+    assert run(Combo("NSE:EMPTY", "day", False), reader(tmp_path)).hold_return_pct is None
 
 
 def test_counts_separate_skipped_tested_and_profitable(tmp_path):

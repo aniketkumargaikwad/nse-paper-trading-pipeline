@@ -6,6 +6,7 @@ on training years only; the locked year beside it was opened once, at the end.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
@@ -117,6 +118,40 @@ def _children(_client, table: str, run_id: str, order_by: str) -> pd.DataFrame:
     return pd.DataFrame(resp.data)
 
 
+def version_timeline(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One line per version the day tried, valid or not (design 7.2).
+
+    A rejected version still keeps its row: an idea Opus could not express is
+    a result about the idea. It says what the checker refused rather than
+    showing an empty training line, which would read as a flat outcome.
+    """
+    timeline = []
+    for row in sorted(rows, key=lambda r: (r.get("idea_no") or 0, r.get("version_no") or 0)):
+        summary = row.get("training_summary") or {}
+        if row.get("valid") and summary:
+            training = (
+                f"{summary.get('combos_profitable', 0)} of "
+                f"{summary.get('combos_tested', 0)} profitable"
+            )
+            # Runs from before the excess ranking have no count. Saying "0
+            # beat holding" there would be a measurement nobody made.
+            if "combos_beating_hold" in summary:
+                training += f", {summary['combos_beating_hold']} beat holding"
+        elif row.get("valid"):
+            training = "tested, no summary stored"
+        else:
+            training = f"rejected: {(row.get('error') or 'no reason recorded').splitlines()[0]}"
+        timeline.append({
+            "Version": f"{row.get('idea_no')}.{row.get('version_no')}",
+            "Strategy": row.get("strategy_name") or "—",
+            "Changed": row.get("change_note") or "—",
+            "Training": training,
+            "Decision": row.get("decision") or "—",
+            "Lessons": row.get("lessons") or "—",
+        })
+    return timeline
+
+
 def _detail(ctx: AppContext, run: pd.Series) -> None:
     st.subheader(
         f"{_text(run.get('final_strategy_name'))} — "
@@ -189,6 +224,16 @@ def _detail(ctx: AppContext, run: pd.Series) -> None:
         st.markdown("**Warnings**")
         for line in warnings:
             st.caption(f"⚠️ {line}")
+
+    versions = _children(ctx.client, "research_versions", run_id, "id")
+    timeline = version_timeline(versions.to_dict("records") if not versions.empty else [])
+    if timeline:
+        st.markdown("**Versions tried**")
+        st.caption(
+            "Every version the day tried, in order. Training numbers only — the "
+            "locked year was opened once, after the last of them."
+        )
+        st.dataframe(pd.DataFrame(timeline), use_container_width=True, hide_index=True)
 
     review = run.get("ai_review")
     if review and not _missing(review):

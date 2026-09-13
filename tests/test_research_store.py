@@ -11,7 +11,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from research.store import ResearchStoreError, save_run  # noqa: E402
+from research.store import (  # noqa: E402
+    ResearchStoreError,
+    recent_notes,
+    save_notes,
+    save_research_strategy,
+    save_run,
+    save_versions,
+)
 
 
 class FakeTable:
@@ -117,6 +124,82 @@ def test_dates_and_timestamps_are_sent_as_iso_text():
     assert captured["research_locked_trades"][0]["entry_at"] == "2025-08-04T04:30:00+00:00"
     assert captured["research_locked_equity"][0]["day"] == "2025-08-01"
     assert captured["research_locked_equity"][0]["lakh_balance"] == 100_000.0
+
+
+def test_versions_are_written_with_their_run():
+    captured: dict[str, list] = {}
+    save_versions(FakeClient(captured=captured), "run-1", [
+        {"idea_no": 1, "version_no": 1, "valid": True, "why_failed": "f"},
+        {"idea_no": 1, "version_no": 2, "valid": False, "error": "bad rule"},
+    ])
+    rows = captured["research_versions"]
+    assert [r["run_id"] for r in rows] == ["run-1", "run-1"]
+    assert rows[1]["error"] == "bad rule"
+
+
+def test_notes_are_written_with_their_day_as_text():
+    captured: dict[str, list] = {}
+    save_notes(FakeClient(captured=captured), [
+        {"run_id": "run-1", "day": date(2026, 9, 12), "idea_title": "dip", "lessons": "l"},
+    ])
+    assert captured["research_notes"][0]["day"] == "2026-09-12"
+
+
+def test_writing_no_versions_touches_nothing():
+    client = FakeClient()
+    save_versions(client, "run-1", [])
+    assert client.log == []
+
+
+def test_recent_notes_survives_a_database_without_the_table():
+    class Broken:
+        def table(self, name):
+            raise RuntimeError("relation does not exist")
+
+    assert recent_notes(Broken()) == []
+
+
+class FakeStore:
+    """Stands in for SupabaseStore: records the document and the update."""
+
+    def __init__(self, version_id=7):
+        self.saved = None
+        self.updated = None
+        self._version_id = version_id
+
+    def save_strategy_document(self, doc):
+        self.saved = doc
+        return SimpleNamespace(version_id=self._version_id)
+
+    def _table(self, name):
+        store = self
+
+        class Update:
+            def update(self, values):
+                store.updated = values
+                return self
+
+            def eq(self, column, value):
+                return self
+
+            def execute(self):
+                return SimpleNamespace(data=[])
+
+        return Update()
+
+
+def test_a_research_strategy_is_saved_with_its_story_and_marked_research():
+    store = FakeStore()
+    version_id = save_research_strategy(
+        store, {"name": "R-20260912-dip-v1", "enabled": False},
+        title="Dip buyer", description="Buys shallow dips", hypothesis="dips revert",
+    )
+    assert version_id == 7
+    assert store.saved["name"] == "R-20260912-dip-v1"
+    assert store.updated == {
+        "title": "Dip buyer", "description": "Buys shallow dips",
+        "hypothesis": "dips revert", "origin": "research",
+    }
 
 
 def test_json_conversion_leaves_everything_else_alone():

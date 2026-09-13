@@ -46,50 +46,19 @@ def _rupees(value: float | None) -> str:
     return "n/a" if value is None else f"Rs {value:,.0f}"
 
 
-def main(argv: list[str] | None = None) -> int:
-    use_utf8_stdout()
-    parser = argparse.ArgumentParser(description="Evaluate one strategy across every combination.")
-    parser.add_argument("--strategy", required=True)
-    parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
-    parser.add_argument("--max-stocks", type=int, default=0, help="test only the first N stocks (quick run)")
-    parser.add_argument("--stock-timeframes", default="", help="comma-separated, e.g. day,60m (quick run)")
-    parser.add_argument("--no-save", action="store_true",
-                        help="print the result without storing it")
-    args = parser.parse_args(argv)
-    started_at = datetime.now(UTC)
+def prepare_run(settings: Any, store: Any, stocks: Sequence[str]) -> tuple[Any, Any, Any, list]:
+    """The frozen prices and the research calendar every research command needs.
 
-    from backtest import simulate_any
-    from costs import HoldingCostModel
-    from db import SupabaseStore
-    from research.lakh import compound, equity_series, just_holding, passed
-    from research.picker import pick_best
-    from research.records import combo_rows, equity_rows, locked_trade_rows, run_row
-    from research.store import ResearchStoreError, save_run
+    Returns `(reader, windows, data_end, symbol_ends)`, where `symbol_ends`
+    holds one date per stock whose history ends in a complete session - the
+    coverage DATA_END was placed from, which the caller prints.
+
+    Raises ValueError when not one stock has a daily candle, because DATA_END
+    cannot be placed without one.
+    """
     from research.prices import FrozenPriceReader, load_adjustments, load_instrument_ids
-    from research.sweep import count_results, run_sweep
-    from research.universe import INDEXES, STOCK_TIMEFRAMES, document_uses_volume, research_combos
-    from research.windows import (
-        LOCKED_DAYS,
-        ResearchWindows,
-        data_end_from,
-        universe_data_end,
-    )
-    from strategy.v3 import is_v3_document, parse_machine
-    from strategy_schema import parse_strategy_dict
-    from universes import newest_snapshot, parse_constituent_csv
-    from walk_forward import split_trades
-
-    settings = get_settings(require_supabase=True)
-    store = SupabaseStore.connect(settings)
-
-    doc = strategy_document(store.list_strategy_documents(), args.strategy)
-    strategy = parse_machine(doc) if is_v3_document(doc) else parse_strategy_dict(doc)
-
-    snapshot_path, as_of = newest_snapshot("NIFTY200")
-    stocks = list(parse_constituent_csv(snapshot_path.read_text(encoding="utf-8")))
-    if args.max_stocks:
-        stocks = stocks[: args.max_stocks]
-    timeframes = tuple(t.strip() for t in args.stock_timeframes.split(",") if t.strip()) or STOCK_TIMEFRAMES
+    from research.universe import INDEXES
+    from research.windows import ResearchWindows, data_end_from, universe_data_end
 
     ids = load_instrument_ids(store._client, [*stocks, *INDEXES])
     stock_ids = [ids[s] for s in stocks]
@@ -106,9 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     day_index = {s: reader.candles(s, "day", FAR_PAST, FAR_FUTURE).index for s in stocks}
     newest_daily = max((idx.max() for idx in day_index.values() if len(idx)), default=None)
     if newest_daily is None:
-        print("ERROR: no daily candles for any stock, so DATA_END cannot be placed",
-              file=sys.stderr)
-        return 1
+        raise ValueError("no daily candles for any stock, so DATA_END cannot be placed")
     scan_from = newest_daily - timedelta(days=SCAN_DAYS)
 
     symbol_ends = []
@@ -121,8 +88,77 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             continue        # no complete session in the scan window: counts against coverage
     data_end = universe_data_end(symbol_ends)
+    return reader, ResearchWindows(data_end), data_end, symbol_ends
 
-    windows = ResearchWindows(data_end)
+
+def locked_year(
+    strategy: Any, result: Any, reader: Any, windows: Any, *,
+    slippage_pct: float, cost_model: Any,
+) -> tuple[Any, float | None, list, Any]:
+    """Open the locked year ONCE, for one pick.
+
+    Returns `(locked, hold_end_value, locked_trades, frame)`. Both commands
+    come through here, so the one place the locked year is opened is the same
+    code whether a human or the loop chose the strategy.
+    """
+    from backtest import simulate_any
+    from research.lakh import compound, just_holding
+    from research.windows import LOCKED_DAYS
+    from walk_forward import split_trades
+
+    frame = reader.candles(result.symbol, result.timeframe,
+                           *windows.full(is_index=result.is_index, timeframe=result.timeframe))
+    simulated = simulate_any(frame, strategy, slippage_pct=slippage_pct,
+                             cost_per_trade_inr=0.0, cost_model=cost_model)
+    _, locked_trades = split_trades(simulated.trades, windows.locked_from_utc)
+    locked = compound(locked_trades, cost_model, window_days=LOCKED_DAYS)
+    hold = just_holding(reader.candles(result.symbol, "day", windows.locked_from_utc, windows.end_utc),
+                        cost_model)
+    return locked, hold, list(locked_trades), frame
+
+
+def main(argv: list[str] | None = None) -> int:
+    use_utf8_stdout()
+    parser = argparse.ArgumentParser(description="Evaluate one strategy across every combination.")
+    parser.add_argument("--strategy", required=True)
+    parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
+    parser.add_argument("--max-stocks", type=int, default=0, help="test only the first N stocks (quick run)")
+    parser.add_argument("--stock-timeframes", default="", help="comma-separated, e.g. day,60m (quick run)")
+    parser.add_argument("--no-save", action="store_true",
+                        help="print the result without storing it")
+    args = parser.parse_args(argv)
+    started_at = datetime.now(UTC)
+
+    from costs import HoldingCostModel
+    from db import SupabaseStore
+    from research.lakh import equity_series, passed
+    from research.picker import pick_best
+    from research.records import combo_rows, equity_rows, locked_trade_rows, run_row
+    from research.store import ResearchStoreError, save_run
+    from research.sweep import count_results, run_sweep
+    from research.universe import STOCK_TIMEFRAMES, document_uses_volume, research_combos
+    from strategy.v3 import is_v3_document, parse_machine
+    from strategy_schema import parse_strategy_dict
+    from universes import newest_snapshot, parse_constituent_csv
+
+    settings = get_settings(require_supabase=True)
+    store = SupabaseStore.connect(settings)
+
+    doc = strategy_document(store.list_strategy_documents(), args.strategy)
+    strategy = parse_machine(doc) if is_v3_document(doc) else parse_strategy_dict(doc)
+
+    snapshot_path, as_of = newest_snapshot("NIFTY200")
+    stocks = list(parse_constituent_csv(snapshot_path.read_text(encoding="utf-8")))
+    if args.max_stocks:
+        stocks = stocks[: args.max_stocks]
+    timeframes = tuple(t.strip() for t in args.stock_timeframes.split(",") if t.strip()) or STOCK_TIMEFRAMES
+
+    try:
+        reader, windows, data_end, symbol_ends = prepare_run(settings, store, stocks)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
     volume_rules = document_uses_volume(doc)
     combos = research_combos(stocks, include_indexes=not volume_rules, stock_timeframes=timeframes)
     cost_model = HoldingCostModel()
@@ -185,12 +221,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nPICK       {p.symbol} · {p.timeframe}  (training: {pick.training.trades} trades, "
           f"CAGR {pick.training.cagr_pct:.2f}%, worst dip {pick.training.worst_dip_pct:.1f}%)")
 
-    frame = reader.candles(p.symbol, p.timeframe, *windows.full(is_index=p.is_index, timeframe=p.timeframe))
-    simulated = simulate_any(frame, strategy, slippage_pct=settings.slippage_pct,
-                             cost_per_trade_inr=0.0, cost_model=cost_model)
-    _, locked_trades = split_trades(simulated.trades, windows.locked_from_utc)
-    locked = compound(locked_trades, cost_model, window_days=LOCKED_DAYS)
-    hold = just_holding(reader.candles(p.symbol, "day", windows.locked_from_utc, windows.end_utc), cost_model)
+    locked, hold, locked_trades, frame = locked_year(
+        strategy, p, reader, windows,
+        slippage_pct=settings.slippage_pct, cost_model=cost_model,
+    )
     win_rate = 100 * locked.winning_trades / locked.trades if locked.trades else 0.0
 
     print("\nLOCKED YEAR")

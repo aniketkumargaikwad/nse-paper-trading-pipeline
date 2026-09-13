@@ -37,6 +37,9 @@ class ComboResult:
     # stock listed in 2024 has far fewer training days than the window allows,
     # and annualising its return over the whole window would understate it.
     first_candle: datetime | None = None
+    # What simply holding this symbol over the same window would have returned,
+    # in percent. Without it a rising market looks like an edge.
+    hold_return_pct: float | None = None
 
     @property
     def net_pnl(self) -> float:
@@ -75,9 +78,14 @@ def run_combo(
         )
     except Exception as exc:        # noqa: BLE001 - becomes a recorded skip
         return skip(f"simulation failed: {exc!r}")
+    first_close = float(frame["close"].iloc[0])
+    last_close = float(frame["close"].iloc[-1])
     return ComboResult(
         combo.symbol, combo.timeframe, combo.is_index, tuple(result.trades),
         first_candle=frame.index[0].to_pydatetime(),
+        hold_return_pct=(
+            round(100 * (last_close - first_close) / first_close, 4) if first_close else None
+        ),
     )
 
 

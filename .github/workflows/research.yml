@@ -1,0 +1,108 @@
+# One research day, on GitHub's machines, with the laptop off.
+#
+# Triggers are `schedule` and `workflow_dispatch` ONLY. Never add
+# pull_request or pull_request_target: this repository is public, and those
+# would let an outside contribution run with the secrets.
+name: research
+
+on:
+  schedule:
+    # 00:30 UTC = 06:00 IST. GitHub's cron is best-effort and is often 5-30
+    # minutes late at busy times, which does not matter for research.
+    - cron: "30 0 * * *"
+  workflow_dispatch:
+    inputs:
+      max_versions:
+        description: "How many versions the day may try"
+        default: "7"
+
+# One at a time. GitHub holds one running and one waiting; a third request
+# replaces the waiting one.
+concurrency:
+  group: research
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # the journal note is committed and pushed
+
+jobs:
+  day:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330      # under the 6-hour ceiling, over the 5-hour budget
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # WITHOUT THIS the default candle store is "supabase" and the run
+      # ignores the 663 MB it just downloaded, reading candles from the
+      # database instead. See config.DEFAULT_CANDLE_STORE.
+      CANDLE_STORE: parquet
+      CANDLE_ROOT: data/candles
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Pinned: research/brain.py's flags were measured against this exact
+      # version, and two of them do not behave as documented. Read that
+      # module's docstring before bumping this.
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.251
+
+      - name: Restore the candles from the cache
+        uses: actions/cache@v4
+        with:
+          path: data/candles
+          # DATA_END moves only when prices are topped up, so this key is
+          # stable for months. Cache entries are evicted after 7 days unused.
+          key: candles-${{ vars.DATA_END }}
+          restore-keys: candles-
+
+      # Always run: it only fetches what is missing, so a cache hit costs a
+      # listing and a miss costs 663 MB of the 5 GB monthly egress.
+      - name: Fill any gaps from Supabase Storage
+        run: python scripts/restore_candles_from_storage.py
+
+      - name: Run the day
+        run: |
+          python -m research.run_day \
+            --max-versions "${{ inputs.max_versions || 7 }}" \
+            --run-id-file run-id.txt \
+            --fallback-file research-fallback.json \
+            --commit-journal
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+      # Only exists when the database refused the day. Keeping it means a
+      # refused write costs a re-upload, not a re-run.
+      - name: Keep the day if it could not be stored
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-fallback
+          path: research-fallback.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # Also what stops GitHub disabling this schedule: a public repository's
+      # scheduled workflows are turned off after 60 days without activity.
+      - name: Push the journal note
+        if: always()
+        run: git push || echo "nothing to push"
+
+      - name: Send the message
+        if: always()
+        run: python -m research.notify --run-id-file run-id.txt
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          CLAUDE_TOKEN_CREATED: ${{ vars.CLAUDE_TOKEN_CREATED }}
