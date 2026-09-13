@@ -94,3 +94,11 @@ def test_the_schemas_require_the_fields_the_loop_reads():
         "why_failed", "why_worked", "lessons", "decision"}
     assert REVIEW_SCHEMA["properties"]["decision"]["enum"] == [
         "next_version", "new_idea", "stop"]
+
+
+def test_propose_asks_for_one_strategy_not_a_whole_file():
+    """The format pages show a whole file, and the first real answer copied it."""
+    text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
+    assert "single top-level YAML mapping" in text
+    assert "`strategies:` wrapper removed" in text
+    assert "version: 3" in text

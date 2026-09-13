@@ -40,6 +40,18 @@ REVIEW_SCHEMA: dict[str, Any] = {
     },
 }
 
+# The format pages describe a whole strategies.yaml FILE, and the first real
+# proposal copied that shape - costing a repair round before the day could
+# start. The checker wants one strategy, so the prompt says so.
+SHAPE = """\
+Write ONE strategy as a single top-level YAML mapping, not a file of them:
+- v2: one item from the `strategies:` list, with the `version:` and
+  `strategies:` wrapper removed, so `position_type`, `entry`, `exit` and
+  `risk` are top-level keys.
+- v3: the document exactly as the v3 page shows it, keeping `version: 3` as
+  a top-level key.
+"""
+
 RULES = """\
 Rules the tool applies to whatever you write, so do not spend words on them:
 - sizing is forced to notional, 100000 rupees per trade
@@ -91,8 +103,9 @@ def propose_prompt(
         )
     parts.append("\nStrategy format reference:")
     parts.extend(formats)
+    parts.append(f"\n{SHAPE}")
     parts.append(
-        "\nReturn the strategy as YAML in strategy_yaml. Write change_note as an "
+        "Return that mapping as YAML in strategy_yaml. Write change_note as an "
         "empty string for a first version, otherwise say in one line what you "
         "changed and why."
     )
