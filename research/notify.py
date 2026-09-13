@@ -15,6 +15,7 @@ import smtplib
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,31 @@ def _pair(*names: str) -> tuple[str, ...] | None:
     return values if all(values) else None
 
 
+# `claude setup-token` issues a credential good for 90 days. The repository
+# variable CLAUDE_TOKEN_CREATED holds the day it was made, because nothing
+# else knows: from inside a run, a dead token looks exactly like a usage
+# limit, so without this every morning would quietly become stopped_limit.
+TOKEN_LIFETIME_DAYS = 90
+TOKEN_WARN_WITHIN_DAYS = 30
+
+
+def token_warning(created: str, *, today: date | None = None) -> str:
+    """A line for every message once the Claude token is nearly out of time."""
+    try:
+        made = date.fromisoformat((created or "").strip())
+    except ValueError:
+        return ""
+    expires = made + timedelta(days=TOKEN_LIFETIME_DAYS)
+    left = (expires - (today or date.today())).days
+    if left < 0:
+        return (f"⚠️ The Claude token expired on {expires}. "
+                "Run `claude setup-token` and update the secret.")
+    if left <= TOKEN_WARN_WITHIN_DAYS:
+        return (f"⚠️ The Claude token expires on {expires} ({left} day(s)). "
+                "Run `claude setup-token` and update the secret.")
+    return ""
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Send the morning research message.")
     parser.add_argument("--run-id-file", default="",
@@ -149,11 +175,6 @@ def main(argv: list[str] | None = None) -> int:
     # A day that ran but could not be delivered is still a day. Only say
     # nothing worked when nothing worked.
     return 0 if any(r.sent for r in results.values()) else 1
-
-
-def token_warning(created: str) -> str:
-    """Filled in by Task 6 of the piece 4 plan."""
-    return ""
 
 
 if __name__ == "__main__":
