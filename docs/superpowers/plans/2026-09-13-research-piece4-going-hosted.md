@@ -22,7 +22,7 @@
 - `run_day` already accepts `--commit-journal`, which commits `research/journal/YYYY-MM-DD.md` but does not push.
 
 **Measured facts that must not be contradicted:**
-- `data/candles` is 663.4 MB in 5,359 parquet files, laid out `{timeframe}/{instrument_id}/{year}.parquet`. Of that, **631 MB is `5m`** — every intraday timeframe is resampled from it — 42 MB is `day`, 1.4 MB is `60m` (the Yahoo index history) and 0.9 MB is `1m`, which research never reads.
+- `data/candles` is 663.4 MB in 5,359 parquet files, laid out `{timeframe}/{instrument_id}/{year}.parquet`. Of that, **631 MB is `5m`** — every intraday timeframe is resampled from it — 42 MB is `day`, 1.4 MB is `60m` (the Yahoo index history) and 0.9 MB is `1m` — two files, which research never reads.
 - Supabase free tier: 1 GB Storage and **5 GB egress a month**. A full restore is 663 MB, so roughly **seven full restores a month** before it bills. The Actions cache must carry the normal day.
 - GitHub Actions cache: 10 GB per repository, entries evicted after **7 days** unused.
 - DATA_END is 2026-07-31; the locked year is 2025-08-01 → 2026-07-31.
@@ -393,7 +393,7 @@ Run:
 ```bash
 ./.venv/Scripts/python.exe scripts/restore_candles_from_storage.py --root /tmp/candle-restore-check --dry-run
 ```
-Expected: the bucket listing, `local: 0 files`, and `downloading 5348 file(s), 662.5 MB` — 5,348 rather than 5,359 because the eleven `1m` files are excluded.
+Expected: the bucket listing, `local: 0 files`, and `downloading 5357 file(s), 662.5 MB` — 5,357 rather than 5,359 because the two `1m` files are excluded.
 
 Then fetch a real slice and check it opens:
 ```bash
