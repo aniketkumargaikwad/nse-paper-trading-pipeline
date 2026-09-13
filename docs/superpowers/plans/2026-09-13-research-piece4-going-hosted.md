@@ -1179,7 +1179,7 @@ Add the argument beside `--commit-journal`:
                         help="write the stored run's id here, for the next step")
 ```
 
-Then call it at each of the four places that print `saved as run {saved}` — immediately before the print:
+Then call it at each of the three places that print `saved as run {saved}` — immediately before the print:
 
 ```python
         write_run_id(args.run_id_file, saved)

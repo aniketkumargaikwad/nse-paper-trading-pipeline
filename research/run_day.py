@@ -234,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
                         help="print the day without storing anything")
     parser.add_argument("--dry-run", action="store_true",
                         help="skip every AI call and use one fixed built-in strategy")
+    parser.add_argument("--run-id-file", default="",
+                        help="write the stored run's id here, for the next step")
     parser.add_argument("--commit-journal", action="store_true",
                         help="git-commit the journal note (what the scheduled run does)")
     args = parser.parse_args(argv)
@@ -451,6 +453,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
             print(f"\nWARNING: the day was NOT stored: {exc}", file=sys.stderr)
             return 1
         print(f"\njournal    {journal_path}")
+        write_run_id(args.run_id_file, saved)
         print(f"\nsaved as run {saved}")
         return 0
 
@@ -477,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
             print(f"\nWARNING: the day was NOT stored: {exc}", file=sys.stderr)
             return 1
         print(f"\njournal    {journal_path}")
+        write_run_id(args.run_id_file, saved)
         print(f"\nsaved as run {saved}")
         return 0
 
@@ -532,8 +536,22 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     except ResearchStoreError as exc:
         print(f"\nWARNING: the day was NOT stored: {exc}", file=sys.stderr)
         return 1
+    write_run_id(args.run_id_file, saved)
     print(f"\nsaved as run {saved}")
     return 0
+
+
+def write_run_id(path: str, run_id: str | None) -> None:
+    """Leave the run id where the next workflow step can read it.
+
+    Scraping "saved as run <id>" out of stdout would work until a warning
+    line moved.
+    """
+    if not path or not run_id:
+        return
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(str(run_id), encoding="utf-8")
 
 
 def commit_journal(path: Path, day: Any) -> None:
