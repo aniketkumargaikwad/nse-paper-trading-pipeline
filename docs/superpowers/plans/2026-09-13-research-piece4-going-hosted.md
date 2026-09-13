@@ -1424,16 +1424,47 @@ Expected: 6 passed.
 
 - [ ] **Step 6: Prove it against a database that refuses**
 
-```bash
-SUPABASE_SERVICE_ROLE_KEY=definitely-not-a-key ./.venv/Scripts/python.exe -m research.run_day --dry-run --max-stocks 5 --stock-timeframes day --workers 2 --fallback-file /tmp/research-fallback.json
+A bad key does NOT exercise this: `SupabaseStore.connect` fails first, before
+the day starts. The failure design 8 is about is a write refused by a healthy
+connection, so patch the write. Save this to your scratchpad as
+`refuse_write.py` — the `__main__` guard is required, because the sweep spawns
+worker processes on Windows and each one re-imports the module:
+
+```python
+import sys
+
+sys.path.insert(0, ".")
+
+if __name__ == "__main__":
+    import research.store as store
+
+    def refuse(*_args, **_kwargs):
+        raise store.ResearchStoreError("could not write research_runs: connection reset")
+
+    store.save_run = refuse
+
+    from research.run_day import main
+
+    sys.exit(main(sys.argv[1:]))
 ```
-Expected: the run reaches the locked year, then `WARNING: the day was NOT stored:` and exit code 1 — with the whole day sitting in `/tmp/research-fallback.json`, its `run` block carrying the locked-year numbers. Read the first twenty lines and check they are the day you just watched.
+
+Run:
+```bash
+./.venv/Scripts/python.exe <scratchpad>/refuse_write.py --dry-run --max-stocks 5 --stock-timeframes day --workers 2 --fallback-file <scratchpad>/research-fallback.json
+```
+Expected: the run reaches the locked year and prints `WARNING: the day was NOT
+stored:`, with the whole day in the JSON file — a `run` block carrying
+`lakh_end_value` and the pick, plus the version, note and combo-row counts.
 
 Then confirm a healthy run writes no fallback:
 ```bash
-./.venv/Scripts/python.exe -m research.run_day --dry-run --max-stocks 5 --stock-timeframes day --workers 2 --fallback-file /tmp/should-not-exist.json
+./.venv/Scripts/python.exe -m research.run_day --dry-run --max-stocks 5 --stock-timeframes day --workers 2 --fallback-file <scratchpad>/should-not-exist.json
 ```
-Expected: `saved as run <id>`, and `/tmp/should-not-exist.json` does not exist.
+Expected: `saved as run <id>`, and `should-not-exist.json` does not exist.
+
+**A dry run overwrites that day's real journal note** with the placeholder
+text, because the note is named by date. Restore it afterwards with
+`git checkout research/journal/YYYY-MM-DD.md`.
 
 - [ ] **Step 7: Full suite, then commit**
 

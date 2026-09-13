@@ -21,10 +21,11 @@ Two rules shape the wiring:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -236,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
                         help="skip every AI call and use one fixed built-in strategy")
     parser.add_argument("--run-id-file", default="",
                         help="write the stored run's id here, for the next step")
+    parser.add_argument("--fallback-file", default="",
+                        help="write the whole day here if the database refuses it")
     parser.add_argument("--commit-journal", action="store_true",
                         help="git-commit the journal note (what the scheduled run does)")
     args = parser.parse_args(argv)
@@ -416,9 +419,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
                 locked_trades, cost_model, day_index=day_candles.index,
                 closes=day_candles["close"] if not day_candles.empty else None,
             ))
-        run_id = save_run(store._client, run=run, **children)
-
-        save_versions(store._client, run_id, [
+        version_rows = [
             {
                 "idea_no": v.idea_no, "version_no": v.version_no,
                 "strategy_name": (v.checked.document["name"] if v.checked else None),
@@ -431,8 +432,23 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
                 "training_summary": v.summary.as_dict() if v.summary is not None else None,
             }
             for v in outcome.versions
-        ])
-        save_notes(store._client, note_rows(run_id, day, entries))
+        ]
+        # Built before the first network call, so a refused write still has
+        # something complete to hand back.
+        payload = {
+            "run": dict(run),
+            "versions": version_rows,
+            "notes": note_rows(_PENDING, day, entries),
+            "combos": len(children.get("combos", [])),
+        }
+
+        try:
+            run_id = save_run(store._client, run=run, **children)
+            save_versions(store._client, run_id, version_rows)
+            save_notes(store._client, note_rows(run_id, day, entries))
+        except ResearchStoreError:
+            write_fallback(args.fallback_file, payload)
+            raise
         return run_id
 
     entries = entries_from_versions(outcome.versions)
@@ -539,6 +555,20 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     write_run_id(args.run_id_file, saved)
     print(f"\nsaved as run {saved}")
     return 0
+
+
+def write_fallback(path: str, payload: Mapping[str, Any]) -> None:
+    """The whole day as JSON, for when the database will not take it.
+
+    Forty minutes of sweeping and six Opus calls are not worth losing to a
+    transient network error. The workflow keeps this as an artifact, and the
+    message says the run stored nothing (design 8).
+    """
+    if not path:
+        return
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
 
 
 def write_run_id(path: str, run_id: str | None) -> None:
