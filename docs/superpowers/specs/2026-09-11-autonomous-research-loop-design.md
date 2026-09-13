@@ -115,9 +115,27 @@ assembled by Python and whose output is JSON. Claude cannot read files, run
 commands, or reach the network. This is what makes §2.4 enforceable rather
 than a promise: Opus can only know what the prompt builder chose to give it.
 
-Exact CLI flags for disabling tools and requesting JSON are verified against
-the Claude Code headless documentation during implementation, not assumed
-here.
+**Measured against Claude Code 2.1.251 on 2026-09-12**, because the flags did
+not behave as the documentation suggested:
+
+```
+claude -p "<plain-English instruction>" --safe-mode --disallowed-tools "*" \
+  --permission-mode dontAsk --model opus --max-turns 2 --output-format json
+```
+
+- `--disallowed-tools "*"` is the whole guarantee. Asked to run a shell
+  command with it removed, Claude ran it and read the working directory.
+- `--permission-mode dontAsk` is **not** a substitute. It means Claude will
+  not stop to ask, not that it will refuse. It stays only so nothing can
+  block an unattended run.
+- `--json-schema` cannot be used: it is implemented as a tool named
+  `StructuredOutput`, which the denylist blocks, and an allowlist does not
+  override the denylist. The answer shape is asked for in words instead and
+  the reply is parsed by `research.brain`.
+- The schema text travels on **stdin**, never in an argument. On Windows the
+  CLI is a `claude.CMD` shim, so arguments pass through `cmd.exe`; a
+  brace-heavy one was re-split and `--output-format json` silently lost.
+- `--safe-mode`, not `--bare`: bare mode refuses the Pro login.
 
 ### 2.4 The locked year is structurally invisible to the builder
 
@@ -284,12 +302,22 @@ right fee too.
 
 Per version, training window only:
 
-- Totals: trades, win rate, net P&L after fees, P&L before fees, fees paid.
-- Per timeframe: trades, net P&L, share of symbols profitable.
-- Top 15 and bottom 15 combinations by net P&L, with trades, win rate and
-  worst dip.
+- Totals: trades, win rate, net P&L after fees, P&L before fees, fees paid,
+  and how many combinations **beat simply holding** beside how many were
+  merely profitable.
+- Per timeframe: trades, net P&L, share of symbols profitable, share beating
+  holding.
+- Top 15 and bottom 15 combinations **by excess over holding**, with trades,
+  win rate, worst dip, what they returned and what holding returned.
 - Long vs. just-holding over the same window, per timeframe (so Opus can tell
   edge from a rising market).
+
+The excess ranking replaced a ranking by net P&L on 2026-09-13, at Opus's own
+request after the first full day: the training years averaged a **418%**
+buy-and-hold return, so a long-only idea always has winners, and ranking by
+rupees put the most beta-heavy combinations at the top and called them best.
+Its words — the table "was misleading me and should be reported as
+excess-over-hold, not raw net PnL".
 - Combinations skipped and why (too little data, volume rule on an index).
 - The number of combinations tested, stated plainly.
 
@@ -513,6 +541,20 @@ Each piece gets its own implementation plan and works on its own.
    older runs after about four of them.
 3. **AI loop** — prompts, brain, checker, loop, notes. *Done when:* a laptop
    run completes a full day with real Opus calls and writes a row.
+   **BUILT 2026-09-13.** `python -m research.run_day --max-versions 3` took
+   **40 minutes** end to end on this laptop (8 workers): three sweeps of
+   500 s, 858 s and 605 s, plus six Opus calls, all inside the Pro allowance.
+   Zero checker repairs — the first real run needed one per version until the
+   propose prompt was told to write a single strategy rather than a whole
+   `strategies.yaml`. The three ideas were a prior-bar high breakout in an
+   EMA20>EMA50 uptrend, a volume-confirmed Bollinger breakout, and an EMA20
+   reclaim with ATR stops; Opus abandoned the first two outright
+   (`new_idea`) rather than tuning them, then stopped. The first two carried
+   volume rules, so indexes were skipped and they tested 1,200 combinations
+   against the third's 1,213. Final pick NSE:VMM · 25m: ₹1,00,000 → **₹78,846**
+   against ₹75,707 for holding — failed, but beat holding, which is the shape
+   the design predicted. All three ideas lost money in training; none found an
+   edge, and §5.2's excess ranking came out of Opus saying why.
 4. **Going hosted** — workflow, cache, secrets, journal commit, messages,
    Streamlit Cloud, repo made public. *Done when:* a scheduled run at 06:00 IST
    arrives by email and Telegram with the laptop off.
