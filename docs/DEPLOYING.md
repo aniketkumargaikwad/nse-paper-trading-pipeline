@@ -446,13 +446,13 @@ become visible, as they do in any public repository.
 |---|---|
 | `DATA_END` | `2026-07-31` — the candle cache key. Change it only when you top prices up. |
 | `DASHBOARD_URL` | the Streamlit address, so the message can link to it |
-| `CLAUDE_TOKEN_CREATED` | the day you ran `claude setup-token`, as `YYYY-MM-DD` |
+| `CLAUDE_TOKEN_CREATED` | the day you ran `claude setup-token`, as `YYYY-MM-DD`. Yours: `2026-09-13`, so it expires 13 Sep 2027. |
 
 ### The Claude token
 
 Run `claude setup-token` in a terminal and paste the result into
 `CLAUDE_CODE_OAUTH_TOKEN`. An interactive login cannot be refreshed on a
-runner, which is why this long-lived token exists. It lasts **90 days**, and
+runner, which is why this long-lived token exists. It lasts **a year**, and
 `CLAUDE_TOKEN_CREATED` is the only thing that knows when the clock started —
 from inside a run a dead token looks exactly like a usage limit, so without
 that variable every morning would quietly stop early instead of telling you

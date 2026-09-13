@@ -79,16 +79,17 @@ def test_any_success_status_counts(status):
 
 
 def test_a_fresh_token_says_nothing():
+    """A token issued this month has eleven more of them to run."""
     assert token_warning("2026-09-01", today=date(2026, 9, 13)) == ""
 
 
 def test_a_token_inside_thirty_days_of_expiry_warns_with_the_date():
-    warning = token_warning("2026-06-20", today=date(2026, 9, 13))
+    warning = token_warning("2025-09-18", today=date(2026, 9, 13))
     assert "2026-09-18" in warning and "5 day" in warning
 
 
 def test_an_expired_token_says_so_plainly():
-    assert "expired" in token_warning("2026-01-01", today=date(2026, 9, 13)).lower()
+    assert "expired" in token_warning("2025-01-01", today=date(2026, 9, 13)).lower()
 
 
 def test_an_unset_or_unreadable_date_says_nothing():

@@ -96,11 +96,15 @@ def _pair(*names: str) -> tuple[str, ...] | None:
     return values if all(values) else None
 
 
-# `claude setup-token` issues a credential good for 90 days. The repository
-# variable CLAUDE_TOKEN_CREATED holds the day it was made, because nothing
-# else knows: from inside a run, a dead token looks exactly like a usage
-# limit, so without this every morning would quietly become stopped_limit.
-TOKEN_LIFETIME_DAYS = 90
+# `claude setup-token` issues a credential good for a year - measured from
+# the real one on 2026-09-13, not assumed. The repository variable
+# CLAUDE_TOKEN_CREATED holds the day it was made, because nothing else knows:
+# from inside a run a dead token looks exactly like a usage limit, so without
+# this every morning would quietly become stopped_limit.
+#
+# Set CLAUDE_TOKEN_LIFETIME_DAYS if a future token is issued for longer or
+# shorter; guessing high would let one die silently.
+TOKEN_LIFETIME_DAYS = int(os.environ.get("CLAUDE_TOKEN_LIFETIME_DAYS") or 365)
 TOKEN_WARN_WITHIN_DAYS = 30
 
 
