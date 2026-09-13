@@ -328,7 +328,8 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
         sweeps.append(results)
         summary = build_summary(results, cost_model, window_days_for=window_days_for)
         print(f"  training: {summary.combos_profitable} of {summary.combos_tested} profitable "
-              f"after fees, {summary.total_trades} trades, net {_rupees(summary.net_pnl)}  "
+              f"after fees, {summary.combos_beating_hold} beat holding, "
+              f"{summary.total_trades} trades, net {_rupees(summary.net_pnl)}  "
               f"({elapsed:.0f}s)")
         return summary
 

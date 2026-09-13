@@ -102,3 +102,9 @@ def test_propose_asks_for_one_strategy_not_a_whole_file():
     assert "single top-level YAML mapping" in text
     assert "`strategies:` wrapper removed" in text
     assert "version: 3" in text
+
+
+def test_review_says_the_tables_are_ranked_by_excess_over_holding():
+    """Ranked by rupees, the tables showed the most beta-heavy combinations."""
+    text = review_prompt(summary=a_summary(), version=1, versions_left=2)
+    assert "excess_vs_hold_pct" in text and "combos_beating_hold" in text

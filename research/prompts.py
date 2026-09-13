@@ -120,7 +120,10 @@ def review_prompt(*, summary: TrainingSummary, version: int, versions_left: int)
         _summary_block(summary),
         "",
         "Judge it honestly. A strategy that made money while simply holding the "
-        "same stocks made more has no edge; say so.",
+        "same stocks made more has no edge; say so. The top and bottom tables "
+        "are ranked by excess_vs_hold_pct - what the strategy returned minus "
+        "what holding that symbol returned over the same window - not by "
+        "rupees, and combos_beating_hold is the count that matters.",
         "",
         "Then set decision to one of:",
         "- next_version: keep this idea and change one thing (say what in change_hint)",
