@@ -592,8 +592,14 @@ def commit_journal(path: Path, day: Any) -> None:
     """
     try:
         subprocess.run(["git", "add", str(path)], check=True, capture_output=True, text=True)
+        # A runner has no git identity and `git commit` refuses without one.
+        # Passed per command with -c rather than written with `git config`,
+        # which would permanently overwrite the identity in whatever
+        # repository this happens to run in - including a laptop's.
         done = subprocess.run(
-            ["git", "commit", "-m", f"docs(research): journal note for {day}"],
+            ["git", "-c", "user.name=research loop",
+             "-c", "user.email=noreply@anthropic.com",
+             "commit", "-m", f"docs(research): journal note for {day}"],
             capture_output=True, text=True,
         )
         if done.returncode != 0 and "nothing to commit" not in done.stdout.lower():
