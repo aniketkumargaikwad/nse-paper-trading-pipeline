@@ -584,6 +584,23 @@ def write_run_id(path: str, run_id: str | None) -> None:
     target.write_text(str(run_id), encoding="utf-8")
 
 
+# Git says "there was nothing to do" in several different ways, and none of
+# them is a problem worth waking someone at 6am for. An unchanged note is the
+# normal case when a day is re-run.
+_NOTHING_TO_COMMIT = (
+    "nothing to commit",
+    "nothing added to commit",
+    "no changes added to commit",
+    "working tree clean",
+)
+
+
+def nothing_to_commit(output: str) -> bool:
+    """Did `git commit` decline because there was no change to record?"""
+    lowered = (output or "").lower()
+    return any(phrase in lowered for phrase in _NOTHING_TO_COMMIT)
+
+
 def commit_journal(path: Path, day: Any) -> None:
     """Commit the note. Also what keeps GitHub from disabling the schedule.
 
@@ -602,7 +619,7 @@ def commit_journal(path: Path, day: Any) -> None:
              "commit", "-m", f"docs(research): journal note for {day}"],
             capture_output=True, text=True,
         )
-        if done.returncode != 0 and "nothing to commit" not in done.stdout.lower():
+        if done.returncode != 0 and not nothing_to_commit(done.stdout):
             print(f"WARNING: the journal note was not committed: "
                   f"{done.stderr.strip() or done.stdout.strip()}", file=sys.stderr)
     except (OSError, subprocess.CalledProcessError) as exc:

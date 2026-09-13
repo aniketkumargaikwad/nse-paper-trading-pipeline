@@ -9,7 +9,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from research.run_day import write_fallback, write_run_id  # noqa: E402
+from research.run_day import (  # noqa: E402
+    nothing_to_commit,
+    write_fallback,
+    write_run_id,
+)
 
 
 def test_the_run_id_is_written_for_the_next_step(tmp_path):
@@ -49,3 +53,24 @@ def test_dates_survive_the_dump(tmp_path):
 def test_no_fallback_path_means_no_file(tmp_path):
     write_fallback("", {"run": {}})
     assert list(tmp_path.iterdir()) == []
+
+
+# --- the journal commit ------------------------------------------------------
+
+
+def test_every_way_git_says_there_was_nothing_to_do_is_quiet():
+    """Re-running a day leaves the note unchanged, which is not a problem."""
+    clean = "\n".join(["On branch main", "nothing to commit, working tree clean"])
+    untracked = "\n".join([
+        "On branch main",
+        "Untracked files:",
+        "\tnotes.md",
+        "nothing added to commit but untracked files present",
+    ])
+    for output in (clean, untracked, "no changes added to commit"):
+        assert nothing_to_commit(output) is True
+
+
+def test_a_real_commit_failure_is_not_mistaken_for_silence():
+    assert nothing_to_commit("fatal: could not read Username for 'https://github.com'") is False
+    assert nothing_to_commit("") is False
