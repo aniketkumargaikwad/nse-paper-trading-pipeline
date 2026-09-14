@@ -170,9 +170,14 @@ def main(argv: list[str] | None = None) -> int:
             found = (client.table("strategies").select("title")
                      .eq("name", run["final_strategy_name"]).execute().data or [])
             title = (found[0] if found else {}).get("title")
+        # Every version the day tried, so a three-idea morning says what the
+        # other two were rather than only naming the survivor.
+        versions = (client.table("research_versions")
+                    .select("idea_no,version_no,valid,decision,training_summary")
+                    .eq("run_id", run["id"]).order("id").execute().data or [])
         link = (os.environ.get("DASHBOARD_URL") or "").strip() or None
-        text = telegram_html(run, title=title, dashboard_url=link)
-        body = plain_text(run, title=title, dashboard_url=link)
+        text = telegram_html(run, title=title, dashboard_url=link, versions=versions)
+        body = plain_text(run, title=title, dashboard_url=link, versions=versions)
 
     warning = token_warning(os.environ.get("CLAUDE_TOKEN_CREATED", ""))
     if warning:

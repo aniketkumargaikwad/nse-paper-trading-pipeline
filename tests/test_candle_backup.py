@@ -7,7 +7,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from candle_backup import local_files, missing_locally, remote_files  # noqa: E402
+import pytest  # noqa: E402
+
+from candle_backup import (  # noqa: E402
+    ListingFailed,
+    local_files,
+    missing_locally,
+    remote_files,
+)
 
 
 class FakeBucket:
@@ -66,3 +73,48 @@ def test_only_the_wanted_timeframes_are_downloaded():
     """1m is 0.9 MB the research loop never reads, and egress is metered."""
     remote = {"5m/1/2019.parquet": 11, "1m/1/2019.parquet": 22}
     assert missing_locally(remote, {}, timeframes=("5m",)) == ["5m/1/2019.parquet"]
+
+
+# --- a listing that fails must not look like an empty bucket -----------------
+
+
+class ThrottledBucket:
+    """Refuses every listing, the way Storage does under a burst."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def list(self, prefix, options=None):
+        self.calls += 1
+        raise OSError("429 Too Many Requests")
+
+
+def test_a_refused_listing_raises_instead_of_reporting_an_empty_bucket():
+    """Silently empty would make the downloader skip files and sweep half a store."""
+    bucket = ThrottledBucket()
+    with pytest.raises(ListingFailed, match="could not list"):
+        remote_files(bucket, workers=1)
+    assert bucket.calls > 1, "it should have retried before giving up"
+
+
+class FlakyBucket(FakeBucket):
+    """Fails the first call to each prefix, then answers normally."""
+
+    def __init__(self, tree):
+        super().__init__(tree)
+        self.failed = set()
+
+    def list(self, prefix, options=None):
+        if prefix not in self.failed:
+            self.failed.add(prefix)
+            raise OSError("429 Too Many Requests")
+        return super().list(prefix, options)
+
+
+def test_a_transient_refusal_is_retried_and_the_listing_completes():
+    bucket = FlakyBucket({
+        "": [a_folder("5m")],
+        "5m": [a_folder("10272")],
+        "5m/10272": [a_file("2019.parquet", 11)],
+    })
+    assert remote_files(bucket, workers=1) == {"5m/10272/2019.parquet": 11}

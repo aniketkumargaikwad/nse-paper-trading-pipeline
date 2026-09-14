@@ -15,7 +15,22 @@ from research.message import (  # noqa: E402
     rupees,
     summary_rows,
     telegram_html,
+    version_lines,
 )
+
+
+def some_versions():
+    return [
+        {"idea_no": 1, "version_no": 1, "valid": True, "decision": "new_idea",
+         "training_summary": {"combos_tested": 1164, "combos_profitable": 9,
+                              "combos_beating_hold": 0}},
+        {"idea_no": 2, "version_no": 1, "valid": True, "decision": "new_idea",
+         "training_summary": {"combos_tested": 1164, "combos_profitable": 213,
+                              "combos_beating_hold": 0}},
+        {"idea_no": 3, "version_no": 1, "valid": True, "decision": "stop",
+         "training_summary": {"combos_tested": 1177, "combos_profitable": 53,
+                              "combos_beating_hold": 0}},
+    ]
 
 
 def a_run(**overrides):
@@ -138,3 +153,43 @@ def test_a_review_with_no_sentence_end_is_cut_with_an_ellipsis():
 
 def test_a_short_review_is_left_alone():
     assert first_sentence("Nothing worked today") == "Nothing worked today"
+
+
+# --- what the other versions did ---------------------------------------------
+
+
+def test_a_day_that_tried_three_versions_lists_all_three():
+    lines = version_lines(some_versions())
+    assert len(lines) == 3
+    assert lines[0].startswith("v1.1 new_idea")
+    assert "9/1164 profitable, 0 beat hold" in lines[0]
+    assert lines[2].startswith("v3.1 stop")
+
+
+def test_a_single_version_day_lists_nothing():
+    """The table above already said it; a one-row list is noise."""
+    assert version_lines(some_versions()[:1]) == []
+    assert version_lines([]) == []
+
+
+def test_a_rejected_version_says_so_rather_than_showing_zeros():
+    lines = version_lines([
+        {"idea_no": 1, "version_no": 1, "valid": True, "decision": "next_version",
+         "training_summary": {"combos_tested": 10, "combos_profitable": 1}},
+        {"idea_no": 1, "version_no": 2, "valid": False, "decision": None,
+         "training_summary": None},
+    ])
+    assert "rejected by the checker" in lines[1]
+
+
+def test_the_versions_reach_both_renderings():
+    body = plain_text(a_run(), title="t", versions=some_versions())
+    assert "Versions tried" in body and "v2.1" in body
+    html_body = telegram_html(a_run(), title="t", versions=some_versions())
+    assert html_body.count("<pre>") == 2
+    assert "v2.1" in html_body
+
+
+def test_a_single_version_day_adds_no_block():
+    assert "Versions tried" not in plain_text(
+        a_run(), title="t", versions=some_versions()[:1])

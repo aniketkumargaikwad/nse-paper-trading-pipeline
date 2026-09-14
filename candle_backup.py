@@ -12,7 +12,9 @@ happens - it grows as candles are added.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 LOCAL_ROOT = "data/candles"
 BUCKET = "candles"
@@ -30,6 +32,12 @@ RESEARCH_TIMEFRAMES: tuple[str, ...] = ("5m", "60m", "day")
 # whole directory.
 _PAGE = 1000
 
+# Storage lists one directory at a time, and the store has about 400 of them.
+# Walked one after another that is a minute or two of pure round trip, paid on
+# every run whether or not anything needs fetching.
+LIST_WORKERS = 8
+LIST_ATTEMPTS = 4
+
 
 def local_files(root: str) -> dict[str, int]:
     """Every parquet file under `root`, keyed by its bucket path."""
@@ -44,15 +52,35 @@ def local_files(root: str) -> dict[str, int]:
     return found
 
 
+class ListingFailed(RuntimeError):
+    """A directory could not be listed, so the bucket contents are unknown."""
+
+
+def _page(bucket, prefix: str, offset: int) -> list:
+    """One page, retried. A refusal must never look like an empty directory.
+
+    Storage throttles a burst of concurrent listings, and the first version
+    of this swallowed that and returned []. The uploader read it as "missing,
+    re-upload" - wasteful but safe. The DOWNLOADER read it as "not in the
+    bucket, skip", which silently leaves a research day sweeping half a
+    candle store and reporting the numbers as though they were whole.
+    """
+    last: Exception | None = None
+    for attempt in range(LIST_ATTEMPTS):
+        try:
+            return bucket.list(prefix, {"limit": _PAGE, "offset": offset}) or []
+        except Exception as exc:      # noqa: BLE001 - retried, then raised
+            last = exc
+            time.sleep(0.4 * (attempt + 1))
+    raise ListingFailed(f"could not list {prefix!r} after {LIST_ATTEMPTS} attempts: {last}")
+
+
 def _list_all(bucket, prefix: str) -> list:
     """Every entry under `prefix`, following pages to the end."""
     entries: list = []
     offset = 0
     while True:
-        try:
-            page = bucket.list(prefix, {"limit": _PAGE, "offset": offset})
-        except Exception:      # noqa: BLE001 - an absent prefix is normal
-            return entries
+        page = _page(bucket, prefix, offset)
         if not page:
             return entries
         entries.extend(page)
@@ -61,15 +89,20 @@ def _list_all(bucket, prefix: str) -> list:
         offset += len(page)
 
 
-def remote_files(bucket) -> dict[str, int]:
+def remote_files(bucket, *, workers: int = LIST_WORKERS) -> dict[str, int]:
     """Every object in the bucket, keyed by path, valued by size.
 
     Storage lists one directory level at a time, so this walks the same
-    {timeframe}/{instrument_id}/{year}.parquet shape the writer produces.
+    {timeframe}/{instrument_id}/{year}.parquet shape the writer produces -
+    but a whole level at once, because each listing is a round trip and the
+    levels are wide (200 instrument directories under 5m alone).
     """
     found: dict[str, int] = {}
+    level = [""]
 
-    def walk(prefix: str, depth: int) -> None:
+    def children(prefix: str) -> tuple[dict[str, int], list[str]]:
+        files: dict[str, int] = {}
+        folders: list[str] = []
         for entry in _list_all(bucket, prefix):
             name = entry.get("name") if isinstance(entry, dict) else getattr(entry, "name", "")
             if not name:
@@ -78,11 +111,20 @@ def remote_files(bucket) -> dict[str, int]:
             meta = entry.get("metadata") if isinstance(entry, dict) else None
             size = (meta or {}).get("size")
             if size is not None:
-                found[path] = int(size)
-            elif depth < 3:
-                walk(path, depth + 1)
+                files[path] = int(size)
+            else:
+                folders.append(path)
+        return files, folders
 
-    walk("", 0)
+    for _depth in range(3):
+        if not level:
+            break
+        with ThreadPoolExecutor(max_workers=min(workers, len(level))) as pool:
+            results = list(pool.map(children, level))
+        level = []
+        for files, folders in results:
+            found.update(files)
+            level.extend(folders)
     return found
 
 

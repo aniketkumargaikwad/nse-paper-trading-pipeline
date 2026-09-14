@@ -7,11 +7,11 @@ name: research
 
 on:
   schedule:
-    # 00:47 UTC = 06:17 IST. NOT on the hour or half hour: those are the
+    # 03:33 UTC = 09:03 IST. NOT on the hour or half hour: those are the
     # minutes every other cron in the world picks, and GitHub's scheduler is
     # best-effort - under load a run is delayed, and can be dropped entirely.
     # The first attempt here used "30 0 * * *" and never fired at all.
-    - cron: "47 0 * * *"
+    - cron: "33 3 * * *"
   workflow_dispatch:
     inputs:
       max_versions:

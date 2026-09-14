@@ -6,6 +6,13 @@ A GitHub runner starts with an empty disk. The research sweep reads nine
 years of candles, so before anything can run they have to arrive - 663 MB of
 them, from the bucket `scripts/backup_candles_to_storage.py` fills.
 
+DOWNLOADED IN PARALLEL
+----------------------
+5,357 files, each its own HTTPS request. The limit is not bandwidth but the
+round trip: fetched one after another the first real run spent over 45
+minutes on a step that moves 663 MB, because it was waiting, not reading.
+Threads are the right tool - this is entirely I/O.
+
 RESUMABLE, AND CHEAP TO RE-RUN
 ------------------------------
 Every file already on disk at the same size is skipped, so a second run after
@@ -27,7 +34,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Lock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -51,6 +60,8 @@ def main() -> int:
     parser.add_argument("--all-timeframes", action="store_true",
                         help="include timeframes the research loop never reads")
     parser.add_argument("--root", default=LOCAL_ROOT)
+    parser.add_argument("--workers", type=int, default=16,
+                        help="how many files to fetch at once")
     args = parser.parse_args()
 
     try:

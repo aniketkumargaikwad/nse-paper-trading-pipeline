@@ -16,7 +16,7 @@ human. The prompt builder never reads it; see design 2.4.
 from __future__ import annotations
 
 import html
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
 
@@ -117,6 +117,33 @@ def summary_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
     return rows
 
 
+def version_lines(versions: Sequence[Mapping[str, Any]]) -> list[str]:
+    """One line per version, for a day that tried more than one.
+
+    A day that tried a single version has already said everything in the
+    table above; repeating it as a one-row list is noise. With three, the
+    shape of the day - what was tried, and why each was abandoned - is the
+    interesting part.
+    """
+    if len(versions) < 2:
+        return []
+    lines = []
+    for row in sorted(versions, key=lambda r: (r.get("idea_no") or 0, r.get("version_no") or 0)):
+        facts = row.get("training_summary") or {}
+        if not row.get("valid"):
+            outcome = "rejected by the checker"
+        elif facts:
+            outcome = f"{facts.get('combos_profitable', 0)}/{facts.get('combos_tested', 0)} profitable"
+            if "combos_beating_hold" in facts:
+                outcome += f", {facts['combos_beating_hold']} beat hold"
+        else:
+            outcome = "tested"
+        label = f"v{row.get('idea_no')}.{row.get('version_no')}"
+        decision = row.get("decision") or "-"
+        lines.append(f"{label:<5}{decision:<11}{outcome}")
+    return lines
+
+
 def _table(rows: list[tuple[str, str]]) -> str:
     return "\n".join(f"{label:<{LABEL_WIDTH}}{value}" for label, value in rows)
 
@@ -144,7 +171,8 @@ def _parts(
 
 
 def telegram_html(
-    run: Mapping[str, Any], *, title: str | None = None, dashboard_url: str | None = None
+    run: Mapping[str, Any], *, title: str | None = None, dashboard_url: str | None = None,
+    versions: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     """The morning message for Telegram's HTML parse mode.
 
@@ -158,6 +186,10 @@ def telegram_html(
         f"{html.escape(name)}\n\n"
         f"<pre>{html.escape(_table(summary_rows(run)))}</pre>"
     )
+    tried = version_lines(versions)
+    if tried:
+        block = html.escape("\n".join(tried))
+        body += f"\n\n<b>Versions tried</b>\n<pre>{block}</pre>"
     for line in tail:
         body += f"\n{html.escape(line)}"
     if len(body) <= TELEGRAM_LIMIT:
@@ -172,9 +204,14 @@ def telegram_html(
 
 
 def plain_text(
-    run: Mapping[str, Any], *, title: str | None = None, dashboard_url: str | None = None
+    run: Mapping[str, Any], *, title: str | None = None, dashboard_url: str | None = None,
+    versions: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     """The same message with no markup, for email and for reading in a log."""
     heading, name, tail = _parts(run, title, dashboard_url)
-    text = "\n".join([heading, name, "", _table(summary_rows(run)), "", *tail])
+    parts = [heading, name, "", _table(summary_rows(run))]
+    tried = version_lines(versions)
+    if tried:
+        parts += ["", "Versions tried", *tried]
+    text = "\n".join([*parts, "", *tail])
     return text if len(text) <= TELEGRAM_LIMIT else text[: TELEGRAM_LIMIT - 1] + "…"
