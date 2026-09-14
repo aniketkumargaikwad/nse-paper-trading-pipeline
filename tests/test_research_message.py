@@ -11,8 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from research.message import (  # noqa: E402
     TELEGRAM_LIMIT,
     first_sentence,
+    plain_text,
     rupees,
-    telegram_text,
+    summary_rows,
+    telegram_html,
 )
 
 
@@ -40,6 +42,10 @@ def a_run(**overrides):
     return run
 
 
+def labelled(run):
+    return dict(summary_rows(run))
+
+
 def test_rupees_are_grouped_the_way_they_are_read_here():
     assert rupees(100000) == "₹1,00,000"
     assert rupees(78845.67) == "₹78,846"
@@ -47,58 +53,82 @@ def test_rupees_are_grouped_the_way_they_are_read_here():
     assert rupees(None) == "n/a"
 
 
-def test_the_message_leads_with_the_two_numbers_that_matter():
-    text = telegram_text(a_run(), title="EMA20 reclaim in an uptrend")
-    assert "EMA20 reclaim in an uptrend" in text
-    assert "₹78,846" in text and "₹75,707" in text
-    assert "NSE:VMM" in text and "25m" in text
+# --- the table ---------------------------------------------------------------
+
+
+def test_the_table_carries_the_numbers_that_matter():
+    rows = labelled(a_run())
+    assert rows["Pick"] == "NSE:VMM · 25m"
+    assert rows["₹1 lakh"] == "became ₹78,846"
+    assert rows["Holding"] == "became ₹75,707"
+    assert rows["Trades"] == "48 · won 19%"
+    assert rows["Worst dip"] == "21.1%"
+    assert rows["Versions"] == "3 tried, 2 dropped"
+
+
+def test_the_result_line_does_the_subtraction_for_you():
+    """Reading two balances and subtracting them is the reader's job otherwise."""
+    assert labelled(a_run())["Result"] == "-₹21,154 (-21.2%)"
+    assert labelled(a_run(lakh_end_value=143000))["Result"] == "+₹43,000 (+43.0%)"
 
 
 def test_the_verdict_says_both_halves():
-    text = telegram_text(a_run(), title="t")
-    assert "Failed" in text and "Beat holding" in text
-
-
-def test_a_run_that_beat_nothing_says_so():
-    text = telegram_text(a_run(verdict_passed=True, beat_holding=False), title="t")
-    assert "Passed" in text and "Did not beat holding" in text
+    assert labelled(a_run())["Verdict"] == "FAILED · beat holding"
+    assert labelled(a_run(verdict_passed=True, beat_holding=False))["Verdict"] == (
+        "PASSED · did not beat holding")
 
 
 def test_a_day_with_no_pick_is_a_result_not_a_gap():
-    text = telegram_text(
-        a_run(pick_symbol=None, pick_timeframe=None, lakh_end_value=None,
-              hold_end_value=None, locked_trades=None),
-        title="t",
-    )
-    assert "No qualifying pick" in text
-    assert "Locked year:" not in text
+    rows = labelled(a_run(pick_symbol=None, lakh_end_value=None, hold_end_value=None))
+    assert rows["Pick"] == "none qualified"
+    assert "₹1 lakh" not in rows
+    assert rows["Verdict"] == "locked year not opened"
 
 
-def test_a_day_cut_short_says_why_at_the_top():
-    text = telegram_text(a_run(status="stopped_limit"), title="t")
-    assert "cut short" in text.lower()
+def test_the_labels_line_up_in_a_column():
+    table = plain_text(a_run(), title="t")
+    columns = {line.index("became") for line in table.splitlines() if "became" in line}
+    assert len(columns) == 1       # every value starts at the same offset
+
+
+# --- Telegram's HTML mode ----------------------------------------------------
+
+
+def test_a_title_with_an_angle_bracket_cannot_break_the_markup():
+    """EMA20>EMA50 would otherwise make Telegram reject the whole message."""
+    body = telegram_html(a_run(), title="EMA20>EMA50 uptrend & pullback")
+    assert "EMA20&gt;EMA50 uptrend &amp; pullback" in body
+    assert "EMA20>EMA50" not in body
+
+
+def test_the_numbers_sit_in_a_preformatted_block():
+    body = telegram_html(a_run(), title="t")
+    assert body.count("<pre>") == 1 and body.count("</pre>") == 1
+    assert body.index("<pre>") < body.index("NSE:VMM") < body.index("</pre>")
 
 
 def test_the_dashboard_link_is_included_when_there_is_one():
-    assert "https://example.test/x" in telegram_text(
+    assert "https://example.test/x" in telegram_html(
         a_run(), title="t", dashboard_url="https://example.test/x")
-    assert "Details" not in telegram_text(a_run(), title="t")
+    assert "Details" not in telegram_html(a_run(), title="t")
 
 
-def test_the_whole_message_is_capped_at_telegrams_limit():
-    """The review is capped long before this, so the backstop is the title."""
-    text = telegram_text(a_run(), title="x" * 8000)
-    assert len(text) == TELEGRAM_LIMIT
-    assert text.endswith("…")
+def test_a_day_cut_short_says_why():
+    assert "cut short" in telegram_html(a_run(status="stopped_limit"), title="t").lower()
 
 
 def test_only_the_headline_of_a_review_reaches_the_phone():
-    """The full review is a page of numbered lessons; the dashboard has it."""
     review = ("1) Judge every result against hold_return_pct. 2) Average hold "
               "return of ~418% means these are bull-market years. 3) Check gross first.")
-    text = telegram_text(a_run(ai_review=review), title="t")
-    assert "Why: 1) Judge every result against hold_return_pct." in text
-    assert "418%" not in text
+    body = plain_text(a_run(ai_review=review), title="t")
+    assert "Why: 1) Judge every result against hold_return_pct." in body
+    assert "418%" not in body
+
+
+def test_both_renderings_are_capped_at_telegrams_limit():
+    long_title = "x" * 8000
+    assert len(telegram_html(a_run(), title=long_title)) <= TELEGRAM_LIMIT
+    assert len(plain_text(a_run(), title=long_title)) <= TELEGRAM_LIMIT
 
 
 def test_a_review_with_no_sentence_end_is_cut_with_an_ellipsis():

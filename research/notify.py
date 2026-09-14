@@ -35,13 +35,23 @@ class NotifyResult:
 
 
 def send_telegram(
-    token: str, chat_id: str, text: str, *, post: Callable[..., Any] = requests.post
+    token: str, chat_id: str, text: str, *,
+    parse_mode: str | None = "HTML",
+    post: Callable[..., Any] = requests.post,
 ) -> NotifyResult:
-    """One POST. The token travels in the URL path, never in the body."""
+    """One POST. The token travels in the URL path, never in the body.
+
+    HTML mode is what puts the numbers in an aligned monospace block. Every
+    value in that text is escaped by research.message; an unescaped '>' from
+    a strategy title would make Telegram reject the whole message with a 400.
+    """
+    body = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    if parse_mode:
+        body["parse_mode"] = parse_mode
     try:
         response = post(
             TELEGRAM_URL.format(token=token),
-            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+            json=body,
             timeout=TIMEOUT_SECONDS,
         )
     except Exception as exc:        # noqa: BLE001 - a channel, not the day
@@ -134,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from config import get_settings, use_utf8_stdout
     from db import SupabaseStore
-    from research.message import telegram_text
+    from research.message import plain_text, telegram_html
 
     use_utf8_stdout()
     run_id = args.run_id
@@ -148,7 +158,9 @@ def main(argv: list[str] | None = None) -> int:
     if not rows:
         # The day crashed before it stored anything. That is exactly when a
         # message matters most, so send one saying so.
-        text = ("\U0001f4ca Research run\n⚠️ The run finished without storing "
+        text = ("<b>\U0001f4ca Research run</b>\n⚠️ The run finished without storing "
+                "a result. Check the workflow log.")
+        body = ("\U0001f4ca Research run\n⚠️ The run finished without storing "
                 "a result. Check the workflow log.")
         run = None
     else:
@@ -158,10 +170,9 @@ def main(argv: list[str] | None = None) -> int:
             found = (client.table("strategies").select("title")
                      .eq("name", run["final_strategy_name"]).execute().data or [])
             title = (found[0] if found else {}).get("title")
-        text = telegram_text(
-            run, title=title,
-            dashboard_url=(os.environ.get("DASHBOARD_URL") or "").strip() or None,
-        )
+        link = (os.environ.get("DASHBOARD_URL") or "").strip() or None
+        text = telegram_html(run, title=title, dashboard_url=link)
+        body = plain_text(run, title=title, dashboard_url=link)
 
     warning = token_warning(os.environ.get("CLAUDE_TOKEN_CREATED", ""))
     if warning:
@@ -170,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     results = send_all(
         text,
         subject=f"Research run — {(run or {}).get('started_at', '')}"[:120],
-        body=text,
+        body=body,
         telegram=_pair("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
         email=_pair("GMAIL_USER", "GMAIL_APP_PASSWORD", "NOTIFY_EMAIL"),
     )
