@@ -36,7 +36,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
 
-from research.segment import describe, meets_target
+from research.segment import describe, meets_target, min_trades_per_month
 
 TELEGRAM_LIMIT = 4096
 START_VALUE = 100000
@@ -183,8 +183,14 @@ def version_rows(version: Mapping[str, Any], *, compact: bool = False) -> list[t
 
         trades = best.get("trades") or 0
         rate = best.get("trades_per_month")
-        rows.append(("Total trades", f"{trades}"
-                                     + (f"  ({rate:.1f} a month)" if rate else "")))
+        pace = ""
+        if rate:
+            pace = f"  ({rate:.1f} a month"
+            floor = min_trades_per_month(best.get("segment") or "")
+            # Why a fine-looking combination is not the pick: it trades too
+            # rarely for the segment it turned out to be.
+            pace += f", below the {floor:.0f} floor)" if rate < floor else ")"
+        rows.append(("Total trades", f"{trades}{pace}"))
 
         if not compact and best.get("win_rate_pct") is not None:
             rows.append(("Win rate", f"{best['win_rate_pct']:.0f}%"))

@@ -13,9 +13,12 @@ from collections.abc import Sequence
 from typing import Any
 
 from research.segment import (
-    MIN_TRADES_PER_MONTH,
+    INTRADAY,
+    LONG_TERM,
+    SWING,
     TARGET_MONTHLY_MAX,
     TARGET_MONTHLY_MIN,
+    min_trades_per_month,
 )
 from research.summary import TrainingSummary
 
@@ -69,9 +72,11 @@ What this strategy is being designed to achieve:
   which is {_YEARLY_MIN:.0f}-{_YEARLY_MAX:.0f}% a year. That is deliberately ambitious: say so in
   your hypothesis if you think the idea cannot reach it, rather than quietly
   aiming lower.
-- at least {MIN_TRADES_PER_MONTH:.0f} trades a month on the combination finally picked. A
-  combination trading less often is DISCARDED however good its total looks,
-  so an idea that enters once a quarter cannot win here.
+- enough trades for the segment you choose, on the combination finally
+  picked: {min_trades_per_month(INTRADAY):.0f} a month for intraday, {min_trades_per_month(SWING):.0f} for swing,
+  {min_trades_per_month(LONG_TERM):.0f} for long-term. A combination below its own floor is DISCARDED
+  however good its total looks, so an idea that enters once a quarter cannot
+  win here whichever segment it claims.
 - beating simply holding the same stock. One that made money while holding
   made more is discarded too.
 

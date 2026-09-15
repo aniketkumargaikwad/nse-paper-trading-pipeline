@@ -120,9 +120,12 @@ def test_propose_states_the_monthly_return_being_aimed_at():
     assert "deliberately ambitious" in text
 
 
-def test_propose_states_the_trade_rate_floor():
+def test_propose_states_a_trade_rate_floor_for_each_segment():
+    """One flat floor would have ruled long-term out of the research."""
     text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
-    assert "10 trades a month" in text
+    assert "10 a month for intraday" in text
+    assert "4 for swing" in text
+    assert "1 for long-term" in text
     assert "DISCARDED" in text
 
 

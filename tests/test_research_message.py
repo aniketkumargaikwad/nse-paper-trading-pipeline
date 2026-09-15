@@ -111,7 +111,15 @@ def test_a_version_reports_the_whole_training_window_not_one_year():
 
 
 def test_a_version_gives_trades_as_a_total_and_a_rate():
-    assert labelled(version_rows(a_version()))["Total trades"] == "350  (3.5 a month)"
+    """3.5 a month is under the swing floor of 4, and the row says so."""
+    assert labelled(version_rows(a_version()))["Total trades"] == (
+        "350  (3.5 a month, below the 4 floor)")
+
+
+def test_a_combination_clearing_its_floor_is_not_flagged():
+    fast = a_version()
+    fast["training_summary"]["top"][0]["trades_per_month"] = 9.0
+    assert labelled(version_rows(fast))["Total trades"] == "350  (9.0 a month)"
 
 
 def test_a_version_gives_the_money_and_the_benchmark():

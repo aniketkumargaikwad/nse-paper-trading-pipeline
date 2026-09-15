@@ -42,12 +42,6 @@ UNSUPPORTED = ("f&o", "futures", "options")
 TARGET_MONTHLY_MIN = 4.0
 TARGET_MONTHLY_MAX = 7.0
 
-# A strategy that trades less often than this is not worth considering: the
-# owner wants an active system, and a handful of trades over eight years
-# cannot be judged, however good the total looks.
-MIN_TRADES_PER_MONTH = 10.0
-
-
 def holding_days(trades: Sequence[Any]) -> float | None:
     """The MEDIAN holding period in days.
 
@@ -72,6 +66,33 @@ def classify(trades: Sequence[Any]) -> str:
     if held <= SWING_DAYS:
         return SWING
     return LONG_TERM
+
+
+# How often a strategy must trade to be worth considering, PER SEGMENT. One
+# flat number cannot work: ten trades a month on a single symbol is a trade
+# every two days, which only an intraday or fast-swing system does, so a flat
+# floor would quietly rule long-term out of the research entirely.
+#
+# The floors are what the owner chose: an active intraday system, a swing
+# system that turns over weekly, and a long-term one that still has to do
+# something twelve times a year rather than sit in one position for a decade.
+MIN_TRADES_PER_MONTH: dict[str, float] = {
+    INTRADAY: 10.0,
+    SWING: 4.0,
+    LONG_TERM: 1.0,
+}
+
+
+def min_trades_per_month(segment: str) -> float:
+    """The floor this segment has to clear. An unclassifiable one clears nothing."""
+    return MIN_TRADES_PER_MONTH.get(segment, MIN_TRADES_PER_MONTH[INTRADAY])
+
+
+def trades_fast_enough(trades: Sequence[Any], months: float) -> bool:
+    """Did this combination trade often enough for the segment it turned out to be?"""
+    if months <= 0 or not trades:
+        return False
+    return len(trades) / months >= min_trades_per_month(classify(trades))
 
 
 def describe(segment: str, held_days: float | None) -> str:

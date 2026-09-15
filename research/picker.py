@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 from costs import HoldingCostModel
 from research.lakh import LakhResult, compound
-from research.segment import MIN_TRADES_PER_MONTH
+from research.segment import trades_fast_enough
 from research.sweep import ComboResult
 
 DAYS_PER_MONTH = 30.44
@@ -52,11 +52,12 @@ def pick_best(
         if result.skipped_reason is not None or len(result.trades) < MIN_TRAINING_TRADES:
             continue
         window_days = window_days_for(result)
-        # An active system, by instruction. Five trades over eight years can
-        # produce a spectacular total and still say nothing - and it is not
-        # something the owner can run.
+        # An active system, by instruction - but judged against ITS OWN
+        # segment. Ten trades a month is a trade every two days, which only
+        # an intraday system does, so one flat floor would rule long-term out
+        # of the research entirely.
         months = max(window_days / DAYS_PER_MONTH, 0.1)
-        if len(result.trades) / months < MIN_TRADES_PER_MONTH:
+        if not trades_fast_enough(result.trades, months):
             continue
         lakh = compound(result.trades, cost_model, window_days=window_days)
         # The sweep's dip counts money still in an open position; compound's
