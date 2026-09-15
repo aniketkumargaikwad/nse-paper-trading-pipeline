@@ -558,6 +558,26 @@ Each piece gets its own implementation plan and works on its own.
 4. **Going hosted** — workflow, cache, secrets, journal commit, messages,
    Streamlit Cloud, repo made public. *Done when:* a scheduled run at 06:00 IST
    arrives by email and Telegram with the laptop off.
+   **BUILT 2026-09-14.** A `schedule` run completed unattended in **1h05m**:
+   candles restored from cache, seven versions tested, the pick and locked
+   year measured, the journal note committed and pushed, and a Telegram
+   message delivered — laptop off throughout.
+
+   Three things were measured that the plan had assumed:
+   - **GitHub's scheduler is much later than "5-30 minutes".** The 03:33 UTC
+     slot actually started at **09:09 UTC — 5h36m late**. An earlier
+     `30 0 * * *` never fired at all. The hour and half hour are the worst
+     minutes to pick; even off them, the delay is hours, not minutes. This
+     does not matter for research, which reads a frozen window, but no part
+     of this system may assume a scheduled run happens near its cron.
+   - **The first restore took over 45 minutes** because it fetched 5,357
+     files one at a time; the limit was round-trip latency, not bandwidth.
+     Parallelised, and the bucket listing with it (>1 min to 13 s).
+   - **Concurrency exposed a silent listing failure.** Storage throttles a
+     burst and the listing swallowed it, reporting 4,046 of 5,359 files as
+     though the rest did not exist — which would have left a day sweeping a
+     partial candle store and reporting the numbers as whole. It now retries
+     and raises.
 
 Before piece 4 makes the repository public, the owner confirms again.
 
