@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any
 
 from backtest import simulate_any
+from research.lakh import live_worst_dip_pct
 from backtest_types import SimTrade
 from research.prices import FrozenPriceReader
 from research.universe import Combo
@@ -40,6 +41,11 @@ class ComboResult:
     # What simply holding this symbol over the same window would have returned,
     # in percent. Without it a rising market looks like an edge.
     hold_return_pct: float | None = None
+    # The deepest fall INCLUDING money still in an open position. `compound`
+    # only sees the balance between closed trades, which for a strategy that
+    # holds for years reported 7.3% where the truth was 45.5%. Measured here,
+    # while the candles are still in hand.
+    worst_dip_pct: float | None = None
 
     @property
     def net_pnl(self) -> float:
@@ -80,12 +86,14 @@ def run_combo(
         return skip(f"simulation failed: {exc!r}")
     first_close = float(frame["close"].iloc[0])
     last_close = float(frame["close"].iloc[-1])
+    trades = tuple(result.trades)
     return ComboResult(
-        combo.symbol, combo.timeframe, combo.is_index, tuple(result.trades),
+        combo.symbol, combo.timeframe, combo.is_index, trades,
         first_candle=frame.index[0].to_pydatetime(),
         hold_return_pct=(
             round(100 * (last_close - first_close) / first_close, 4) if first_close else None
         ),
+        worst_dip_pct=live_worst_dip_pct(trades, cost_model, frame["close"]),
     )
 
 

@@ -96,9 +96,17 @@ def test_rupees_are_grouped_the_way_they_are_read_here():
 # --- a version block is the FULL training backtest ----------------------------
 
 
+def test_the_message_warns_that_best_of_1177_is_selection_not_skill():
+    """The 83x figure that prompted this: one lucky stock out of 1,177 tries."""
+    body = plain_text(a_run(), title="t", versions=seven_versions())
+    assert "single best of ~1,177 combinations" in body
+    assert "often a different stock" in body
+
+
 def test_a_version_reports_the_whole_training_window_not_one_year():
     rows = labelled(version_rows(a_version()))
     assert rows["Tested over"] == "8.4 years of history"
+    assert rows["Luckiest"] == "NSE:CGPOWER, 30m bars"
 
 
 def test_a_version_gives_trades_as_a_total_and_a_rate():

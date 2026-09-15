@@ -87,7 +87,9 @@ def _row(result: ComboResult, cost_model: HoldingCostModel, window_days: int) ->
         "end_value": round(scored.end_value, 2),
         "window_days": window_days,
         "window_years": round(years, 2),
-        "worst_dip_pct": scored.worst_dip_pct,
+        # The sweep's figure counts an open position; compound's does not.
+        "worst_dip_pct": (result.worst_dip_pct if result.worst_dip_pct is not None
+                          else scored.worst_dip_pct),
         "hold_return_pct": hold,
         # Named "holding_value", not "hold_end_value": that second name is a
         # LOCKED-YEAR column on research_runs, and the guard test rightly

@@ -13,7 +13,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from costs import CostModel, DeliveryCostModel, HoldingCostModel  # noqa: E402
-from research.lakh import LakhResult, compound, just_holding, passed  # noqa: E402
+from research.lakh import (  # noqa: E402
+    LakhResult,
+    compound,
+    just_holding,
+    live_worst_dip_pct,
+    passed,
+)
 from research_helpers import FREE, ist, same_day, trade  # noqa: E402
 
 UTC = ZoneInfo("UTC")
@@ -164,3 +170,51 @@ def test_holding_in_the_series_matches_the_headline_figure():
 
 def test_equity_series_without_days_is_empty():
     assert equity_series([same_day(2, 10)], FREE, day_index=pd.DatetimeIndex([])) == []
+
+
+# --- the drawdown that counts an open position -------------------------------
+
+
+def a_series(prices, start_day=2):
+    """Closes on consecutive days from 2025-01-{start_day}, 10:00 IST."""
+    index = pd.DatetimeIndex(
+        [ist(2025, 1, start_day + i, 10) for i in range(len(prices))])
+    return pd.Series([float(p) for p in prices], index=index)
+
+
+def test_a_dip_inside_one_long_trade_is_seen():
+    """compound() only sees closed trades, so a years-long hold looks calm."""
+    prices = [100.0, 55.0, 120.0]           # 45% underwater before recovering
+    held = trade(entry=ist(2025, 1, 2, 10), exit_=ist(2025, 1, 4, 10),
+                 entry_price=100.0, exit_price=120.0)
+    assert compound([held], FREE, window_days=365).worst_dip_pct == 0.0
+    assert live_worst_dip_pct([held], FREE, a_series(prices)) == 45.0
+
+
+def test_a_short_position_is_underwater_when_price_rises():
+    prices = [100.0, 130.0, 90.0]
+    held = trade(entry=ist(2025, 1, 2, 10), exit_=ist(2025, 1, 4, 10),
+                 entry_price=100.0, exit_price=90.0, position_type="short")
+    assert live_worst_dip_pct([held], FREE, a_series(prices)) == 30.0
+
+
+def test_the_drop_is_measured_from_the_running_high_not_from_entry():
+    prices = [100.0, 200.0, 150.0]          # peaked at 2x, then gave back a quarter
+    held = trade(entry=ist(2025, 1, 2, 10), exit_=ist(2025, 1, 4, 10),
+                 entry_price=100.0, exit_price=150.0)
+    assert live_worst_dip_pct([held], FREE, a_series(prices)) == 25.0
+
+
+def test_a_high_reached_in_an_earlier_trade_still_counts():
+    """Money made and then lost is a drawdown, even across a flat gap."""
+    first = trade(entry=ist(2025, 1, 2, 10), exit_=ist(2025, 1, 3, 10),
+                  entry_price=100.0, exit_price=200.0)
+    second = trade(entry=ist(2025, 1, 4, 10), exit_=ist(2025, 1, 5, 10),
+                   entry_price=100.0, exit_price=50.0)
+    prices = a_series([100.0, 200.0, 100.0, 50.0])
+    assert live_worst_dip_pct([first, second], FREE, prices) == 50.0
+
+
+def test_no_trades_and_no_prices_are_a_flat_zero():
+    assert live_worst_dip_pct([], FREE, a_series([100.0])) == 0.0
+    assert live_worst_dip_pct([], FREE, pd.Series(dtype=float)) == 0.0

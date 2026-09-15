@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from config import IST
@@ -75,6 +76,65 @@ def compound(
         worst_dip_pct=round(worst_dip, 2),
         cagr_pct=cagr,
     )
+
+
+def live_worst_dip_pct(
+    trades: Sequence[SimTrade],
+    cost_model: HoldingCostModel,
+    closes: pd.Series,
+    *,
+    start_value: float = START_VALUE,
+) -> float:
+    """The deepest fall in the balance, counting money still IN a position.
+
+    `compound` can only see the balance between closed trades, which for a
+    strategy that holds for years is nearly blind. Measured on the 2026-09-15
+    run: a five-trade hold of ADANIGREEN reported a 7.30% worst dip while the
+    position itself was 45.45% underwater at its worst. That number is what
+    the picker uses to refuse dangerous combinations, and what the owner reads
+    as "how bad did it get" - so being wrong by six-fold in the flattering
+    direction is not a rounding error.
+
+    Vectorised per trade: the sweep runs this on 1,177 combinations a version,
+    and a Python loop over every candle would cost minutes.
+    """
+    if closes is None or len(closes) == 0:
+        return 0.0
+    index = closes.index
+    prices = closes.to_numpy(dtype=float)
+    balance = peak = float(start_value)
+    worst = 0.0
+
+    for t in sorted(trades, key=lambda tr: tr.entry_fill_ts):
+        entry = float(t.entry_price)
+        if entry:
+            first = int(index.searchsorted(t.entry_fill_ts, side="left"))
+            last = int(index.searchsorted(t.exit_fill_ts, side="right"))
+            held = prices[first:last]
+            if held.size:
+                moves = (held - entry) / entry
+                if t.position_type == "short":
+                    moves = -moves
+                live = balance * (1.0 + moves)
+                # Drawdown is measured from the running high, not from entry,
+                # so the peak carried in from earlier trades counts too.
+                running = np.maximum.accumulate(np.concatenate(([peak], live)))[1:]
+                dips = np.divide(running - live, running,
+                                 out=np.zeros_like(live), where=running > 0)
+                worst = max(worst, float(dips.max()) * 100.0)
+                peak = float(running[-1])
+
+        notional = entry * t.quantity
+        gross_return = t.gross_pnl / notional if notional else 0.0
+        units = balance / entry if entry else 0.0
+        fees = cost_model.round_trip(
+            entry, t.exit_price, units,
+            entry_ts=t.entry_fill_ts, exit_ts=t.exit_fill_ts,
+        )
+        balance = max(balance + balance * gross_return - fees, 0.0)
+        peak = max(peak, balance)
+
+    return round(worst, 2)
 
 
 def just_holding(

@@ -49,7 +49,11 @@ def pick_best(
         if result.skipped_reason is not None or len(result.trades) < MIN_TRAINING_TRADES:
             continue
         lakh = compound(result.trades, cost_model, window_days=window_days_for(result))
-        if lakh.cagr_pct is None or lakh.worst_dip_pct > MAX_TRAINING_DIP_PCT:
+        # The sweep's dip counts money still in an open position; compound's
+        # only sees closed trades. Prefer the honest one - it is the whole
+        # point of this filter.
+        dip = result.worst_dip_pct if result.worst_dip_pct is not None else lakh.worst_dip_pct
+        if lakh.cagr_pct is None or dip > MAX_TRAINING_DIP_PCT:
             continue
         if result.hold_return_pct is None:
             # No benchmark, so "did it beat doing nothing" has no answer and

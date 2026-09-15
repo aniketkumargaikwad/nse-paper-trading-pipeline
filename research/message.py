@@ -160,7 +160,7 @@ def version_rows(version: Mapping[str, Any], *, compact: bool = False) -> list[t
 
     rows: list[tuple[str, str]] = []
     if best.get("symbol"):
-        rows.append(("Best stock", f"{best['symbol']}, {best.get('timeframe')} bars"))
+        rows.append(("Luckiest", f"{best['symbol']}, {best.get('timeframe')} bars"))
 
         years = best.get("window_years")
         if years and not compact:
@@ -311,6 +311,15 @@ def _assemble(
         intro += f"\n⚠️ The day was {cut}. What it finished was still kept."
     intro += ("\n\nEvery version below is the FULL backtest: every training year, "
               "all stocks and timeframes. The locked year at the end is the exam.")
+    # The 83x that prompted this warning was one stock in one lucky stretch,
+    # selected as the best of 1,177 tries. Without saying so, the figure reads
+    # as what the strategy earns.
+    intro += ("\n\n⚠️ \"Luckiest\" is the single best of ~1,177 combinations "
+              "tried. With that many tries the top one always looks spectacular, and "
+              "it is usually one stock in one lucky stretch. Read the VERDICT line "
+              "instead: it counts how many of the 1,177 beat simply holding. The "
+              "locked-year pick is chosen separately and must also survive a 30% "
+              "drawdown limit and 30+ trades, so it is often a different stock.")
     blocks.append((intro, None))
 
     ordered = _ordered(versions)
