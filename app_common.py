@@ -23,7 +23,6 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
 
 # The docs tell you to put SUPABASE_URL and a key in .env, and every CLI reads
 # them from there because importing config loads it. The dashboard imported no
@@ -32,7 +31,18 @@ from dotenv import load_dotenv
 #
 # override=False: a real environment variable (Railway, Streamlit Cloud) still
 # wins over a stray .env that happened to ship in the image.
-load_dotenv(override=False)
+#
+# Optional on purpose. A .env file only exists on a developer's laptop; a host
+# injects real environment variables and reads st.secrets. Streamlit Cloud
+# built this app on Python 3.14, where the install left python-dotenv absent,
+# and a hard import turned a missing DEVELOPMENT convenience into a dead
+# dashboard.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(override=False)
+except ModuleNotFoundError:     # hosted: the environment is already set
+    pass
 
 IST = ZoneInfo("Asia/Kolkata")
 UTC = ZoneInfo("UTC")

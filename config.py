@@ -22,11 +22,19 @@ from dataclasses import dataclass
 from datetime import time
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
-
 # Load `.env` if present. This is a no-op in GitHub Actions, where the
 # variables are injected directly into the environment from GitHub Secrets.
-load_dotenv()
+#
+# Optional on purpose: a .env file is a developer convenience that only exists
+# on a laptop. Streamlit Cloud built this app on Python 3.14 with python-dotenv
+# absent, and a hard import turned that into a dead dashboard rather than a
+# missing nicety.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ModuleNotFoundError:     # hosted: the environment is already set
+    pass
 
 # ---------------------------------------------------------------------------
 # Timezone and market-session constants
