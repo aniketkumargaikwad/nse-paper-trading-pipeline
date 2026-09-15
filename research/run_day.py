@@ -6,7 +6,7 @@
 
 Opus proposes a strategy, the checker forces the research rules onto it, the
 sweep tests it on the TRAINING years, Opus reviews that summary and says what
-to try next - up to seven versions. Only then is the pick made and the locked
+to try next - up to five versions. Only then is the pick made and the locked
 year opened, once, and the day stored with a journal note for tomorrow.
 
 Two rules shape the wiring:
@@ -223,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     use_utf8_stdout()
     parser = argparse.ArgumentParser(description="Run one whole research day.")
     parser.add_argument("--max-versions", type=int, default=0,
-                        help="how many versions the day may try (default 7)")
+                        help="how many versions the day may try (default 5)")
     parser.add_argument("--budget-seconds", type=float, default=0.0,
                         help="stop starting versions after this long (default 5 hours)")
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)

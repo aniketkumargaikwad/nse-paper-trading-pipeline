@@ -17,7 +17,7 @@ the full backtest.
 
 The locked year is the exam: twelve months held back, opened ONCE, for the
 one version the day ended on. It is deliberately not reported per version.
-Showing seven versions' locked years and letting a human pick the best is
+Showing every version's locked year and letting a human pick the best is
 fitting to the exam, which is the whole thing the locked year exists to
 prevent.
 
@@ -47,6 +47,16 @@ DAYS_PER_MONTH = 30.44
 # of 1,177 combinations is a signal; on a tenth it is scatter.
 EDGE_PCT = 50.0
 MIXED_PCT = 25.0
+
+# Below this, the locked year has not failed - it has not been answered. One
+# trade is a coin toss whichever way it lands, and calling that FAILED reads
+# as evidence against the strategy when there is none either way. Matches
+# research.lakh.MIN_LOCKED_TRADES, which is what `passed` already requires.
+MIN_LOCKED_TRADES = 10
+
+# Written at the point the run stopped, after a blank line, so the message
+# ends where the day did rather than trailing off mid-thought.
+CUT_SHORT_MARKER = "limit expired........................."
 
 _CUT_SHORT = {
     "stopped_limit": "cut short - the Claude allowance ran out",
@@ -242,6 +252,10 @@ def locked_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
     ]
 
     passed, beat = run.get("verdict_passed"), run.get("beat_holding")
+    if trades < MIN_LOCKED_TRADES:
+        rows.append(("VERDICT", f"TOO FEW TRADES to judge - {trades} in {span}, "
+                                f"needs {MIN_LOCKED_TRADES}+"))
+        return rows
     if passed and beat:
         verdict = "PASSED - made money and beat holding"
     elif beat:
@@ -306,9 +320,6 @@ def _assemble(
     intro = f"{heading}\n{name}"
     if versions:
         intro += f"\n{idea_shape(versions)}"
-    cut = _CUT_SHORT.get(str(run.get("status")))
-    if cut:
-        intro += f"\n⚠️ The day was {cut}. What it finished was still kept."
     intro += ("\n\nEvery version below is the FULL backtest: every training year, "
               "all stocks and timeframes. The locked year at the end is the exam.")
     # The 83x that prompted this warning was one stock in one lucky stretch,
@@ -326,6 +337,14 @@ def _assemble(
     for index, version in enumerate(ordered):
         blocks.append((_label(version, first=index == 0, compact=compact),
                        _table(version_rows(version, compact=compact))))
+
+    # A day the allowance cut short stops here. Everything after this point -
+    # the verdict, the locked year - describes a day that finished, and the
+    # marker is the honest end of one that did not. The locked year is still
+    # measured and stored; it is on the dashboard, not in this message.
+    if _CUT_SHORT.get(str(run.get("status"))):
+        blocks.append((f"\n{CUT_SHORT_MARKER}", None))
+        return blocks
 
     winner = best_version(ordered)
     chosen = run.get("final_strategy_name")

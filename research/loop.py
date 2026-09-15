@@ -19,7 +19,11 @@ from typing import Any
 
 from research.brain import BrainStopped
 
-MAX_VERSIONS = 7
+# Five, not seven. Seven versions is fourteen Opus calls, which exhausted
+# the owner's shared Pro allowance mid-run on 2026-09-15 and left the day
+# falling back to a training-score choice. Five leaves headroom for his
+# own use of Claude.
+MAX_VERSIONS = 5
 REPAIR_ATTEMPTS = 3
 DEFAULT_BUDGET_SECONDS = 5 * 60 * 60
 
@@ -125,7 +129,7 @@ def run_versions(
 
         if checked is None:
             # A version that never became a strategy still counts toward the
-            # seven: an idea Opus cannot express is a result about the idea.
+            # limit: an idea Opus cannot express is a result about the idea.
             versions.append(attempt_row)
             version_no += 1
             previous_summary = None

@@ -177,16 +177,18 @@ def test_the_locked_window_is_measured_from_its_own_dates():
 
 
 def test_the_locked_block_names_the_gain_and_its_period():
-    rows = labelled(locked_rows(a_run()))
+    rows = labelled(locked_rows(a_run(locked_trades=6)))
     assert rows["You lost"] == "₹10,315  (-10.3% over 12 months)"
     assert rows["Trades"] == "6 in 12 months  (0.5 per month)"
     assert rows["Wins"] == "2 of 6  (33%)"
 
 
 def test_the_locked_verdict_explains_itself():
-    assert labelled(locked_rows(a_run()))["VERDICT"] == (
+    """With enough trades to judge; below that see the too-few-trades tests."""
+    assert labelled(locked_rows(a_run(locked_trades=12)))["VERDICT"] == (
         "FAILED - lost money; holding gained instead")
-    assert labelled(locked_rows(a_run(verdict_passed=True, beat_holding=True)))["VERDICT"] == (
+    assert labelled(locked_rows(a_run(locked_trades=12, verdict_passed=True,
+                                      beat_holding=True)))["VERDICT"] == (
         "PASSED - made money and beat holding")
 
 
@@ -291,8 +293,9 @@ def test_the_dashboard_link_is_included_when_there_is_one():
     assert "Full detail" not in telegram_html(a_run(), title="t")
 
 
-def test_a_day_cut_short_says_why():
-    assert "cut short" in plain_text(a_run(status="stopped_limit"), title="t").lower()
+def test_a_day_cut_short_ends_with_the_marker_rather_than_a_banner():
+    body = plain_text(a_run(status="stopped_limit"), title="t")
+    assert body.rstrip().endswith("limit expired.........................")
 
 
 def test_only_the_headline_of_a_review_reaches_the_phone():
@@ -306,3 +309,59 @@ def test_only_the_headline_of_a_review_reaches_the_phone():
 def test_a_review_with_no_sentence_end_is_cut_with_an_ellipsis():
     assert first_sentence("x" * 400).endswith("…")
     assert len(first_sentence("x" * 400)) <= 220
+
+
+# --- a day the allowance cut short -------------------------------------------
+
+
+def test_a_cut_short_day_ends_at_the_marker():
+    """It stops where the run stopped rather than describing a day that finished."""
+    body = plain_text(a_run(status="stopped_limit"), title="t", versions=seven_versions())
+    assert body.rstrip().endswith("limit expired.........................")
+    assert "VERDICT FOR THE DAY" not in body
+    assert "THE LOCKED YEAR" not in body
+
+
+def test_the_marker_is_preceded_by_a_blank_line():
+    body = plain_text(a_run(status="stopped_limit"), title="t", versions=seven_versions())
+    tail = body.rstrip().splitlines()
+    assert tail[-1] == "limit expired........................."
+    assert tail[-2] == "" and tail[-3] == ""
+
+
+def test_the_versions_it_finished_are_all_still_there():
+    body = plain_text(a_run(status="stopped_limit"), title="t", versions=seven_versions())
+    for tag in ("v1.1", "v1.4", "v1.7"):
+        assert tag in body
+
+
+def test_a_finished_day_carries_no_marker():
+    body = plain_text(a_run(), title="t", versions=seven_versions())
+    assert "limit expired" not in body
+    assert "THE LOCKED YEAR" in body
+
+
+def test_the_marker_survives_html_escaping():
+    body = telegram_html(a_run(status="stopped_limit"), title="t", versions=seven_versions())
+    assert "limit expired........................." in body
+
+
+# --- too few trades is not a failure -----------------------------------------
+
+
+def test_one_trade_in_the_locked_year_is_not_a_verdict():
+    """A single trade is a coin toss; calling it FAILED reads as evidence."""
+    rows = labelled(locked_rows(a_run(locked_trades=1, win_rate_pct=0.0)))
+    assert rows["VERDICT"] == "TOO FEW TRADES to judge - 1 in 12 months, needs 10+"
+
+
+def test_enough_trades_gets_a_real_verdict():
+    rows = labelled(locked_rows(a_run(locked_trades=12)))
+    assert rows["VERDICT"].startswith("FAILED")
+
+
+def test_too_few_trades_still_shows_what_happened():
+    """The numbers are still worth seeing, they just do not settle anything."""
+    rows = labelled(locked_rows(a_run(locked_trades=1, win_rate_pct=0.0)))
+    assert rows["Ended with"] == "\u20b989,685"
+    assert rows["Trades"] == "1 in 12 months  (0.1 per month)"

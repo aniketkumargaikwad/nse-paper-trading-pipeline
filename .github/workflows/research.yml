@@ -16,7 +16,7 @@ on:
     inputs:
       max_versions:
         description: "How many versions the day may try"
-        default: "7"
+        default: "5"
 
 # One at a time. GitHub holds one running and one waiting; a third request
 # replaces the waiting one.
@@ -73,7 +73,7 @@ jobs:
       - name: Run the day
         run: |
           python -m research.run_day \
-            --max-versions "${{ inputs.max_versions || 7 }}" \
+            --max-versions "${{ inputs.max_versions || 5 }}" \
             --run-id-file run-id.txt \
             --fallback-file research-fallback.json \
             --commit-journal
