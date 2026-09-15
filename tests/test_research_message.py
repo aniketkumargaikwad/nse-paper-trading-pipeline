@@ -66,8 +66,9 @@ def a_version(version=1, *, beat=141, profitable=761, tested=1177, **over):
             "top": [{
                 "symbol": "NSE:CGPOWER", "timeframe": "30m", "trades": 350,
                 "trades_per_month": 3.5, "win_rate_pct": 51.0, "end_value": 345000.0,
-                "holding_value": 210000.0, "cagr_pct": 16.2, "window_years": 8.4,
-                "worst_dip_pct": 22.1,
+                "holding_value": 210000.0, "cagr_pct": over.pop("cagr_pct", 16.2),
+                "window_years": 8.4, "worst_dip_pct": 22.1,
+                "segment": "swing", "held_days": 4.0,
             }],
         },
     }
@@ -120,11 +121,23 @@ def test_a_version_gives_the_money_and_the_benchmark():
     assert rows["Just holding"] == "₹2,10,000"
 
 
+def test_a_version_says_which_segment_it_trades():
+    """Measured from the holding period, not from what the strategy claims."""
+    rows = labelled(version_rows(a_version()))
+    assert rows["Built for"] == "swing (held ~4 days)"
+
+
+def test_a_version_in_the_target_band_says_so():
+    rows = labelled(version_rows(a_version(cagr_pct=70.0)))
+    assert "IN the 4-7% target" in rows["Return a month"]
+
+
 def test_a_version_gives_yearly_and_monthly_return():
     rows = labelled(version_rows(a_version()))
     assert rows["Return a year"] == "+16.2%"
-    # 16.2% a year compounds from about 1.26% a month, not 16.2/12 = 1.35%.
-    assert rows["Return a month"] == "+1.26%"
+    # 16.2% a year compounds from about 1.26% a month, not 16.2/12 = 1.35%,
+    # and the line says where that sits against the 4-7% the owner wants.
+    assert rows["Return a month"] == "+1.26%  (below the 4-7% target)"
 
 
 def test_the_monthly_return_compounds_rather_than_divides():
@@ -132,7 +145,7 @@ def test_the_monthly_return_compounds_rather_than_divides():
         "combos_tested": 10, "combos_profitable": 5, "combos_beating_hold": 1,
         "top": [{"symbol": "A", "timeframe": "day", "trades": 30, "cagr_pct": 12.0}],
     })))
-    assert rows["Return a month"] == "+0.95%"      # 12% a year, not 1.00%
+    assert rows["Return a month"].startswith("+0.95%")      # 12% a year, not 1.00%
 
 
 def test_every_version_carries_a_verdict_on_one_scale():

@@ -23,7 +23,10 @@ from dataclasses import dataclass
 
 from costs import HoldingCostModel
 from research.lakh import LakhResult, compound
+from research.segment import MIN_TRADES_PER_MONTH
 from research.sweep import ComboResult
+
+DAYS_PER_MONTH = 30.44
 
 MIN_TRAINING_TRADES = 30
 MAX_TRAINING_DIP_PCT = 30.0
@@ -48,7 +51,14 @@ def pick_best(
     for order, result in enumerate(results):
         if result.skipped_reason is not None or len(result.trades) < MIN_TRAINING_TRADES:
             continue
-        lakh = compound(result.trades, cost_model, window_days=window_days_for(result))
+        window_days = window_days_for(result)
+        # An active system, by instruction. Five trades over eight years can
+        # produce a spectacular total and still say nothing - and it is not
+        # something the owner can run.
+        months = max(window_days / DAYS_PER_MONTH, 0.1)
+        if len(result.trades) / months < MIN_TRADES_PER_MONTH:
+            continue
+        lakh = compound(result.trades, cost_model, window_days=window_days)
         # The sweep's dip counts money still in an open position; compound's
         # only sees closed trades. Prefer the honest one - it is the whole
         # point of this filter.

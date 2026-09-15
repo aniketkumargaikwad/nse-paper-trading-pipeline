@@ -36,6 +36,8 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
 
+from research.segment import describe, meets_target
+
 TELEGRAM_LIMIT = 4096
 START_VALUE = 100000
 REVIEW_CHARS = 220
@@ -172,6 +174,9 @@ def version_rows(version: Mapping[str, Any], *, compact: bool = False) -> list[t
     if best.get("symbol"):
         rows.append(("Luckiest", f"{best['symbol']}, {best.get('timeframe')} bars"))
 
+        if best.get("segment") and not compact:
+            rows.append(("Built for", describe(best["segment"], best.get("held_days"))))
+
         years = best.get("window_years")
         if years and not compact:
             rows.append(("Tested over", f"{years:.1f} years of history"))
@@ -200,8 +205,13 @@ def version_rows(version: Mapping[str, Any], *, compact: bool = False) -> list[t
         if annual is not None:
             rows.append(("Return a year", f"{annual:+.1f}%"))
             monthly = _monthly_from_annual(annual)
-            if monthly is not None and not compact:
-                rows.append(("Return a month", f"{monthly:+.2f}%"))
+            if monthly is not None:
+                # The target band is the point of the line, so it survives
+                # compaction even when the wording has to shrink.
+                against = meets_target(monthly)
+                if compact:
+                    against = against.replace("the 4-7% target", "target")
+                rows.append(("Return a month", f"{monthly:+.2f}%  ({against})"))
         if not compact and best.get("worst_dip_pct") is not None:
             rows.append(("Worst drop", f"{best['worst_dip_pct']:.1f}%"))
 

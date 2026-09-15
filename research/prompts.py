@@ -12,6 +12,11 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from research.segment import (
+    MIN_TRADES_PER_MONTH,
+    TARGET_MONTHLY_MAX,
+    TARGET_MONTHLY_MIN,
+)
 from research.summary import TrainingSummary
 
 PROPOSE_SCHEMA: dict[str, Any] = {
@@ -52,6 +57,34 @@ Write ONE strategy as a single top-level YAML mapping, not a file of them:
   a top-level key.
 """
 
+_YEARLY_MIN = (1 + TARGET_MONTHLY_MIN / 100) ** 12 * 100 - 100
+_YEARLY_MAX = (1 + TARGET_MONTHLY_MAX / 100) ** 12 * 100 - 100
+
+# What the owner actually wants, stated up front. Without it Opus optimised
+# for "profitable somewhere", which is how six versions in a row came back
+# holding one stock for two years and trading twice a quarter.
+AIM = f"""\
+What this strategy is being designed to achieve:
+- an average compounded return of {TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}% A MONTH,
+  which is {_YEARLY_MIN:.0f}-{_YEARLY_MAX:.0f}% a year. That is deliberately ambitious: say so in
+  your hypothesis if you think the idea cannot reach it, rather than quietly
+  aiming lower.
+- at least {MIN_TRADES_PER_MONTH:.0f} trades a month on the combination finally picked. A
+  combination trading less often is DISCARDED however good its total looks,
+  so an idea that enters once a quarter cannot win here.
+- beating simply holding the same stock. One that made money while holding
+  made more is discarded too.
+
+Say in `description` which segment you are designing for: intraday (closed
+the same day), swing (held days to a few weeks), or long-term (held months).
+The tool MEASURES the segment from your trades' holding periods and reports
+it, so an intraday claim that holds for three weeks is shown as swing.
+
+FUTURES AND OPTIONS ARE NOT TESTABLE HERE. The price store holds NSE cash
+equities only - no expiries, strikes, lot sizes or margin - so do not propose
+an F&O strategy.
+"""
+
 RULES = """\
 Rules the tool applies to whatever you write, so do not spend words on them:
 - sizing is forced to notional, 100000 rupees per trade
@@ -81,6 +114,8 @@ def propose_prompt(
     """The ask for a strategy: a first idea, or the next version of one."""
     parts = [
         "You are designing ONE trading strategy to be tested on Indian equities.",
+        "",
+        AIM,
         "",
         RULES,
     ]

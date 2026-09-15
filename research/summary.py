@@ -20,6 +20,7 @@ from typing import Any
 
 from costs import HoldingCostModel
 from research.lakh import START_VALUE, compound
+from research.segment import classify, holding_days
 from research.sweep import ComboResult
 
 LIST_SIZE = 15
@@ -80,6 +81,11 @@ def _row(result: ComboResult, cost_model: HoldingCostModel, window_days: int) ->
         "timeframe": result.timeframe,
         "trades": len(result.trades),
         "trades_per_month": round(len(result.trades) / months, 2),
+        # Measured from the trades, not from what the strategy calls itself:
+        # the holding period decides the fees, the overnight risk and whether
+        # the owner can run it at all.
+        "segment": classify(result.trades),
+        "held_days": (round(held, 2) if (held := holding_days(result.trades)) else None),
         "win_rate_pct": round(100 * wins / len(result.trades), 2) if result.trades else None,
         "net_pnl": round(result.net_pnl, 2),
         "return_pct": round(returned, 2),

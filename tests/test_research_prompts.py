@@ -108,3 +108,31 @@ def test_review_says_the_tables_are_ranked_by_excess_over_holding():
     """Ranked by rupees, the tables showed the most beta-heavy combinations."""
     text = review_prompt(summary=a_summary(), version=1, versions_left=2)
     assert "excess_vs_hold_pct" in text and "combos_beating_hold" in text
+
+
+# --- what the strategy is being designed for ---------------------------------
+
+
+def test_propose_states_the_monthly_return_being_aimed_at():
+    text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
+    assert "4-7% A MONTH" in text
+    assert "60-125% a year" in text
+    assert "deliberately ambitious" in text
+
+
+def test_propose_states_the_trade_rate_floor():
+    text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
+    assert "10 trades a month" in text
+    assert "DISCARDED" in text
+
+
+def test_propose_asks_which_segment_it_is_designing_for():
+    text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
+    assert "intraday" in text and "swing" in text and "long-term" in text
+    assert "MEASURES the segment" in text
+
+
+def test_propose_rules_out_futures_and_options():
+    """The candle store is cash equities; an F&O idea cannot be tested at all."""
+    text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
+    assert "FUTURES AND OPTIONS ARE NOT TESTABLE" in text

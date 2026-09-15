@@ -33,8 +33,10 @@ def combo(symbol, timeframe, trade_list, skipped=None, hold=0.0):
     return ComboResult(symbol, timeframe, False, trade_list, skipped, hold_return_pct=hold)
 
 
-def pick(results):
-    return pick_best(results, FREE, window_days_for=lambda r: 730)
+# Sixty days is about two months, so the 30-trade helpers below clear the
+# 10-trades-a-month floor. Tests that care about the floor set their own.
+def pick(results, window_days=60):
+    return pick_best(results, FREE, window_days_for=lambda r: window_days)
 
 
 def test_fewer_than_30_training_trades_never_qualifies():
@@ -92,3 +94,24 @@ def test_a_tie_on_margin_goes_to_more_trades():
 def test_the_pick_carries_its_training_figures():
     got = pick([combo("A", "day", trades(30, 1.0), hold=0.0)])
     assert got.training.trades == 30 and got.training.cagr_pct > 0
+
+
+# --- an active system, or nothing --------------------------------------------
+
+
+def test_a_combination_that_barely_trades_is_not_picked():
+    """Five trades over eight years can look spectacular and say nothing."""
+    thirty = combo("A", "day", trades(30, 1.0), hold=0.0)
+    assert pick([thirty], window_days=60) is not None         # 15 a month
+    assert pick([thirty], window_days=730) is None            # 1.25 a month
+
+
+def test_the_floor_is_a_rate_not_a_total():
+    """Three hundred trades is a lot, and still too slow spread over 39 months."""
+    many = combo("A", "day", trades(300, 0.1), hold=0.0)
+    assert pick([many], window_days=1200) is None             # 7.6 a month
+    assert pick([many], window_days=600) is not None          # 15.2 a month
+
+
+def test_an_active_combination_still_has_to_beat_holding():
+    assert pick([combo("A", "day", trades(30, 1.0), hold=200.0)], window_days=60) is None
