@@ -1,9 +1,19 @@
 """Pick one stock x timeframe from a version's TRAINING results (design 5.3).
 
-A fixed rule, not a judgement: among combinations with enough trades and a
-survivable worst dip, the highest compounded annual return after fees. Ties go
-to more trades, then to the earlier combination, so the same results always
-produce the same pick.
+A fixed rule, not a judgement, so it cannot be tempted to cherry-pick.
+
+THE RULE BEATS BUY-AND-HOLD OR PICKS NOTHING. The first version ranked by
+compounded annual return alone, which in a training window where simply
+holding averaged +418% meant the winner was usually whichever stock rose
+most - beta wearing a strategy's clothes. Measured on the 2026-09-14 run:
+version 7 beat holding on 131 of 1,177 combinations, the picker chose none of
+them, and its choice went on to lose 10.3% of the locked year while the stock
+itself gained 30.7%.
+
+So a combination qualifies only if it beat holding the same stock over the
+same window, and the best excess over holding wins. Days where nothing
+qualifies now report no pick, which is a truthful empty answer rather than a
+flattering wrong one.
 """
 
 from __future__ import annotations
@@ -23,6 +33,9 @@ MAX_TRAINING_DIP_PCT = 30.0
 class Pick:
     result: ComboResult
     training: LakhResult
+    # How far ahead of simply holding the same stock, in percentage points
+    # over the whole training window. The number the rule now ranks on.
+    excess_vs_hold_pct: float = 0.0
 
 
 def pick_best(
@@ -38,8 +51,17 @@ def pick_best(
         lakh = compound(result.trades, cost_model, window_days=window_days_for(result))
         if lakh.cagr_pct is None or lakh.worst_dip_pct > MAX_TRAINING_DIP_PCT:
             continue
-        candidates.append((order, Pick(result, lakh)))
+        if result.hold_return_pct is None:
+            # No benchmark, so "did it beat doing nothing" has no answer and
+            # the combination cannot be judged at all.
+            continue
+        returned = 100 * (lakh.end_value - lakh.start_value) / lakh.start_value
+        excess = returned - result.hold_return_pct
+        if excess <= 0:
+            continue
+        candidates.append((order, Pick(result, lakh, round(excess, 4))))
     if not candidates:
         return None
-    candidates.sort(key=lambda item: (-item[1].training.cagr_pct, -item[1].training.trades, item[0]))
+    candidates.sort(key=lambda item: (-item[1].excess_vs_hold_pct,
+                                      -item[1].training.trades, item[0]))
     return candidates[0][1]

@@ -1,24 +1,29 @@
 """One stored run, as the words that arrive on a phone (design 7.3).
 
 Pure: a mapping in, a string out. No client, no clock, no network - so every
-shape a day can take (no pick, cut short, a review longer than Telegram will
-carry) is tested without a bot token.
+shape a day can take is tested without a bot token.
 
-Written for someone who does not read backtests for a living. That means:
+THE SHAPE
+---------
+One block per version, each with the same detail, then the day's verdict,
+then the locked year. A reader should be able to see what changed between
+v3 and v4 and what it did, without opening anything.
 
-* Every number says over what period. "Rs 1,00,000 became Rs 89,685" is
-  meaningless without "in 12 months".
-* Trade counts are given as a rate as well as a total. Six trades is
-  unreadable; 0.5 a month is a sentence.
-* The gain or loss is stated, not left as a subtraction between two lines.
-* Every version gets a verdict, on the same scale, so seven rows can be read
-  at a glance instead of compared by hand.
-* "Beat holding" leads, because making money in a rising market is not an
-  edge - and the training years rose about 418%.
+WHICH NUMBERS ARE WHICH
+-----------------------
+Version blocks are the TRAINING window - every year of history except the
+last one, which is eight to fifteen years depending on the timeframe. That is
+the full backtest.
 
-Version verdicts are TRAINING-ONLY. The locked year is opened once, for the
-chosen version, so no other version has a locked-year number to report and
-the message must not imply one.
+The locked year is the exam: twelve months held back, opened ONCE, for the
+one version the day ended on. It is deliberately not reported per version.
+Showing seven versions' locked years and letting a human pick the best is
+fitting to the exam, which is the whole thing the locked year exists to
+prevent.
+
+Written for someone who does not read backtests for a living: every number
+says over what period, trade counts come as a rate, and every version carries
+a verdict on one scale.
 
 This is the one place a locked-year number is ALLOWED to be formatted for a
 human. The prompt builder never reads it; see design 2.4.
@@ -33,9 +38,7 @@ from typing import Any
 
 TELEGRAM_LIMIT = 4096
 START_VALUE = 100000
-REVIEW_CHARS = 260
-# Every label must be shorter than this or its value runs into it. A test
-# pins that, because the overflow is silent and only shows on a phone.
+REVIEW_CHARS = 220
 LABEL_WIDTH = 15
 DAYS_PER_MONTH = 30.44
 
@@ -97,11 +100,7 @@ def _day(value: Any) -> str:
 
 
 def locked_months(run: Mapping[str, Any]) -> float:
-    """How long the locked year actually was, in months.
-
-    Every balance in this message is "over this long", and a reader cannot
-    judge -10.3% without it.
-    """
+    """How long the locked year actually was, in months."""
     start, end = _as_date(run.get("locked_from")), _as_date(run.get("locked_to"))
     if not start or not end:
         return 12.0
@@ -109,44 +108,109 @@ def locked_months(run: Mapping[str, Any]) -> float:
 
 
 def edge_verdict(beat: int | None, tested: int | None) -> str:
-    """One scale for every version, so seven rows can be skimmed."""
+    """One scale for every version, so seven blocks can be compared."""
     if not tested or beat is None:
         return "not measured"
     share = 100 * beat / tested
     if share >= EDGE_PCT:
-        return "REAL EDGE"
+        return f"REAL EDGE ({share:.0f}% beat holding)"
     if share >= MIXED_PCT:
-        return "mixed"
-    return "no edge"
+        return f"mixed ({share:.0f}% beat holding)"
+    return f"no edge (only {share:.0f}% beat holding)"
 
 
 def idea_shape(versions: Sequence[Mapping[str, Any]]) -> str:
-    """Whether the day refined one idea or tried several.
-
-    The seven rows below look like seven strategies unless this says
-    otherwise, and on the first real day they were seven tweaks of one.
-    """
+    """Whether the day refined one idea or tried several."""
     if not versions:
         return "No version was tested."
     ideas = {row.get("idea_no") for row in versions}
     if len(ideas) == 1:
         if len(versions) == 1:
             return "One idea, tested once."
-        return (f"Tried as {len(versions)} versions of this ONE idea - each "
-                "version a tweak of the one before, not separate strategies.")
+        return (f"{len(versions)} versions of this ONE idea - each a tweak of the "
+                "one before, not separate strategies.")
     return (f"{len(ideas)} separate ideas, {len(versions)} versions in total. "
             "A new idea starts from scratch; a new version tweaks the last one.")
 
 
-def summary_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """The label/value pairs of the result table, in reading order."""
+def _monthly_from_annual(cagr_pct: float | None) -> float | None:
+    """The monthly rate that compounds to this annual one.
+
+    Dividing by twelve would overstate it, and this number sits next to real
+    money.
+    """
+    if cagr_pct is None or cagr_pct <= -100:
+        return None
+    return 100 * ((1 + cagr_pct / 100) ** (1 / 12) - 1)
+
+
+def version_rows(version: Mapping[str, Any], *, compact: bool = False) -> list[tuple[str, str]]:
+    """One version's TRAINING result, in the same shape as every other."""
+    facts = version.get("training_summary") or {}
+    if not version.get("valid"):
+        error = (version.get("error") or "no reason recorded").splitlines()[0]
+        return [("Rejected", error[:60]), ("VERDICT", "never tested")]
+    if not facts:
+        return [("VERDICT", "tested, but no summary was stored")]
+
+    tested = facts.get("combos_tested")
+    profitable = facts.get("combos_profitable")
+    beat = facts.get("combos_beating_hold")
+    best = (facts.get("top") or [{}])[0]
+
+    rows: list[tuple[str, str]] = []
+    if best.get("symbol"):
+        rows.append(("Best stock", f"{best['symbol']}, {best.get('timeframe')} bars"))
+
+        years = best.get("window_years")
+        if years and not compact:
+            rows.append(("Tested over", f"{years:.1f} years of history"))
+
+        trades = best.get("trades") or 0
+        rate = best.get("trades_per_month")
+        rows.append(("Total trades", f"{trades}"
+                                     + (f"  ({rate:.1f} a month)" if rate else "")))
+
+        if not compact and best.get("win_rate_pct") is not None:
+            rows.append(("Win rate", f"{best['win_rate_pct']:.0f}%"))
+
+        # Older runs were stored before these were recorded. A missing row is
+        # honest; "n/a" beside real money is not.
+        end = best.get("end_value")
+        if end is not None:
+            if compact:
+                rows.append((f"{rupees(START_VALUE)} →", rupees(end)))
+            else:
+                rows.append(("Started with", rupees(START_VALUE)))
+                rows.append(("Ended with", rupees(end)))
+        if best.get("holding_value") is not None:
+            rows.append(("Just holding", rupees(best["holding_value"])))
+
+        annual = best.get("cagr_pct")
+        if annual is not None:
+            rows.append(("Return a year", f"{annual:+.1f}%"))
+            monthly = _monthly_from_annual(annual)
+            if monthly is not None and not compact:
+                rows.append(("Return a month", f"{monthly:+.2f}%"))
+        if not compact and best.get("worst_dip_pct") is not None:
+            rows.append(("Worst drop", f"{best['worst_dip_pct']:.1f}%"))
+
+    if tested:
+        rows.append(("Across all", f"{tested} combos · {profitable} made money "
+                                   f"· {beat if beat is not None else '?'} beat holding"))
+    rows.append(("VERDICT", edge_verdict(beat, tested)))
+    return rows
+
+
+def locked_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """The exam: the chosen version on twelve months it never saw."""
     months = locked_months(run)
     span = f"{months:.0f} months"
 
     if not run.get("pick_symbol"):
         return [
             ("Best stock", "none qualified"),
-            ("Why none", "nothing had 30+ trades and a survivable drop"),
+            ("Why none", "nothing beat simply holding in training"),
             ("VERDICT", "no strategy worth measuring"),
         ]
 
@@ -177,8 +241,7 @@ def summary_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
         ("Worst drop", f"{run.get('worst_dip_pct') or 0:.1f}% below its own best"),
     ]
 
-    passed = run.get("verdict_passed")
-    beat = run.get("beat_holding")
+    passed, beat = run.get("verdict_passed"), run.get("beat_holding")
     if passed and beat:
         verdict = "PASSED - made money and beat holding"
     elif beat:
@@ -191,83 +254,131 @@ def summary_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
     return rows
 
 
-def version_table(versions: Sequence[Mapping[str, Any]], chosen: str | None = None) -> list[str]:
-    """One row per version, on the same scale as each other."""
-    if not versions:
-        return []
-    lines = ["Ver  Made money    Beat holding   Verdict"]
-    for row in sorted(versions, key=lambda r: (r.get("idea_no") or 0, r.get("version_no") or 0)):
-        label = f"v{row.get('idea_no')}.{row.get('version_no')}"
-        facts = row.get("training_summary") or {}
-        if not row.get("valid"):
-            lines.append(f"{label:<5}{'-':<14}{'-':<15}rejected, not tested")
-            continue
-        tested = facts.get("combos_tested")
-        profitable = facts.get("combos_profitable")
-        beat = facts.get("combos_beating_hold")
-        made = (f"{profitable} ({100 * profitable / tested:.0f}%)"
-                if tested and profitable is not None else "-")
-        beaten = (f"{beat} ({100 * beat / tested:.0f}%)"
-                  if tested and beat is not None else "not measured")
-        verdict = edge_verdict(beat, tested)
-        if chosen and row.get("strategy_name") == chosen:
-            verdict += " - CHOSEN"
-        lines.append(f"{label:<5}{made:<14}{beaten:<15}{verdict}")
-    return lines
+def best_version(versions: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    """The version that beat holding most often. The day's own answer."""
+    scored = [
+        (((v.get("training_summary") or {}).get("combos_beating_hold") or 0)
+         / max((v.get("training_summary") or {}).get("combos_tested") or 1, 1), v)
+        for v in versions if v.get("valid") and v.get("training_summary")
+    ]
+    return max(scored, key=lambda pair: pair[0])[1] if scored else None
+
+
+# How much of a change note survives. A version heading is a line on a phone,
+# and Opus writes these at up to 400 characters.
+NOTE_CHARS = 150
+NOTE_CHARS_COMPACT = 70
+
+
+def _label(version: Mapping[str, Any], *, first: bool, compact: bool = False) -> str:
+    tag = f"v{version.get('idea_no')}.{version.get('version_no')}"
+    note = " ".join((version.get("change_note") or "").split())
+    if first:
+        return f"{tag} - the first version"
+    if not note:
+        return f"{tag} - no change recorded"
+    limit = NOTE_CHARS_COMPACT if compact else NOTE_CHARS
+    if len(note) > limit:
+        note = note[: limit - 1].rstrip() + "…"
+    return f"{tag} - changed: {note}"
 
 
 def _table(rows: Sequence[tuple[str, str]]) -> str:
     return "\n".join(f"{label:<{LABEL_WIDTH}}{value}" for label, value in rows)
 
 
-def _blocks(
+def _ordered(versions: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return sorted(versions, key=lambda r: (r.get("idea_no") or 0, r.get("version_no") or 0))
+
+
+def _assemble(
     run: Mapping[str, Any],
     title: str | None,
     dashboard_url: str | None,
     versions: Sequence[Mapping[str, Any]],
-) -> tuple[str, list[str], str, list[str], str, list[str]]:
-    """Heading, idea lines, result table, version table, legend, tail."""
+    *,
+    compact: bool,
+) -> list[tuple[str, str | None]]:
+    """(heading text, table text or None) pairs, in order."""
+    blocks: list[tuple[str, str | None]] = []
     heading = f"\U0001f4ca Research run — {_day(run.get('started_at'))}"
-
-    idea = [title or run.get("final_strategy_name") or "no idea reached a tested version"]
+    name = title or run.get("final_strategy_name") or "no idea reached a tested version"
+    intro = f"{heading}\n{name}"
     if versions:
-        idea.append(idea_shape(versions))
-
-    months = locked_months(run)
-    result_header = (
-        f"THE RESULT — measured on {months:.0f} months of prices it never saw "
-        f"while being designed: {_day(run.get('locked_from'))} to "
-        f"{_day(run.get('locked_to') or run.get('data_end'))}."
-    )
-
-    chosen = run.get("final_strategy_name")
-    rows = version_table(versions, chosen=chosen) if len(versions) > 1 else []
-    legend = ""
-    if rows:
-        tested = max(
-            (v.get("training_summary") or {}).get("combos_tested") or 0 for v in versions
-        )
-        legend = (
-            f"Each version was tested on {tested} stock-and-timeframe combinations, "
-            "using training years only. \"Beat holding\" is the one that matters: "
-            "making money in a rising market is not an edge. "
-            f"{EDGE_PCT:.0f}%+ = real edge, {MIXED_PCT:.0f}-{EDGE_PCT - 1:.0f}% = mixed, "
-            "below that = no edge."
-        )
-
-    tail: list[str] = []
+        intro += f"\n{idea_shape(versions)}"
     cut = _CUT_SHORT.get(str(run.get("status")))
     if cut:
-        tail.append(f"⚠️ The day was {cut}. What it finished was still kept.")
+        intro += f"\n⚠️ The day was {cut}. What it finished was still kept."
+    intro += ("\n\nEvery version below is the FULL backtest: every training year, "
+              "all stocks and timeframes. The locked year at the end is the exam.")
+    blocks.append((intro, None))
+
+    ordered = _ordered(versions)
+    for index, version in enumerate(ordered):
+        blocks.append((_label(version, first=index == 0, compact=compact),
+                       _table(version_rows(version, compact=compact))))
+
+    winner = best_version(ordered)
+    chosen = run.get("final_strategy_name")
+    verdict = "VERDICT FOR THE DAY"
+    if winner is not None:
+        tag = f"v{winner.get('idea_no')}.{winner.get('version_no')}"
+        facts = winner.get("training_summary") or {}
+        verdict += (f"\nBest of the {len(ordered)}: {tag} - "
+                    f"{edge_verdict(facts.get('combos_beating_hold'), facts.get('combos_tested'))}")
+        if chosen and winner.get("strategy_name") != chosen:
+            verdict += "\n(The day ended on a different version; the locked year below is that one.)"
     if run.get("ai_review"):
-        tail.append(f"What the AI concluded: {first_sentence(str(run['ai_review']))}")
+        verdict += f"\nThe AI's own conclusion: {first_sentence(str(run['ai_review']))}"
+    blocks.append((verdict, None))
+
+    months = locked_months(run)
+    exam = (f"THE LOCKED YEAR — {months:.0f} months never seen while designing "
+            f"({_day(run.get('locked_from'))} to "
+            f"{_day(run.get('locked_to') or run.get('data_end'))}), opened once, "
+            "for the chosen version only.")
+    blocks.append((exam, _table(locked_rows(run))))
+
+    tail = ""
     if dashboard_url:
-        tail.append(f"Full detail: {dashboard_url}")
-    tail.append(
-        f"⚠️ Prices frozen at {_day(run.get('data_end'))} — every day "
-        "tests a new idea against the same window, not new data."
-    )
-    return heading, idea, result_header, rows, legend, tail
+        tail += f"Full detail: {dashboard_url}\n"
+    tail += (f"⚠️ Prices frozen at {_day(run.get('data_end'))} — every day "
+             "tests a new idea against the same window, not new data.")
+    blocks.append((tail, None))
+    return blocks
+
+
+def _render(blocks: Sequence[tuple[str, str | None]], *, as_html: bool) -> str:
+    parts = []
+    for heading, table in blocks:
+        if as_html:
+            head = f"<b>{html.escape(heading)}</b>" if table else html.escape(heading)
+            parts.append(head + (f"\n<pre>{html.escape(table)}</pre>" if table else ""))
+        else:
+            parts.append(heading + (f"\n{table}" if table else ""))
+    return "\n\n".join(parts)
+
+
+def _build(
+    run: Mapping[str, Any], title: str | None, dashboard_url: str | None,
+    versions: Sequence[Mapping[str, Any]], *, as_html: bool,
+) -> str:
+    """Full detail if it fits, compact if it does not, truncated only as a last resort.
+
+    Seven versions at full detail is about 4,500 characters and Telegram stops
+    at 4,096, so the fallback drops rows rather than letting the API refuse
+    the whole message.
+    """
+    for compact in (False, True):
+        text = _render(_assemble(run, title, dashboard_url, versions, compact=compact),
+                       as_html=as_html)
+        if len(text) <= TELEGRAM_LIMIT:
+            return text
+    # Still too long: keep the first version, the verdict and the exam.
+    blocks = _assemble(run, title, dashboard_url, versions, compact=True)
+    trimmed = [blocks[0], *blocks[1:2], *blocks[-3:]]
+    text = _render(trimmed, as_html=as_html)
+    return text if len(text) <= TELEGRAM_LIMIT else text[: TELEGRAM_LIMIT - 1] + "…"
 
 
 def telegram_html(
@@ -280,24 +391,7 @@ def telegram_html(
     "EMA20>EMA50 uptrend" contains a bare '>', which would otherwise make
     Telegram reject the whole message with a 400 and send nothing.
     """
-    heading, idea, result_header, rows, legend, tail = _blocks(
-        run, title, dashboard_url, versions)
-    esc = html.escape
-
-    body = f"<b>{esc(heading)}</b>\n" + "\n".join(esc(line) for line in idea)
-    body += f"\n\n{esc(result_header)}\n<pre>{esc(_table(summary_rows(run)))}</pre>"
-    if rows:
-        body += (f"\n\n<b>THE {len(rows) - 1} VERSIONS</b>\n"
-                 f"<pre>{esc(chr(10).join(rows))}</pre>\n{esc(legend)}")
-    for line in tail:
-        body += f"\n\n{esc(line)}"
-    if len(body) <= TELEGRAM_LIMIT:
-        return body
-    # Trimming inside a tag would break the markup, so the version table and
-    # the tail are dropped whole before the result is touched.
-    short = f"<b>{esc(heading)}</b>\n{esc(idea[0][:200])}"
-    short += f"\n\n{esc(result_header)}\n<pre>{esc(_table(summary_rows(run)))}</pre>"
-    return short[:TELEGRAM_LIMIT]
+    return _build(run, title, dashboard_url, versions, as_html=True)
 
 
 def plain_text(
@@ -305,12 +399,4 @@ def plain_text(
     versions: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     """The same message with no markup, for email and for reading in a log."""
-    heading, idea, result_header, rows, legend, tail = _blocks(
-        run, title, dashboard_url, versions)
-    parts = [heading, *idea, "", result_header, "", _table(summary_rows(run))]
-    if rows:
-        parts += ["", f"THE {len(rows) - 1} VERSIONS", "", *rows, "", legend]
-    for line in tail:
-        parts += ["", line]
-    text = "\n".join(parts)
-    return text if len(text) <= TELEGRAM_LIMIT else text[: TELEGRAM_LIMIT - 1] + "…"
+    return _build(run, title, dashboard_url, versions, as_html=False)

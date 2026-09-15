@@ -1,8 +1,8 @@
 """What the morning message says, for every shape a run can take.
 
-These tests are mostly about readability rather than arithmetic: a number
-without its period, a label that runs into its value, or a version row with no
-verdict are all things that only show up on a phone at 9am.
+Mostly about readability rather than arithmetic: a number without its period, a
+label that runs into its value, or a version with no verdict are all things
+that only show up on a phone at 9am.
 """
 
 from __future__ import annotations
@@ -16,15 +16,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from research.message import (  # noqa: E402
     LABEL_WIDTH,
     TELEGRAM_LIMIT,
+    best_version,
     edge_verdict,
     first_sentence,
     idea_shape,
     locked_months,
+    locked_rows,
     plain_text,
     rupees,
-    summary_rows,
     telegram_html,
-    version_table,
+    version_rows,
 )
 
 
@@ -36,7 +37,7 @@ def a_run(**overrides):
         "data_end": date(2026, 7, 31),
         "locked_from": date(2025, 8, 1),
         "locked_to": date(2026, 7, 31),
-        "final_strategy_name": "R-20260914-washout-v7",
+        "final_strategy_name": "R-v7",
         "versions_tried": 7,
         "ideas_dropped": 0,
         "pick_symbol": "NSE:KEI",
@@ -54,28 +55,35 @@ def a_run(**overrides):
     return run
 
 
-def a_version(idea=1, version=1, tested=1177, profitable=761, beat=141, **over):
+def a_version(version=1, *, beat=141, profitable=761, tested=1177, **over):
+    """A version carrying the enriched training figures a new run stores."""
     row = {
-        "idea_no": idea, "version_no": version, "valid": True,
-        "decision": "next_version", "strategy_name": f"R-x-v{version}",
-        "training_summary": {"combos_tested": tested, "combos_profitable": profitable,
-                             "combos_beating_hold": beat},
+        "idea_no": 1, "version_no": version, "valid": True, "decision": "next_version",
+        "strategy_name": f"R-v{version}", "change_note": "" if version == 1 else "widened the stop",
+        "training_summary": {
+            "combos_tested": tested, "combos_profitable": profitable,
+            "combos_beating_hold": beat,
+            "top": [{
+                "symbol": "NSE:CGPOWER", "timeframe": "30m", "trades": 350,
+                "trades_per_month": 3.5, "win_rate_pct": 51.0, "end_value": 345000.0,
+                "holding_value": 210000.0, "cagr_pct": 16.2, "window_years": 8.4,
+                "worst_dip_pct": 22.1,
+            }],
+        },
     }
     row.update(over)
     return row
 
 
 def seven_versions():
-    counts = [(761, 141), (875, 122), (254, 39), (680, 106), (636, 26), (455, 66), (916, 131)]
-    rows = [a_version(version=n, profitable=p, beat=b)
-            for n, (p, b) in enumerate(counts, start=1)]
+    beats = [141, 122, 39, 106, 26, 66, 131]
+    rows = [a_version(version=n, beat=b) for n, b in enumerate(beats, start=1)]
     rows[-1]["decision"] = "stop"
-    rows[-1]["strategy_name"] = "R-20260914-washout-v7"
     return rows
 
 
-def labelled(run):
-    return dict(summary_rows(run))
+def labelled(rows):
+    return dict(rows)
 
 
 def test_rupees_are_grouped_the_way_they_are_read_here():
@@ -85,138 +93,181 @@ def test_rupees_are_grouped_the_way_they_are_read_here():
     assert rupees(None) == "n/a"
 
 
-# --- every number says over how long ------------------------------------------
+# --- a version block is the FULL training backtest ----------------------------
 
 
-def test_the_locked_window_is_measured_from_its_own_dates():
-    """Measured, not assumed: a topped-up DATA_END moves the window."""
-    assert round(locked_months(a_run())) == 12
-    assert round(locked_months(a_run(locked_to=date(2026, 1, 31)))) == 6
-    assert locked_months(a_run(locked_from=None, locked_to=None)) == 12.0
+def test_a_version_reports_the_whole_training_window_not_one_year():
+    rows = labelled(version_rows(a_version()))
+    assert rows["Tested over"] == "8.4 years of history"
 
 
-def test_the_balance_says_what_was_put_in_and_what_came_out():
-    rows = labelled(a_run())
+def test_a_version_gives_trades_as_a_total_and_a_rate():
+    assert labelled(version_rows(a_version()))["Total trades"] == "350  (3.5 a month)"
+
+
+def test_a_version_gives_the_money_and_the_benchmark():
+    rows = labelled(version_rows(a_version()))
     assert rows["Started with"] == "₹1,00,000"
-    assert rows["Ended with"] == "₹89,685"
+    assert rows["Ended with"] == "₹3,45,000"
+    assert rows["Just holding"] == "₹2,10,000"
 
 
-def test_the_gain_or_loss_names_the_period():
-    """-10.3% is unreadable without knowing it took a year."""
-    assert labelled(a_run())["You lost"] == "₹10,315  (-10.3% over 12 months)"
-    gained = labelled(a_run(lakh_end_value=143000))
-    assert gained["You gained"] == "₹43,000  (+43.0% over 12 months)"
+def test_a_version_gives_yearly_and_monthly_return():
+    rows = labelled(version_rows(a_version()))
+    assert rows["Return a year"] == "+16.2%"
+    # 16.2% a year compounds from about 1.26% a month, not 16.2/12 = 1.35%.
+    assert rows["Return a month"] == "+1.26%"
 
 
-def test_trades_are_given_as_a_rate_not_only_a_total():
-    """Six trades means nothing; half a trade a month is a sentence."""
-    assert labelled(a_run())["Trades"] == "6 in 12 months  (0.5 per month)"
-    busy = labelled(a_run(locked_trades=48))
-    assert busy["Trades"] == "48 in 12 months  (4.0 per month)"
+def test_the_monthly_return_compounds_rather_than_divides():
+    rows = labelled(version_rows(a_version(training_summary={
+        "combos_tested": 10, "combos_profitable": 5, "combos_beating_hold": 1,
+        "top": [{"symbol": "A", "timeframe": "day", "trades": 30, "cagr_pct": 12.0}],
+    })))
+    assert rows["Return a month"] == "+0.95%"      # 12% a year, not 1.00%
 
 
-def test_wins_are_counted_not_only_given_as_a_percentage():
-    assert labelled(a_run())["Wins"] == "2 of 6  (33%)"
+def test_every_version_carries_a_verdict_on_one_scale():
+    assert labelled(version_rows(a_version(beat=700)))["VERDICT"].startswith("REAL EDGE")
+    assert labelled(version_rows(a_version(beat=400)))["VERDICT"].startswith("mixed")
+    assert labelled(version_rows(a_version(beat=141)))["VERDICT"].startswith("no edge")
+
+
+def test_a_rejected_version_says_so_rather_than_showing_zeros():
+    rows = labelled(version_rows(
+        {"idea_no": 1, "version_no": 2, "valid": False, "error": "unknown indicator 'foo'"}))
+    assert "unknown indicator" in rows["Rejected"]
+    assert rows["VERDICT"] == "never tested"
+
+
+def test_a_version_stored_before_the_figures_existed_omits_them():
+    """An older run has no end_value; a missing row beats "n/a" beside money."""
+    old = a_version(training_summary={
+        "combos_tested": 1177, "combos_profitable": 761, "combos_beating_hold": 141,
+        "top": [{"symbol": "NSE:X", "timeframe": "day", "trades": 35}],
+    })
+    rows = labelled(version_rows(old))
+    assert "Ended with" not in rows and "Return a year" not in rows
+    assert rows["VERDICT"].startswith("no edge")
 
 
 def test_every_label_fits_its_column():
-    """An overflowing label silently runs into its value, only visible on a phone."""
-    for run in (a_run(), a_run(lakh_end_value=143000, verdict_passed=True),
-                a_run(pick_symbol=None, lakh_end_value=None, hold_end_value=None)):
-        for label, _ in summary_rows(run):
+    """An overflowing label silently runs into its value."""
+    for compact in (False, True):
+        for label, _ in version_rows(a_version(), compact=compact):
             assert len(label) < LABEL_WIDTH, f"{label!r} does not fit"
+    for label, _ in locked_rows(a_run()):
+        assert len(label) < LABEL_WIDTH, f"{label!r} does not fit"
 
 
-# --- the verdict --------------------------------------------------------------
+# --- the locked year is the exam, and only the chosen version sits it ---------
 
 
-def test_the_verdict_explains_itself_rather_than_stating_a_word():
-    assert labelled(a_run())["VERDICT"] == "FAILED - lost money; holding gained instead"
-    assert labelled(a_run(verdict_passed=True, beat_holding=True))["VERDICT"] == (
+def test_the_locked_window_is_measured_from_its_own_dates():
+    assert round(locked_months(a_run())) == 12
+    assert round(locked_months(a_run(locked_to=date(2026, 1, 31)))) == 6
+
+
+def test_the_locked_block_names_the_gain_and_its_period():
+    rows = labelled(locked_rows(a_run()))
+    assert rows["You lost"] == "₹10,315  (-10.3% over 12 months)"
+    assert rows["Trades"] == "6 in 12 months  (0.5 per month)"
+    assert rows["Wins"] == "2 of 6  (33%)"
+
+
+def test_the_locked_verdict_explains_itself():
+    assert labelled(locked_rows(a_run()))["VERDICT"] == (
+        "FAILED - lost money; holding gained instead")
+    assert labelled(locked_rows(a_run(verdict_passed=True, beat_holding=True)))["VERDICT"] == (
         "PASSED - made money and beat holding")
-    assert "holding made more" in labelled(a_run(verdict_passed=True))["VERDICT"]
-    assert "holding lost more" in labelled(a_run(beat_holding=True))["VERDICT"]
 
 
 def test_a_day_with_no_pick_still_carries_a_verdict():
-    rows = labelled(a_run(pick_symbol=None, lakh_end_value=None, hold_end_value=None))
+    rows = labelled(locked_rows(a_run(pick_symbol=None, lakh_end_value=None,
+                                      hold_end_value=None)))
     assert rows["Best stock"] == "none qualified"
-    assert rows["VERDICT"] == "no strategy worth measuring"
+    assert "beat simply holding" in rows["Why none"]
+
+
+def test_the_locked_year_appears_once_not_per_version():
+    """Seven locked years to choose from would be fitting to the exam."""
+    body = plain_text(a_run(), title="t", versions=seven_versions())
+    assert body.count("THE LOCKED YEAR") == 1
+    # The locked year's own figures appear once, not beside every version.
+    assert body.count("You lost") == 1
+    assert body.count("NSE:KEI") == 1
 
 
 # --- one idea, or several -----------------------------------------------------
 
 
 def test_seven_tweaks_of_one_idea_say_so():
-    """Seven rows look like seven strategies unless the message says otherwise."""
     said = idea_shape(seven_versions())
-    assert "7 versions of this ONE idea" in said
-    assert "not separate strategies" in said
+    assert "7 versions of this ONE idea" in said and "not separate strategies" in said
 
 
 def test_several_ideas_say_how_many_of_each():
-    versions = [a_version(idea=1, version=1), a_version(idea=2, version=1),
-                a_version(idea=2, version=2)]
-    said = idea_shape(versions)
-    assert "2 separate ideas, 3 versions" in said
+    versions = [a_version(1), a_version(2), a_version(3)]
+    versions[1]["idea_no"] = 2
+    versions[2]["idea_no"] = 2
+    assert "2 separate ideas, 3 versions" in idea_shape(versions)
 
 
-def test_a_single_version_day_says_that_plainly():
-    assert idea_shape([a_version()]) == "One idea, tested once."
+# --- the day's own verdict ----------------------------------------------------
 
 
-# --- every version gets a verdict ---------------------------------------------
+def test_the_best_version_is_the_one_that_beat_holding_most():
+    assert best_version(seven_versions())["version_no"] == 1      # 141 is the highest
 
 
-def test_the_edge_scale_is_the_same_for_every_version():
-    assert edge_verdict(600, 1177) == "REAL EDGE"
-    assert edge_verdict(400, 1177) == "mixed"
-    assert edge_verdict(131, 1177) == "no edge"
+def test_the_verdict_block_names_that_version():
+    body = plain_text(a_run(), title="t", versions=seven_versions())
+    assert "VERDICT FOR THE DAY" in body
+    assert "Best of the 7: v1.1" in body
+
+
+def test_it_says_when_the_day_ended_on_a_different_version():
+    body = plain_text(a_run(final_strategy_name="R-v7"), title="t", versions=seven_versions())
+    assert "The day ended on a different version" in body
+
+
+def test_the_edge_scale_is_the_same_everywhere():
+    assert edge_verdict(600, 1177).startswith("REAL EDGE")
+    assert edge_verdict(400, 1177).startswith("mixed")
+    assert edge_verdict(131, 1177).startswith("no edge")
     assert edge_verdict(None, 1177) == "not measured"
     assert edge_verdict(5, 0) == "not measured"
-
-
-def test_every_version_row_carries_a_verdict():
-    rows = version_table(seven_versions(), chosen="R-20260914-washout-v7")
-    assert rows[0].startswith("Ver")
-    body = rows[1:]
-    assert len(body) == 7
-    for line in body:
-        assert any(word in line for word in ("no edge", "mixed", "REAL EDGE"))
-    assert "CHOSEN" in body[-1]
-    assert sum("CHOSEN" in line for line in body) == 1
-
-
-def test_a_version_row_shows_both_counts_as_shares():
-    row = version_table([a_version(profitable=761, beat=141)])[1]
-    assert "761 (65%)" in row and "141 (12%)" in row
-
-
-def test_a_rejected_version_says_so_rather_than_showing_zeros():
-    rows = version_table([a_version(), a_version(version=2, valid=False,
-                                                 training_summary=None)])
-    assert "rejected, not tested" in rows[2]
 
 
 # --- assembling it ------------------------------------------------------------
 
 
-def test_the_result_block_names_the_window_it_was_measured_on():
-    body = plain_text(a_run(), title="t")
-    assert "01 Aug 2025 to 31 Jul 2026" in body
-    assert "never saw while being designed" in body
-
-
-def test_the_versions_and_their_legend_reach_both_renderings():
+def test_the_message_says_the_versions_are_the_full_backtest():
     body = plain_text(a_run(), title="t", versions=seven_versions())
-    assert "THE 7 VERSIONS" in body and "v1.4" in body
-    assert "Beat holding\" is the one that matters" in body
-    marked = telegram_html(a_run(), title="t", versions=seven_versions())
-    assert marked.count("<pre>") == 2 and "CHOSEN" in marked
+    assert "FULL backtest: every training year" in body
 
 
-def test_a_single_version_day_adds_no_version_table():
-    assert "VERSIONS" not in plain_text(a_run(), title="t", versions=[a_version()])
+def test_each_version_heading_says_what_changed():
+    body = plain_text(a_run(), title="t", versions=seven_versions())
+    assert "v1.1 - the first version" in body
+    assert "v1.2 - changed: widened the stop" in body
+
+
+def test_a_long_change_note_is_cut_rather_than_wrapped_forever():
+    versions = seven_versions()
+    versions[1]["change_note"] = "x" * 400
+    body = plain_text(a_run(), title="t", versions=versions)
+    assert "x" * 200 not in body
+
+
+def test_seven_full_version_blocks_fit_inside_telegrams_limit():
+    """Seven at full detail is the case that overflowed and lost six of them."""
+    for render in (plain_text, telegram_html):
+        body = render(a_run(), title="t", versions=seven_versions(),
+                      dashboard_url="https://example.test")
+        assert len(body) <= TELEGRAM_LIMIT
+        for tag in ("v1.1", "v1.2", "v1.3", "v1.4", "v1.5", "v1.6", "v1.7"):
+            assert tag in body, f"{tag} was dropped"
 
 
 def test_a_title_with_an_angle_bracket_cannot_break_the_markup():
@@ -233,25 +284,17 @@ def test_the_dashboard_link_is_included_when_there_is_one():
 
 
 def test_a_day_cut_short_says_why():
-    assert "cut short" in telegram_html(a_run(status="stopped_limit"), title="t").lower()
+    assert "cut short" in plain_text(a_run(status="stopped_limit"), title="t").lower()
 
 
 def test_only_the_headline_of_a_review_reaches_the_phone():
     review = ("1) Judge only on combos_beating_hold. 2) Average hold return of "
               "~418% means these are bull-market years. 3) Check gross first.")
     body = plain_text(a_run(ai_review=review), title="t")
-    assert "What the AI concluded: 1) Judge only on combos_beating_hold." in body
+    assert "1) Judge only on combos_beating_hold." in body
     assert "418%" not in body
-
-
-def test_both_renderings_are_capped_at_telegrams_limit():
-    long_title = "x" * 8000
-    assert len(telegram_html(a_run(), title=long_title,
-                             versions=seven_versions())) <= TELEGRAM_LIMIT
-    assert len(plain_text(a_run(), title=long_title,
-                          versions=seven_versions())) <= TELEGRAM_LIMIT
 
 
 def test_a_review_with_no_sentence_end_is_cut_with_an_ellipsis():
     assert first_sentence("x" * 400).endswith("…")
-    assert len(first_sentence("x" * 400)) <= 260
+    assert len(first_sentence("x" * 400)) <= 220

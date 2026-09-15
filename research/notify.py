@@ -173,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         # Every version the day tried, so a three-idea morning says what the
         # other two were rather than only naming the survivor.
         versions = (client.table("research_versions")
-                    .select("idea_no,version_no,valid,decision,strategy_name,training_summary")
+                    .select("idea_no,version_no,valid,error,decision,change_note,strategy_name,training_summary")
                     .eq("run_id", run["id"]).order("id").execute().data or [])
         link = (os.environ.get("DASHBOARD_URL") or "").strip() or None
         text = telegram_html(run, title=title, dashboard_url=link, versions=versions)

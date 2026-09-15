@@ -23,6 +23,8 @@ from research.lakh import START_VALUE, compound
 from research.sweep import ComboResult
 
 LIST_SIZE = 15
+DAYS_PER_MONTH = 30.44
+DAYS_PER_YEAR = 365.25
 
 
 @dataclass(frozen=True)
@@ -69,15 +71,28 @@ def _row(result: ComboResult, cost_model: HoldingCostModel, window_days: int) ->
     start = scored.start_value or START_VALUE
     returned = 100 * (scored.end_value - start) / start
     hold = result.hold_return_pct
+    months = max(window_days / DAYS_PER_MONTH, 0.1)
+    # A percentage means nothing without the years it took. These are what let
+    # the message say "+16% a year" instead of "+345% at some point".
+    years = max(window_days / DAYS_PER_YEAR, 0.01)
     return {
         "symbol": result.symbol,
         "timeframe": result.timeframe,
         "trades": len(result.trades),
+        "trades_per_month": round(len(result.trades) / months, 2),
         "win_rate_pct": round(100 * wins / len(result.trades), 2) if result.trades else None,
         "net_pnl": round(result.net_pnl, 2),
         "return_pct": round(returned, 2),
+        "cagr_pct": scored.cagr_pct,
+        "end_value": round(scored.end_value, 2),
+        "window_days": window_days,
+        "window_years": round(years, 2),
         "worst_dip_pct": scored.worst_dip_pct,
         "hold_return_pct": hold,
+        # Named "holding_value", not "hold_end_value": that second name is a
+        # LOCKED-YEAR column on research_runs, and the guard test rightly
+        # refuses it here. This is the training window's own benchmark.
+        "holding_value": None if hold is None else round(start * (1 + hold / 100), 2),
         "excess_vs_hold_pct": None if hold is None else round(returned - hold, 2),
     }
 
