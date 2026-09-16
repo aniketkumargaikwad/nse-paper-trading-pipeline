@@ -111,6 +111,16 @@ merged there to take effect.
 Actions → research → **Run workflow**. Set **max_versions** to `1` for a cheap
 check: two Opus calls, about 25 minutes.
 
+### The atlas — run it once, and again only after a price top-up
+
+Actions → atlas → **Run workflow**. It measures fifteen baseline signals
+(RSI dips, breakouts, band reverts, gap fades, a VWAP revert and so on) on
+the training years, one GitHub job each, and stores them in `research_atlas`.
+Every morning's proposal prompt lists them with their numbers, so the AI
+starts from what this data has already shown. Prices are frozen, so the
+atlas needs re-running only when the store is topped up or a baseline is
+added in `research/atlas.py`. No Claude call, no allowance used.
+
 ### What each failure looks like
 
 - **The Claude allowance runs out mid-run** — the day stops cleanly, keeps the
