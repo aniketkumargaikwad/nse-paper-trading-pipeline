@@ -212,7 +212,7 @@ class _Version:
 
 def test_the_cut_short_final_is_chosen_by_the_pick_rule_not_by_yearly_return():
     """Version B rose more but was beaten by holding; A is the honest choice."""
-    beta = [sleeve("A", pct=3.0, hold=5.0)]           # bigger month, no edge
+    beta = [sleeve("A", pct=3.0, hold=200.0)]         # bigger month, no edge
     edge = [sleeve("A", pct=1.0, hold=0.0)]
     from research.picker import best_score
 

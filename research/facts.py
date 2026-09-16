@@ -40,6 +40,13 @@ re-discovering these):
 - Volatility-scaled stops (ATR) behave better across a 200-stock universe
   than one fixed percentage; a 100% worst dip means sizing had no survival
   constraint.
+- The atlas (16 Sep 2026, ten-slot accounts): on DAILY bars the plain trend
+  rules - 250-day high breakout, MACD zero cross, Supertrend, EMA 20/50,
+  Donchian 20/10 - earn +0.6% to +1.25% a month with 50-58% of months up;
+  holding the same stocks averaged +1.9% a month. Every sub-hour timeframe of
+  every baseline is NEGATIVE, from -0.2% to -38% a month: fees and slippage
+  eat the churn. Mean-reversion baselines (RSI-2 dips, band reverts, gap
+  fades and bounces, VWAP reverts) lose on every timeframe.
 Where edge has NOT been measured yet: short-side rules squared off the same
 day; relative strength ACROSS stocks (rank, not level); regime filters built
 from index breadth; gap behaviour at the open; time-of-day effects; holding

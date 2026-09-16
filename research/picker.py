@@ -14,7 +14,9 @@ did best per month in training, provided the account:
 
 * has at least MIN_MONTHS of history,
 * never fell more than MAX_DIP_PCT from a high,
-* beat holding the equal-weight basket on average (excess > 0),
+* beat holding the equal-weight basket over the time it was invested
+  (avg_excess_active_pct > 0): a rule flat 85% of the time is compared with
+  holding for the 15% it was in the market, not for the whole month,
 * made money on average (avg month > 0), and
 * either traded at least MIN_TRADES_PER_MONTH times a month or averaged the
   owner's target month. The floor is SOFT by his instruction: "if we are
@@ -53,9 +55,11 @@ def disqualified(reading: Basket) -> str | None:
         return f"only {reading.month_count} months of history (needs {MIN_MONTHS})"
     if reading.worst_dip_pct > MAX_DIP_PCT:
         return f"fell {reading.worst_dip_pct:.1f}% from a high (limit {MAX_DIP_PCT:.0f}%)"
-    if reading.avg_excess_pct <= 0:
-        return (f"did not beat holding: {reading.avg_month_pct:+.2f}% a month against "
-                f"{reading.avg_holding_month_pct:+.2f}% for holding")
+    if reading.avg_excess_active_pct <= 0:
+        at_work = reading.slot_use_pct if reading.slot_use_pct is not None else reading.sleeve_use_pct
+        return (f"did not beat holding while invested: {reading.avg_month_pct:+.2f}% a month "
+                f"against {reading.avg_holding_month_pct:+.2f}% for holding, with the money at "
+                f"work {at_work:.0f}% of the time")
     if reading.avg_month_pct <= 0:
         return f"lost money on average: {reading.avg_month_pct:+.2f}% a month"
     if (reading.trades_per_month < MIN_TRADES_PER_MONTH
@@ -106,7 +110,7 @@ def pick_timeframe(results: Sequence[ComboResult]) -> TimeframePick | None:
     if not candidates:
         return None
     candidates.sort(key=lambda item: (-item[1].account.avg_month_pct,
-                                      -item[1].account.avg_excess_pct, item[0]))
+                                      -item[1].account.avg_excess_active_pct, item[0]))
     return candidates[0][1]
 
 

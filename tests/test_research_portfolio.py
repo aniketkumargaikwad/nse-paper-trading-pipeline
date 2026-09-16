@@ -141,6 +141,16 @@ def test_excess_is_strategy_minus_holding_month_by_month():
     assert basket.holding_end_value(100_000) == pytest.approx(102_000)
 
 
+def test_active_excess_scales_holding_by_the_time_at_work():
+    """One trade in one of two months: the sleeve was at work half the
+    stock-months, so holding counts at half weight."""
+    trades = [a_trade(1, 2.0)]
+    months = [("2024-01", 100, 104), ("2024-02", 104, 108.16)]            # holding +4%, +4%
+    basket = build_basket([sleeve("A", trades, months)], timeframe="day")
+    assert basket.avg_excess_pct == pytest.approx(1.0 - 4.0)
+    assert basket.avg_excess_active_pct == pytest.approx(1.0 - 4.0 * 0.5)
+
+
 def test_the_worst_dip_walks_the_monthly_path():
     trades = [a_trade(1, 10.0), a_trade(2, -22.0), a_trade(3, 5.0)]
     months = [(f"2024-0{m}", 100, 100) for m in (1, 2, 3)]

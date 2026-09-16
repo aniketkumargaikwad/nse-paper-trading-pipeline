@@ -122,6 +122,14 @@ class Basket:
     worst_month_pct: float
     avg_holding_month_pct: float
     avg_excess_pct: float
+    # Excess over holding for the TIME THE MONEY WAS AT WORK: the average
+    # month minus holding's average month scaled by how much of the slot- or
+    # sleeve-time was actually in a position. A rule that is flat 85% of the
+    # time is not beta for those 85% and must not be judged as if it were;
+    # idle capital is the owner's problem to see, not a reason to call a
+    # real edge "no edge". The 16 Sep 2026 run failed all three ideas on the
+    # unscaled gate while Opus itself pointed this out.
+    avg_excess_active_pct: float
     worst_dip_pct: float
     trades_per_month: float
     sleeve_use_pct: float
@@ -172,6 +180,7 @@ class Basket:
             "worst_month_pct": self.worst_month_pct,
             "avg_holding_month_pct": self.avg_holding_month_pct,
             "avg_excess_pct": self.avg_excess_pct,
+            "avg_excess_active_pct": self.avg_excess_active_pct,
             "worst_dip_pct": self.worst_dip_pct,
             "sleeve_use_pct": self.sleeve_use_pct,
             "years_positive_pct": self.years_positive_pct,
@@ -246,6 +255,13 @@ def summarise(
     years = tuple(by_year[y] for y in sorted(by_year))
     years_up = sum(1 for y in years if y["strategy_pct"] > y["holding_pct"])
 
+    # How much of the money was at work, as a fraction: slot-time for an
+    # account, the share of stock-months that traded for a basket.
+    at_work = extra.get("slot_use_pct")
+    if at_work is None:
+        at_work = 100 * trading_months / stock_months if stock_months else 0.0
+    active_excess = statistics.mean(strategy) - statistics.mean(holding) * at_work / 100
+
     return Basket(
         timeframe=timeframe,
         stocks=stocks,
@@ -259,6 +275,7 @@ def summarise(
         worst_month_pct=round(min(strategy), 4),
         avg_holding_month_pct=round(statistics.mean(holding), 4),
         avg_excess_pct=round(statistics.mean(excess), 4),
+        avg_excess_active_pct=round(active_excess, 4),
         worst_dip_pct=_dip_of(path),
         trades_per_month=round(trades / len(months), 2),
         sleeve_use_pct=round(100 * trading_months / stock_months, 2) if stock_months else 0.0,

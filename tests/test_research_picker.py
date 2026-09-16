@@ -97,14 +97,19 @@ def test_an_account_that_fell_too_far_is_not_picked():
     assert reason is not None and f"limit {MAX_DIP_PCT:.0f}%" in reason
 
 
-def test_an_account_that_lost_to_holding_is_not_picked():
-    beta = ten(pct=1.0, hold=2.0)
-    assert "did not beat holding" in disqualified(accounts_by_timeframe(beta)["day"])
+def test_an_account_that_lost_to_holding_while_invested_is_not_picked():
+    """Same-day trades keep the money at work about 5% of the time, so holding
+    is scaled to that 5%: +2% a month of holding is a +0.1% bar, which +1% clears;
+    +40% a month of holding is a +2% bar, which it does not."""
+    edge = ten(pct=1.0, hold=2.0)
+    assert disqualified(accounts_by_timeframe(edge)["day"]) is None
+    beta = ten(pct=1.0, hold=40.0)
+    assert "did not beat holding while invested" in disqualified(accounts_by_timeframe(beta)["day"])
     assert pick_timeframe(beta) is None
 
 
 def test_an_account_that_beat_holding_but_lost_money_is_not_picked():
-    losing = ten(pct=-0.5, hold=-3.0)
+    losing = ten(pct=-0.5, hold=-30.0)
     assert "lost money" in disqualified(accounts_by_timeframe(losing)["day"])
 
 
@@ -114,7 +119,7 @@ def test_the_best_average_month_wins_among_the_qualified():
 
 
 def test_a_bigger_month_that_failed_a_gate_loses_to_a_smaller_one_that_passed():
-    results = ten("day", pct=1.0) + ten("60m", pct=5.0, hold=6.0)
+    results = ten("day", pct=1.0) + ten("60m", pct=5.0, hold=200.0)
     assert pick_timeframe(results).timeframe == "day"
 
 
@@ -132,7 +137,7 @@ def test_the_pick_carries_both_readings():
 
 def test_a_versions_score_is_its_picks_average_month_or_nothing():
     assert best_score(ten(pct=1.5)) == pytest.approx(1.5, abs=0.02)
-    assert best_score(ten(pct=1.0, hold=2.0)) == float("-inf")
+    assert best_score(ten(pct=1.0, hold=40.0)) == float("-inf")
 
 
 def test_nothing_tested_picks_nothing():

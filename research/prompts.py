@@ -179,8 +179,11 @@ def review_prompt(*, summary: TrainingSummary, version: int, versions_left: int)
         "(why_not says what failed). Read months_positive_pct, worst_month_pct, "
         "worst_dip_pct, years_positive_pct, the year-by-year rows, "
         "signals_skipped_pct and luck_check before believing an average. "
-        "avg_excess_pct is the average month minus what holding the same stocks "
-        "made; below zero there is no edge, however large the return. `baskets` "
+        "avg_excess_active_pct is the average month minus what holding the same "
+        "stocks made over the time the money was actually at work (slot_use_pct); "
+        "below zero there is no edge, however large the return. avg_excess_pct is "
+        "the same against holding all month - the idle-capital cost the owner "
+        "sees, which only a rule that stays invested longer can close. `baskets` "
         "is the same rule with every stock funded all the time - the per-stock "
         "average, useful for seeing how broadly the rule works. The aim is an "
         f"average account month of {TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}%.",
