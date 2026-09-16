@@ -20,6 +20,7 @@ from typing import Any
 
 from backtest import simulate_any
 from research.lakh import live_worst_dip_pct
+from research.month_closes import month_closes
 from backtest_types import SimTrade
 from research.prices import FrozenPriceReader
 from research.universe import Combo
@@ -46,6 +47,9 @@ class ComboResult:
     # holds for years reported 7.3% where the truth was 45.5%. Measured here,
     # while the candles are still in hand.
     worst_dip_pct: float | None = None
+    # (month, first close, last close) per IST calendar month, so the basket
+    # can be judged month by month (research.portfolio) without the candles.
+    month_closes: tuple[tuple[str, float, float], ...] = ()
 
     @property
     def net_pnl(self) -> float:
@@ -94,6 +98,7 @@ def run_combo(
             round(100 * (last_close - first_close) / first_close, 4) if first_close else None
         ),
         worst_dip_pct=live_worst_dip_pct(trades, cost_model, frame["close"]),
+        month_closes=month_closes(frame),
     )
 
 

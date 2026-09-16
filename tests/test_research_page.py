@@ -32,7 +32,7 @@ def runs_frame(**over):
 
 def test_grid_has_the_columns_the_design_asks_for():
     assert list(grid_frame(runs_frame(), {}).columns) == GRID_COLUMNS
-    assert len(GRID_COLUMNS) == 15
+    assert len(GRID_COLUMNS) == 16
 
 
 def test_grid_reads_the_description_from_the_strategy():
@@ -65,7 +65,7 @@ def test_a_run_with_no_pick_shows_dashes_not_zeros():
         trades_per_month=None, beat_holding=None,
     ), {})
     assert got["₹1 lakh → became"].iloc[0] == "—"
-    assert got["Best stock/index"].iloc[0] == "—"
+    assert got["Traded on"].iloc[0] == "—"
     assert got["Success ratio"].iloc[0] == "—"
     assert got["Beat holding"].iloc[0] == "—"
 
@@ -82,7 +82,7 @@ def test_newest_run_comes_first():
         runs_frame(id="new", started_at="2026-09-12T01:00:00+00:00", pick_symbol="NSE:NEW"),
     ], ignore_index=True)
     got = grid_frame(two, {})
-    assert got["Best stock/index"].iloc[0] == "NSE:NEW"
+    assert got["Traded on"].iloc[0] == "NSE:NEW"
     assert got["Date"].iloc[0] == "12 Sep 2026"
 
 

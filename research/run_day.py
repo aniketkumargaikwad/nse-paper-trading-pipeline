@@ -1,4 +1,4 @@
-"""One whole research day, end to end (design §4).
+"""One whole research day, end to end (design §4, revised 2026-09-16).
 
     python -m research.run_day
     python -m research.run_day --dry-run --max-stocks 5 --stock-timeframes day --workers 2
@@ -8,6 +8,10 @@ Opus proposes a strategy, the checker forces the research rules onto it, the
 sweep tests it on the TRAINING years, Opus reviews that summary and says what
 to try next - up to five versions. Only then is the pick made and the locked
 year opened, once, and the day stored with a journal note for tomorrow.
+
+The pick is a TIMEFRAME, and the exam is the basket of every stock on it
+(research.portfolio): Rs 1 lakh spread equally, judged month by month. The
+earlier rule picked one stock out of ~1,177 and examined it on one trade.
 
 Two rules shape the wiring:
 
@@ -32,7 +36,7 @@ from typing import Any
 
 from config import IST, UTC, get_settings, use_utf8_stdout
 from research.brain import BrainError, BrainStopped
-from research.evaluate import _PENDING, _rupees, locked_year, prepare_run
+from research.evaluate import _PENDING, _rupees, basket_label, locked_year, prepare_run, print_locked
 
 # How many times a reply we cannot read is asked for again. The answer shape
 # is asked for in words rather than enforced by the CLI (see research.brain),
@@ -112,6 +116,38 @@ def format_documents(root: Path | None = None) -> list[str]:
     return docs
 
 
+def idea_line(row: Mapping[str, Any]) -> str:
+    """One line of the ideas index, with the numbers that decide an idea.
+
+    Words alone let the same family come back three days running ("RSI-2
+    washout in a daily uptrend", 13-15 September). The basket's average month
+    and how broadly it beat holding are what would have stopped that.
+    """
+    name = str(row.get("strategy_name") or "")
+    facts = row.get("training_summary") or {}
+    if isinstance(facts, str):
+        try:
+            facts = json.loads(facts)
+        except ValueError:
+            facts = {}
+    parts = [name]
+    baskets = facts.get("baskets") or []
+    if baskets:
+        best = max(baskets, key=lambda b: b.get("avg_month_pct") or float("-inf"))
+        parts.append(
+            f"best basket {best.get('timeframe')}: {best.get('avg_month_pct', 0):+.2f}%/month, "
+            f"{best.get('months_positive_pct', 0):.0f}% months up"
+            + ("" if best.get("qualifies") else " (not pickable)")
+        )
+    tested, beat = facts.get("combos_tested"), facts.get("combos_beating_hold")
+    if tested:
+        parts.append(f"{beat if beat is not None else '?'} of {tested} beat holding")
+    lesson = (row.get("lessons") or "").strip()
+    if lesson:
+        parts.append(lesson)
+    return " — ".join(parts)
+
+
 def tried_ideas(client: Any, *, limit: int = IDEAS_LIMIT) -> list[str]:
     """One line per version already tried, newest first.
 
@@ -121,7 +157,7 @@ def tried_ideas(client: Any, *, limit: int = IDEAS_LIMIT) -> list[str]:
     try:
         response = (
             client.table("research_versions")
-            .select("strategy_name,lessons,created_at")
+            .select("strategy_name,lessons,training_summary,created_at")
             .order("created_at", desc=True).limit(limit).execute()
         )
     except Exception:       # noqa: BLE001 - no history is a normal first day
@@ -133,8 +169,7 @@ def tried_ideas(client: Any, *, limit: int = IDEAS_LIMIT) -> list[str]:
         if not name or name in seen:
             continue
         seen.add(name)
-        lesson = (row.get("lessons") or "").strip()
-        lines.append(f"{name} — {lesson}" if lesson else str(name))
+        lines.append(idea_line(row))
     return lines
 
 
@@ -209,7 +244,10 @@ def choose_final(tested: Sequence[tuple[Any, Any]], score: Any) -> tuple[Any, An
 
     The last version whose review said `stop` is Opus's own choice and wins.
     With no such review - the allowance ran out, or the clock did - the best
-    training score by the fixed pick rule stands in, which needs no AI.
+    training score by the fixed pick rule stands in, which needs no AI. The
+    score IS the pick rule (research.picker.best_score): the 15 September run
+    scored by yearly return instead, and chose the version that had merely
+    risen most.
     """
     stopped = [pair for pair in tested if pair[0].review.get("decision") == "stop"]
     if stopped:
@@ -248,11 +286,16 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     from db import SupabaseStore
     from research.brain import Claude
     from research.journal import entries_from_versions, note_rows, write_journal
-    from research.lakh import equity_series, passed
     from research.loop import DEFAULT_BUDGET_SECONDS, MAX_VERSIONS, run_versions
     from research.checker import check_proposal
-    from research.picker import pick_best
-    from research.records import combo_rows, equity_rows, locked_trade_rows, run_row
+    from research.picker import best_score, pick_timeframe
+    from research.records import (
+        MAX_STORED_LOCKED_TRADES,
+        basket_trade_rows,
+        combo_rows,
+        equity_rows,
+        run_row,
+    )
     from research.store import (
         ResearchStoreError,
         recent_notes,
@@ -336,6 +379,10 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
               f"after fees, {summary.combos_beating_hold} beat holding, "
               f"{summary.total_trades} trades, net {_rupees(summary.net_pnl)}  "
               f"({elapsed:.0f}s)")
+        for b in summary.baskets:
+            print(f"    basket {b['timeframe']:4s} {b['avg_month_pct']:+6.2f}%/month · "
+                  f"{b['months_positive_pct']:3.0f}% up · {b['trades_per_month']:6.1f} trades/month"
+                  + ("" if b["qualifies"] else f" · not pickable: {b['why_not']}"))
         return summary
 
     outcome = run_versions(
@@ -362,12 +409,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
             print(f"      lesson: {v.review['lessons'][:200]}")
 
     tested = list(zip([v for v in outcome.versions if v.valid], sweeps))
-
-    def score(results: Sequence[Any]) -> float:
-        pick = pick_best(results, cost_model, window_days_for=window_days_for)
-        return float("-inf") if pick is None else pick.training.cagr_pct
-
-    final = choose_final(tested, score)
+    final = choose_final(tested, best_score)
 
     # Every version goes to the library, paused, with the story it came from -
     # including the ones this day did not choose, because tomorrow's index of
@@ -388,9 +430,9 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     ]
     if outcome.stopped_because in ("time_budget", "stopped_limit"):
         warnings.append(f"the day was cut short ({outcome.stopped_because}); "
-                        "the final version was chosen by training score, not by Opus")
+                        "the final version was chosen by the pick rule, not by Opus")
 
-    def store_day(*, results, pick_result, locked, hold, locked_trades, counts) -> int | None:
+    def store_day(*, results, pick, exam, counts) -> int | None:
         """Write the run, its versions and its notes. Returns the run id."""
         final_version = final[0] if final else None
         run = run_row(
@@ -398,27 +440,26 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
             data_end=data_end, locked_from=windows.locked_from,
             strategy_name=(final_version.checked.document["name"] if final_version else None),
             final_version_id=version_ids.get(id(final_version)) if final_version else None,
-            pick_symbol=None if pick_result is None else pick_result.symbol,
-            pick_timeframe=None if pick_result is None else pick_result.timeframe,
-            locked=locked, hold_end_value=hold,
+            pick_symbol=None if exam is None else basket_label(exam.basket.stocks),
+            pick_timeframe=None if pick is None else pick.timeframe,
+            locked=None if exam is None else exam.lakh,
+            hold_end_value=None if exam is None else exam.hold_end_value,
             combos_profitable=counts.profitable, combos_tested=counts.tested,
             versions_tried=len(outcome.versions), ideas_dropped=outcome.ideas_dropped,
             ai_review=(final_version.review.get("lessons") if final_version else None),
             trigger="dry_run" if args.dry_run else "manual",
             warnings=warnings,
+            basket=None if exam is None else exam.basket,
+            training_basket=None if pick is None else pick.basket,
         )
         children: dict[str, Any] = {}
         if results is not None:
             children["combos"] = combo_rows(_PENDING, results, cost_model,
                                             window_days_for=window_days_for)
-        if locked is not None and pick_result is not None:
-            day_candles = reader.candles(pick_result.symbol, "day",
-                                         windows.locked_from_utc, windows.end_utc)
-            children["locked_trades"] = locked_trade_rows(_PENDING, locked_trades, cost_model)
-            children["equity"] = equity_rows(_PENDING, equity_series(
-                locked_trades, cost_model, day_index=day_candles.index,
-                closes=day_candles["close"] if not day_candles.empty else None,
-            ))
+        if exam is not None:
+            children["locked_trades"] = basket_trade_rows(
+                _PENDING, exam.trades, stocks=exam.basket.stocks)
+            children["equity"] = equity_rows(_PENDING, exam.equity)
         version_rows = [
             {
                 "idea_no": v.idea_no, "version_no": v.version_no,
@@ -451,27 +492,33 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
             raise
         return run_id
 
+    def finish(*, results, pick, exam, counts) -> int:
+        """Journal, commit, store, and report - the same tail for every ending."""
+        print("\nWARNINGS")
+        for line in warnings:
+            print(f"  {line}")
+        print(f"\njournal    {journal_path}")
+        if args.commit_journal:
+            commit_journal(journal_path, day)
+        if args.no_save:
+            print("\nnot saved (--no-save)")
+            return 0
+        try:
+            saved = store_day(results=results, pick=pick, exam=exam, counts=counts)
+        except ResearchStoreError as exc:
+            print(f"\nWARNING: the day was NOT stored: {exc}", file=sys.stderr)
+            return 1
+        write_run_id(args.run_id_file, saved)
+        print(f"\nsaved as run {saved}")
+        return 0
+
     entries = entries_from_versions(outcome.versions)
     journal_path = write_journal(day, entries)
 
     if final is None:
         print("\nNo version survived the checker, so there is nothing to pick from. "
               "Locked year not opened.")
-        counts = count_results([])
-        if args.no_save:
-            print(f"\njournal    {journal_path}")
-            print("\nnot saved (--no-save)")
-            return 0
-        try:
-            saved = store_day(results=None, pick_result=None, locked=None, hold=None,
-                              locked_trades=[], counts=counts)
-        except ResearchStoreError as exc:
-            print(f"\nWARNING: the day was NOT stored: {exc}", file=sys.stderr)
-            return 1
-        print(f"\njournal    {journal_path}")
-        write_run_id(args.run_id_file, saved)
-        print(f"\nsaved as run {saved}")
-        return 0
+        return finish(results=None, pick=None, exam=None, counts=count_results([]))
 
     final_version, final_results = final
     counts = count_results(final_results)
@@ -480,81 +527,39 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     print(f"           {counts.tested} tested, {counts.skipped} skipped, "
           f"{counts.profitable} profitable after fees")
 
-    pick = pick_best(final_results, cost_model, window_days_for=window_days_for)
+    pick = pick_timeframe(final_results)
     if pick is None:
-        print("\nNo qualifying pick (needs 30+ training trades and a worst dip within 30%). "
-              "Locked year not opened.")
-        warnings.append(f"no qualifying pick among {counts.tested} combinations")
-        if args.no_save:
-            print(f"\njournal    {journal_path}")
-            print("\nnot saved (--no-save)")
-            return 0
-        try:
-            saved = store_day(results=final_results, pick_result=None, locked=None, hold=None,
-                              locked_trades=[], counts=counts)
-        except ResearchStoreError as exc:
-            print(f"\nWARNING: the day was NOT stored: {exc}", file=sys.stderr)
-            return 1
-        print(f"\njournal    {journal_path}")
-        write_run_id(args.run_id_file, saved)
-        print(f"\nsaved as run {saved}")
-        return 0
+        print("\nNo qualifying timeframe: no basket beat holding while trading 10+ times a "
+              "month within a 30% dip. Locked year not opened.")
+        warnings.append(f"no qualifying timeframe among {counts.tested} combinations")
+        return finish(results=final_results, pick=None, exam=None, counts=counts)
 
-    p = pick.result
-    print(f"\nPICK       {p.symbol} · {p.timeframe}  (training: {pick.training.trades} trades, "
-          f"CAGR {pick.training.cagr_pct:.2f}%, worst dip {pick.training.worst_dip_pct:.1f}%)")
+    b = pick.basket
+    print(f"\nPICK       {pick.timeframe} basket of {b.stocks} stocks  (training: "
+          f"{b.avg_month_pct:+.2f}%/month, {b.months_positive_pct:.0f}% months up, "
+          f"worst dip {b.worst_dip_pct:.1f}%)")
 
     # The first and only time the locked year is opened, and the last AI call
     # is already behind us.
     strategy = final_version.checked.strategy
-    locked, hold, locked_trades, frame = locked_year(
-        strategy, p, reader, windows,
-        slippage_pct=settings.slippage_pct, cost_model=cost_model,
+    exam = locked_year(
+        strategy, pick.timeframe, stocks, reader, windows,
+        slippage_pct=settings.slippage_pct, cost_model=cost_model, workers=args.workers,
     )
-    win_rate = 100 * locked.winning_trades / locked.trades if locked.trades else 0.0
+    if exam is None:
+        print("\nThe basket has no locked-year data. Locked year not opened.")
+        warnings.append("the picked basket had no locked-year data")
+        return finish(results=final_results, pick=pick, exam=None, counts=counts)
 
-    print("\nLOCKED YEAR")
-    print(f"  Rs 1,00,000 -> {_rupees(locked.end_value)}")
-    print(f"  just holding {p.symbol} -> {_rupees(hold)}"
-          + ("  (the market's move; this strategy is short)"
-             if strategy.position_type == "short" else ""))
-    print(f"  {locked.trades} trades ({locked.trades / 12:.1f}/month) · won {win_rate:.0f}% · "
-          f"worst dip {locked.worst_dip_pct:.1f}%")
-
-    pick_last = frame.index[-1].astimezone(IST).date() if len(frame) else None
-    if pick_last is not None and pick_last < data_end:
-        print(f"  NOTE: this combination's candles stop {pick_last}, before DATA_END "
-              f"{data_end} - its locked year is only partly covered")
-        warnings.append(f"the pick's candles stop {pick_last}, before DATA_END {data_end}")
-
-    beat = hold is not None and locked.end_value > hold
-    print(f"  verdict: {'PASSED' if passed(locked) else 'FAILED'} · beat holding: "
-          f"{'yes' if beat else 'no'}")
+    warnings.extend(print_locked(exam, is_short=strategy.position_type == "short",
+                                 data_end=data_end))
     print(f"  broad or lucky: profitable in {counts.profitable} of {counts.tested} "
           "training combinations")
-
+    if len(exam.trades) > MAX_STORED_LOCKED_TRADES:
+        warnings.append(f"{len(exam.trades)} locked-year trades: too many to store, "
+                        "the daily balance is stored instead")
     warnings.append(f"{counts.tested} combinations tried: some look good in training by luck alone")
-    print("\nWARNINGS")
-    for line in warnings:
-        print(f"  {line}")
-
-    print(f"\njournal    {journal_path}")
-    if args.commit_journal:
-        commit_journal(journal_path, day)
-
-    if args.no_save:
-        print("\nnot saved (--no-save)")
-        return 0
-
-    try:
-        saved = store_day(results=final_results, pick_result=p, locked=locked, hold=hold,
-                          locked_trades=locked_trades, counts=counts)
-    except ResearchStoreError as exc:
-        print(f"\nWARNING: the day was NOT stored: {exc}", file=sys.stderr)
-        return 1
-    write_run_id(args.run_id_file, saved)
-    print(f"\nsaved as run {saved}")
-    return 0
+    return finish(results=final_results, pick=pick, exam=exam, counts=counts)
 
 
 def write_fallback(path: str, payload: Mapping[str, Any]) -> None:

@@ -14,9 +14,15 @@ from typing import Any
 from backtest_types import SimTrade
 from costs import HoldingCostModel
 from research.lakh import START_VALUE, LakhResult, compound, passed
+from research.portfolio import Basket
+from research.segment import TARGET_MONTHLY_MIN
 from research.sweep import ComboResult
 
 MONTHS_PER_YEAR = 12
+# How many basket trades the locked-trade table will hold for one run. An
+# intraday basket can close 20,000 trades in a year; past this the daily
+# balance is stored on its own and a warning says so.
+MAX_STORED_LOCKED_TRADES = 2000
 
 
 def run_row(
@@ -39,6 +45,8 @@ def run_row(
     versions_tried: int = 1,
     ideas_dropped: int = 0,
     ai_review: str | None = None,
+    basket: Basket | None = None,
+    training_basket: Basket | None = None,
 ) -> dict[str, Any]:
     """The grid row (design 5.5, 6.2).
 
@@ -81,7 +89,38 @@ def run_row(
         "ideas_dropped": ideas_dropped,
         "ai_review": ai_review,
         "warnings": list(warnings),
+        **basket_columns(basket, training_basket),
     }
+
+
+def basket_columns(locked: Basket | None, training: Basket | None) -> dict[str, Any]:
+    """The month-by-month figures (design 2026-09-16 3). Null when there was no basket."""
+    out: dict[str, Any] = {
+        "basket_stocks": None, "locked_avg_month_pct": None,
+        "locked_months_positive_pct": None, "locked_worst_month_pct": None,
+        "locked_target_met": None, "locked_months": None,
+        "training_avg_month_pct": None, "training_months": None, "training_edge_t": None,
+    }
+    if locked is not None:
+        out.update({
+            "basket_stocks": locked.stocks,
+            "locked_avg_month_pct": locked.avg_month_pct,
+            "locked_months_positive_pct": locked.months_positive_pct,
+            "locked_worst_month_pct": locked.worst_month_pct,
+            "locked_target_met": locked.avg_month_pct >= TARGET_MONTHLY_MIN,
+            "locked_months": [
+                {"month": m["month"], "strategy_pct": m["strategy_pct"],
+                 "holding_pct": m["holding_pct"], "trades": m["trades"], "stocks": m["stocks"]}
+                for m in locked.months
+            ],
+        })
+    if training is not None:
+        out.update({
+            "training_avg_month_pct": training.avg_month_pct,
+            "training_months": training.month_count,
+            "training_edge_t": training.edge_t,
+        })
+    return out
 
 
 def combo_rows(
@@ -138,6 +177,37 @@ def locked_trade_rows(
             "exit_price": round(t.exit_price, 4),
             "fees": round(fees, 4),
             "net_return_pct": round(100 * (balance - before) / before, 4) if before else 0.0,
+            "balance_after": round(balance, 2),
+        })
+    return rows
+
+
+def basket_trade_rows(
+    run_id: str, trades: Sequence[SimTrade], *, stocks: int, start_value: float = START_VALUE,
+    notional: float = START_VALUE,
+) -> list[dict[str, Any]]:
+    """The basket's locked-year trades, each with the basket balance it left.
+
+    A trade moves the basket by net P&L / (notional x stocks), the same
+    weight research.portfolio.daily_equity gives it, so the last row's
+    balance matches the chart. Empty when there are too many to store.
+    """
+    if len(trades) > MAX_STORED_LOCKED_TRADES:
+        return []
+    rows: list[dict[str, Any]] = []
+    balance = start_value
+    for t in sorted(trades, key=lambda tr: tr.exit_fill_ts):
+        own = t.entry_price * t.quantity
+        balance += start_value * t.net_pnl / (notional * max(stocks, 1))
+        rows.append({
+            "run_id": run_id,
+            "entry_at": t.entry_fill_ts,
+            "exit_at": t.exit_fill_ts,
+            "side": t.position_type,
+            "entry_price": round(t.entry_price, 4),
+            "exit_price": round(t.exit_price, 4),
+            "fees": round(t.costs, 4),
+            "net_return_pct": round(100 * t.net_pnl / own, 4) if own else 0.0,
             "balance_after": round(balance, 2),
         })
     return rows

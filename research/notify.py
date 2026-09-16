@@ -192,6 +192,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     for channel, result in results.items():
         print(f"{channel:9s} {'sent' if result.sent else result.detail}")
+    if run is not None:
+        # Recorded on the run so the grid can say whether the morning message
+        # reached a phone. Every run before 16 Sep 2026 shows {} here: this
+        # write was designed (§6.2) and never made.
+        try:
+            client.table("research_runs").update({
+                "notify_status": {ch: {"sent": r.sent, "detail": r.detail[:200]}
+                                  for ch, r in results.items()},
+            }).eq("id", run["id"]).execute()
+        except Exception as exc:        # noqa: BLE001 - bookkeeping, not the message
+            print(f"WARNING: could not record notify_status: {exc}", file=sys.stderr)
     # A day that ran but could not be delivered is still a day. Only say
     # nothing worked when nothing worked.
     return 0 if any(r.sent for r in results.values()) else 1

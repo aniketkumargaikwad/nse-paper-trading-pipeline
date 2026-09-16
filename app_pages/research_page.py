@@ -15,9 +15,10 @@ import streamlit as st
 from app_common import AppContext, empty_state, fetch_optional_table, page_header, to_ist
 
 GRID_COLUMNS = [
-    "Date", "Strategy", "Description", "Trades/month", "Best stock/index",
-    "Best timeframe", "Success ratio", "₹1 lakh → became", "Just holding → became",
-    "Worst dip", "Verdict", "Beat holding", "Broad or lucky", "Versions", "Run status",
+    "Date", "Strategy", "Description", "Trades/month", "Traded on",
+    "Best timeframe", "Return/month", "Success ratio", "₹1 lakh → became",
+    "Just holding → became", "Worst dip", "Verdict", "Beat holding", "Broad or lucky",
+    "Versions", "Run status",
 ]
 
 
@@ -78,8 +79,14 @@ def grid_frame(runs: pd.DataFrame, descriptions: dict[str, str]) -> pd.DataFrame
         "Description": r["final_strategy_name"].map(lambda n: descriptions.get(n) or "—"),
         "Trades/month": r["trades_per_month"].map(
             lambda v: "—" if _missing(v) else f"{float(v):.1f}"),
-        "Best stock/index": r["pick_symbol"].map(_text),
+        "Traded on": r["pick_symbol"].map(_text),
         "Best timeframe": r["pick_timeframe"].map(_text),
+        # The basket's average locked month (runs from 16 Sep 2026 on); a
+        # dash for the earlier single-stock runs, which never measured it.
+        "Return/month": (
+            r["locked_avg_month_pct"].map(lambda v: "—" if _missing(v) else f"{float(v):+.2f}%")
+            if "locked_avg_month_pct" in r.columns else ["—"] * len(r)
+        ),
         "Success ratio": r["win_rate_pct"].map(lambda v: _percent(v)),
         "₹1 lakh → became": r["lakh_end_value"].map(_rupees),
         "Just holding → became": r["hold_end_value"].map(_rupees),
@@ -158,11 +165,21 @@ def _detail(ctx: AppContext, run: pd.Series) -> None:
         f"{_text(run.get('pick_symbol'))} · {_text(run.get('pick_timeframe'))}"
     )
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("₹1 lakh became", _rupees(run.get("lakh_end_value")))
     c2.metric("Just holding", _rupees(run.get("hold_end_value")))
-    c3.metric("Worst dip", _percent(run.get("worst_dip_pct"), 1))
-    c4.metric("Verdict", verdict_label(run.get("verdict_passed")))
+    c3.metric("Average month", _text(None if _missing(run.get("locked_avg_month_pct"))
+                                     else f"{float(run['locked_avg_month_pct']):+.2f}%"))
+    c4.metric("Worst dip", _percent(run.get("worst_dip_pct"), 1))
+    c5.metric("Verdict", verdict_label(run.get("verdict_passed")))
+
+    months = run.get("locked_months")
+    if isinstance(months, list) and months:
+        st.markdown("**Locked year, month by month (the whole basket)**")
+        table = pd.DataFrame(months).rename(columns={
+            "month": "Month", "strategy_pct": "Strategy %", "holding_pct": "Holding %",
+            "trades": "Trades", "stocks": "Stocks"})
+        st.dataframe(table, use_container_width=True, hide_index=True, height=240)
 
     st.caption(
         f"Locked year {run.get('locked_from')} → {run.get('locked_to')}, opened once. "

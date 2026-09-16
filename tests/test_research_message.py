@@ -216,8 +216,8 @@ def test_the_locked_verdict_explains_itself():
 def test_a_day_with_no_pick_still_carries_a_verdict():
     rows = labelled(locked_rows(a_run(pick_symbol=None, lakh_end_value=None,
                                       hold_end_value=None)))
-    assert rows["Best stock"] == "none qualified"
-    assert "beat simply holding" in rows["Why none"]
+    assert rows["Traded on"] == "nothing qualified"
+    assert "beat holding" in rows["Why none"]
 
 
 def test_the_locked_year_appears_once_not_per_version():

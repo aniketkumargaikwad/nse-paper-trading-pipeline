@@ -1,4 +1,4 @@
-"""The fixed rule that picks one stock x timeframe from the training results.
+"""The fixed rule that picks one TIMEFRAME's basket from the training results.
 
 The rule's whole job is to refuse to be flattered. Most of these tests are
 about what it declines to pick.
@@ -7,111 +7,116 @@ about what it declines to pick.
 from __future__ import annotations
 
 import sys
-from datetime import timedelta
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from research.picker import pick_best  # noqa: E402
+from research.picker import (  # noqa: E402
+    MAX_DIP_PCT,
+    MIN_MONTHS,
+    MIN_TRADES_PER_MONTH,
+    baskets_by_timeframe,
+    best_score,
+    disqualified,
+    pick_timeframe,
+)
 from research.sweep import ComboResult  # noqa: E402
-from research_helpers import FREE, ist, trade  # noqa: E402
+from research_helpers import ist, trade  # noqa: E402
 
 
-def trades(n: int, pct: float, *, extra: tuple[float, ...] = ()):
-    """n same-day trades returning `pct` percent each, then any `extra` returns."""
-    returns = [pct] * n + list(extra)
-    start = ist(2023, 1, 2, 10)
-    return tuple(
-        trade(entry=start + timedelta(days=i), exit_=start + timedelta(days=i, hours=4),
-              entry_price=100.0, exit_price=100.0 * (1 + r / 100))
-        for i, r in enumerate(returns)
-    )
+def month_key(i: int) -> str:
+    year, month = divmod(i, 12)
+    return f"{2015 + year}-{month + 1:02d}"
 
 
-def combo(symbol, timeframe, trade_list, skipped=None, hold=0.0):
-    """A combination. `hold` is what simply holding returned over the window."""
-    return ComboResult(symbol, timeframe, False, trade_list, skipped, hold_return_pct=hold)
+def sleeve(symbol, timeframe, *, months=MIN_MONTHS, pct=1.0, per_month=10,
+           hold=0.0, dips=()):
+    """A stock whose sleeve makes `pct` a month over `per_month` trades, holding `hold`.
+
+    `dips` names months (0-based) that return -25% instead, to test the fall limit.
+    """
+    trades = []
+    closes = []
+    price = 100.0
+    for i in range(months):
+        year, month = divmod(i, 12)
+        year += 2015
+        month += 1
+        month_pct = -25.0 if i in dips else pct
+        each = month_pct / per_month
+        for k in range(per_month):
+            day = 1 + k % 20
+            trades.append(trade(entry=ist(year, month, day, 10), exit_=ist(year, month, day, 14),
+                                entry_price=100.0, exit_price=100.0 * (1 + each / 100),
+                                quantity=1000))
+        first = price
+        price = price * (1 + hold / 100)
+        closes.append((month_key(i), first, price))
+    return ComboResult(symbol, timeframe, False, tuple(trades), month_closes=tuple(closes))
 
 
-# Sixty days is about two months, so the 30-trade helpers below clear the
-# 10-trades-a-month floor. Tests that care about the floor set their own.
-def pick(results, window_days=60):
-    return pick_best(results, FREE, window_days_for=lambda r: window_days)
+def test_a_basket_with_too_little_history_is_not_picked():
+    assert pick_timeframe([sleeve("A", "day", months=MIN_MONTHS - 1)]) is None
+    assert pick_timeframe([sleeve("A", "day", months=MIN_MONTHS)]) is not None
 
 
-def test_fewer_than_30_training_trades_never_qualifies():
-    assert pick([combo("A", "day", trades(29, 5.0))]) is None
+def test_a_basket_that_trades_too_rarely_is_not_picked():
+    slow = sleeve("A", "day", per_month=int(MIN_TRADES_PER_MONTH) - 1)
+    assert "too slow" in disqualified(baskets_by_timeframe([slow])["day"])
+    assert pick_timeframe([slow]) is None
 
 
-def test_a_training_dip_deeper_than_30_percent_disqualifies():
-    assert pick([combo("A", "day", trades(30, 0.1, extra=(-40.0,)))]) is None
+def test_the_trade_floor_counts_the_whole_basket_not_one_stock():
+    """Two stocks at five a month is ten a month across the basket."""
+    two = [sleeve("A", "day", per_month=5), sleeve("B", "day", per_month=5)]
+    assert pick_timeframe(two) is not None
 
 
-def test_skipped_combinations_are_ignored():
-    assert pick([combo("A", "day", (), "no candles in window")]) is None
+def test_a_basket_that_fell_too_far_is_not_picked():
+    fell = sleeve("A", "day", pct=1.0, dips=(6, 7))              # -25% twice in a row
+    reason = disqualified(baskets_by_timeframe([fell])["day"])
+    assert reason is not None and f"limit {MAX_DIP_PCT:.0f}%" in reason
 
 
-# --- beating buy-and-hold, or nothing ----------------------------------------
+def test_a_basket_that_lost_to_holding_is_not_picked():
+    beta = sleeve("A", "day", pct=1.0, hold=2.0)
+    assert "did not beat holding" in disqualified(baskets_by_timeframe([beta])["day"])
+    assert pick_timeframe([beta]) is None
 
 
-def test_a_combination_that_lost_to_holding_is_not_picked():
-    """30 trades at 1% compounds to about +35%. Holding made 200%."""
-    assert pick([combo("A", "day", trades(30, 1.0), hold=200.0)]) is None
+def test_a_basket_that_beat_holding_but_lost_money_is_not_picked():
+    losing = sleeve("A", "day", pct=-0.5, hold=-3.0)
+    assert "lost money" in disqualified(baskets_by_timeframe([losing])["day"])
 
 
-def test_a_day_where_nothing_beats_holding_picks_nothing():
-    results = [combo("A", "day", trades(30, 1.0), hold=200.0),
-               combo("B", "60m", trades(40, 0.5), hold=300.0)]
-    assert pick(results) is None
+def test_the_best_average_month_wins_among_the_qualified():
+    results = [sleeve("A", "day", pct=1.0), sleeve("A", "60m", pct=2.0), sleeve("A", "5m", pct=1.5)]
+    assert pick_timeframe(results).timeframe == "60m"
 
 
-def test_the_biggest_margin_over_holding_wins_not_the_biggest_return():
-    """The point of the rule: a smaller return in a flat market is the edge."""
-    beta = combo("BETA", "day", trades(40, 2.0), hold=200.0)      # huge, but behind
-    edge = combo("EDGE", "day", trades(30, 0.5), hold=-5.0)       # modest, but ahead
-    got = pick([beta, edge])
-    assert got.result.symbol == "EDGE"
+def test_a_bigger_month_that_failed_a_gate_loses_to_a_smaller_one_that_passed():
+    results = [sleeve("A", "day", pct=1.0), sleeve("A", "60m", pct=5.0, hold=6.0)]
+    assert pick_timeframe(results).timeframe == "day"
 
 
-def test_the_pick_says_how_far_ahead_of_holding_it_was():
-    got = pick([combo("A", "day", trades(30, 1.0), hold=5.0)])
-    returned = 100 * (got.training.end_value - got.training.start_value) / got.training.start_value
-    assert got.excess_vs_hold_pct == round(returned - 5.0, 4)
-    assert got.excess_vs_hold_pct > 0
+def test_a_tie_on_the_month_goes_to_the_bigger_lead_over_holding():
+    results = [sleeve("A", "day", pct=1.0, hold=0.5), sleeve("A", "60m", pct=1.0, hold=-0.5)]
+    assert pick_timeframe(results).timeframe == "60m"
 
 
-def test_a_combination_with_no_benchmark_cannot_be_judged():
-    """Without a hold return there is no answer to "better than doing nothing"."""
-    assert pick([combo("A", "day", trades(30, 5.0), hold=None)]) is None
+def test_the_pick_carries_its_basket():
+    got = pick_timeframe([sleeve("A", "day", pct=1.0)])
+    assert got.basket.avg_month_pct == pytest.approx(1.0)
+    assert got.basket.stocks == 1 and got.basket.month_count == MIN_MONTHS
 
 
-def test_a_tie_on_margin_goes_to_more_trades():
-    got = pick([combo("A", "day", trades(30, 1.0), hold=0.0),
-                combo("B", "day", trades(30, 1.0, extra=(0.0,)), hold=0.0)])
-    assert got.result.symbol == "B"
+def test_a_versions_score_is_its_picks_average_month_or_nothing():
+    assert best_score([sleeve("A", "day", pct=1.5)]) == pytest.approx(1.5)
+    assert best_score([sleeve("A", "day", pct=1.0, hold=2.0)]) == float("-inf")
 
 
-def test_the_pick_carries_its_training_figures():
-    got = pick([combo("A", "day", trades(30, 1.0), hold=0.0)])
-    assert got.training.trades == 30 and got.training.cagr_pct > 0
-
-
-# --- an active system, or nothing --------------------------------------------
-
-
-def test_a_combination_that_barely_trades_is_not_picked():
-    """Five trades over eight years can look spectacular and say nothing."""
-    thirty = combo("A", "day", trades(30, 1.0), hold=0.0)
-    assert pick([thirty], window_days=60) is not None         # 15 a month
-    assert pick([thirty], window_days=730) is None            # 1.25 a month
-
-
-def test_the_floor_is_a_rate_not_a_total():
-    """Three hundred trades is a lot, and still too slow spread over 39 months."""
-    many = combo("A", "day", trades(300, 0.1), hold=0.0)
-    assert pick([many], window_days=1200) is None             # 7.6 a month
-    assert pick([many], window_days=600) is not None          # 15.2 a month
-
-
-def test_an_active_combination_still_has_to_beat_holding():
-    assert pick([combo("A", "day", trades(30, 1.0), hold=200.0)], window_days=60) is None
+def test_nothing_tested_picks_nothing():
+    assert pick_timeframe([]) is None
+    assert pick_timeframe([ComboResult("A", "day", False, (), "no candles in window")]) is None

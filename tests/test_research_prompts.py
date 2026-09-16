@@ -120,12 +120,12 @@ def test_propose_states_the_monthly_return_being_aimed_at():
     assert "deliberately ambitious" in text
 
 
-def test_propose_states_a_trade_rate_floor_for_each_segment():
-    """One flat floor would have ruled long-term out of the research."""
+def test_propose_states_the_basket_rule_the_pick_is_made_by():
+    """Opus designs for the judge it will face: the whole basket, per month."""
     text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
-    assert "10 a month for intraday" in text
-    assert "4 for swing" in text
-    assert "1 for long-term" in text
+    assert "every stock at once" in text
+    assert "10 trades a month" in text and "across the whole basket" in text
+    assert "holding the same basket" in text
     assert "DISCARDED" in text
 
 

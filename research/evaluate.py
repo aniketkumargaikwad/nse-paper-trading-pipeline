@@ -4,8 +4,9 @@
     python -m research.evaluate --strategy N200-PULLBACK-DAY --max-stocks 5 --stock-timeframes day
 
 1. Test every stock x timeframe (and index x timeframe) on TRAINING years only.
-2. Pick one combination by the fixed rule.
-3. Open the locked final year ONCE, for that pick: what Rs 1 lakh became.
+2. Pick one TIMEFRAME by the fixed rule: the basket of every stock on it.
+3. Open the locked final year ONCE, for that basket: what Rs 1 lakh spread
+   equally across the stocks became, month by month.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import argparse
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -44,6 +46,11 @@ def strategy_document(docs: Sequence[Mapping[str, Any]], name: str) -> dict[str,
 
 def _rupees(value: float | None) -> str:
     return "n/a" if value is None else f"Rs {value:,.0f}"
+
+
+def basket_label(stocks: int) -> str:
+    """What the grid's 'traded on' column says for a basket."""
+    return f"NIFTY200 basket ({stocks} stocks)"
 
 
 def prepare_run(settings: Any, store: Any, stocks: Sequence[str]) -> tuple[Any, Any, Any, list]:
@@ -91,30 +98,102 @@ def prepare_run(settings: Any, store: Any, stocks: Sequence[str]) -> tuple[Any, 
     return reader, ResearchWindows(data_end), data_end, symbol_ends
 
 
+@dataclass(frozen=True)
+class LockedBasket:
+    """The exam, for one timeframe's basket (design 2026-09-16 §2.4)."""
+
+    lakh: Any                       # research.lakh.LakhResult
+    hold_end_value: float | None
+    basket: Any                     # research.portfolio.Basket
+    trades: list                    # every locked-year SimTrade across the basket
+    equity: list[dict[str, Any]]    # daily rows for the chart
+    stocks_short: list[str]         # stocks whose candles stop before DATA_END
+
+
 def locked_year(
-    strategy: Any, result: Any, reader: Any, windows: Any, *,
-    slippage_pct: float, cost_model: Any,
-) -> tuple[Any, float | None, list, Any]:
-    """Open the locked year ONCE, for one pick.
+    strategy: Any, timeframe: str, stocks: Sequence[str], reader: Any, windows: Any, *,
+    slippage_pct: float, cost_model: Any, workers: int = 1,
+) -> LockedBasket | None:
+    """Open the locked year ONCE, for one timeframe's basket of every stock.
 
-    Returns `(locked, hold_end_value, locked_trades, frame)`. Both commands
-    come through here, so the one place the locked year is opened is the same
-    code whether a human or the loop chose the strategy.
+    Every stock is simulated over the FULL window so its indicators are warm
+    at the boundary, then only the locked part is kept (by entry, as
+    walk_forward.split_trades does). Both research commands come through
+    here, so the one place the locked year is opened is the same code whether
+    a human or the loop chose the strategy.
+
+    Returns None when not one stock produced a locked-year result.
     """
-    from backtest import simulate_any
-    from research.lakh import compound, just_holding
+    from research.lakh import LakhResult
+    from research.portfolio import build_basket, daily_equity, dip_of_equity, restrict_to
+    from research.sweep import run_sweep
+    from research.universe import Combo
     from research.windows import LOCKED_DAYS
-    from walk_forward import split_trades
 
-    frame = reader.candles(result.symbol, result.timeframe,
-                           *windows.full(is_index=result.is_index, timeframe=result.timeframe))
-    simulated = simulate_any(frame, strategy, slippage_pct=slippage_pct,
-                             cost_per_trade_inr=0.0, cost_model=cost_model)
-    _, locked_trades = split_trades(simulated.trades, windows.locked_from_utc)
-    locked = compound(locked_trades, cost_model, window_days=LOCKED_DAYS)
-    hold = just_holding(reader.candles(result.symbol, "day", windows.locked_from_utc, windows.end_utc),
-                        cost_model)
-    return locked, hold, list(locked_trades), frame
+    combos = [Combo(s, timeframe, False) for s in stocks]
+    full = run_sweep(
+        strategy, combos, reader, lambda c: windows.full(is_index=False, timeframe=timeframe),
+        slippage_pct=slippage_pct, cost_model=cost_model, workers=workers,
+    )
+    locked = [restrict_to(r, windows.locked_from_utc) for r in full if r.skipped_reason is None]
+    basket = build_basket(locked, timeframe=timeframe)
+    if basket is None:
+        return None
+
+    closes = {}
+    short: list[str] = []
+    for r in locked:
+        frame = reader.candles(r.symbol, "day", windows.locked_from_utc, windows.end_utc)
+        if frame.empty:
+            continue
+        closes[r.symbol] = frame["close"]
+        if frame.index[-1].astimezone(IST).date() < windows.data_end:
+            short.append(r.symbol)
+
+    equity = daily_equity(locked, closes_by_symbol=closes)
+    trades = [t for r in locked for t in r.trades]
+    end_value = basket.end_value()
+    years = LOCKED_DAYS / 365.25
+    cagr = (round(((end_value / 100_000.0) ** (1 / years) - 1) * 100, 4)
+            if end_value > 0 else None)
+    lakh = LakhResult(
+        start_value=100_000.0,
+        end_value=end_value,
+        trades=basket.trades,
+        winning_trades=basket.winning_trades,
+        worst_dip_pct=dip_of_equity(equity) if equity else basket.worst_dip_pct,
+        cagr_pct=cagr,
+    )
+    return LockedBasket(
+        lakh=lakh, hold_end_value=basket.holding_end_value(), basket=basket,
+        trades=trades, equity=equity, stocks_short=short,
+    )
+
+
+def print_locked(exam: LockedBasket, *, is_short: bool, data_end: Any) -> list[str]:
+    """The exam, on the console. Returns the warnings it raises."""
+    from research.lakh import passed
+    from research.portfolio import luck_label
+    from research.segment import meets_target
+
+    b, lakh = exam.basket, exam.lakh
+    win_rate = 100 * lakh.winning_trades / lakh.trades if lakh.trades else 0.0
+    warnings: list[str] = []
+    print("\nLOCKED YEAR")
+    print(f"  Rs 1,00,000 spread over {b.stocks} stocks -> {_rupees(lakh.end_value)}")
+    print(f"  just holding the same basket -> {_rupees(exam.hold_end_value)}"
+          + ("  (the market's move; this strategy is short)" if is_short else ""))
+    print(f"  average month {b.avg_month_pct:+.2f}%  ({meets_target(b.avg_month_pct)}) · "
+          f"{b.months_positive_pct:.0f}% of months up · worst month {b.worst_month_pct:+.2f}%")
+    print(f"  {lakh.trades} trades ({b.trades_per_month:.1f}/month) · won {win_rate:.0f}% · "
+          f"worst dip {lakh.worst_dip_pct:.1f}% (closed trades) · luck check: {luck_label(b.edge_t)}")
+    if exam.stocks_short:
+        print(f"  NOTE: {len(exam.stocks_short)} stocks' candles stop before DATA_END {data_end}")
+        warnings.append(f"{len(exam.stocks_short)} of the basket's stocks stop before DATA_END {data_end}")
+    beat = exam.hold_end_value is not None and lakh.end_value > exam.hold_end_value
+    print(f"  verdict: {'PASSED' if passed(lakh) else 'FAILED'} · beat holding: "
+          f"{'yes' if beat else 'no'}")
+    return warnings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -131,10 +210,10 @@ def main(argv: list[str] | None = None) -> int:
 
     from costs import HoldingCostModel
     from db import SupabaseStore
-    from research.lakh import equity_series, passed
-    from research.picker import pick_best
-    from research.records import combo_rows, equity_rows, locked_trade_rows, run_row
+    from research.picker import disqualified, pick_timeframe
+    from research.records import basket_trade_rows, combo_rows, equity_rows, run_row
     from research.store import ResearchStoreError, save_run
+    from research.summary import build_summary
     from research.sweep import count_results, run_sweep
     from research.universe import STOCK_TIMEFRAMES, document_uses_volume, research_combos
     from strategy.v3 import is_v3_document, parse_machine
@@ -180,10 +259,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     elapsed = (datetime.now(UTC) - started).total_seconds()
     counts = count_results(results)
-    print(f"\nTRAINING   {counts.tested} tested, {counts.skipped} skipped, "
-          f"{counts.profitable} profitable after fees  ({elapsed:.0f}s)")
-    for r in sorted((r for r in results if r.skipped_reason is None), key=lambda r: -r.net_pnl)[:10]:
-        print(f"  {r.symbol:22s} {r.timeframe:4s} trades={len(r.trades):5d}  net={_rupees(r.net_pnl)}")
 
     def window_days_for(r) -> int:
         return windows.training_days(
@@ -191,67 +266,46 @@ def main(argv: list[str] | None = None) -> int:
             data_from=r.first_candle.astimezone(IST).date() if r.first_candle else None,
         )
 
-    pick = pick_best(results, cost_model, window_days_for=window_days_for)
-    if pick is None:
-        print("\nNo qualifying pick (needs 30+ training trades and a worst dip within 30%). "
-              "Locked year not opened.")
-        if args.no_save:
-            print("\nnot saved (--no-save)")
-            return 0
-        try:
-            saved = save_run(
-                store._client,
-                run=run_row(
-                    started_at=started_at, finished_at=datetime.now(UTC), status="completed",
-                    data_end=data_end, locked_from=windows.locked_from,
-                    strategy_name=args.strategy, pick_symbol=None, pick_timeframe=None,
-                    locked=None, hold_end_value=None,
-                    combos_profitable=counts.profitable, combos_tested=counts.tested,
-                    warnings=[f"no qualifying pick among {counts.tested} combinations"],
-                ),
-                combos=combo_rows(_PENDING, results, cost_model, window_days_for=window_days_for),
-            )
-        except ResearchStoreError as exc:
-            print(f"\nWARNING: the result was NOT stored: {exc}", file=sys.stderr)
-            return 1
-        print(f"\nsaved as run {saved}")
-        return 0
+    summary = build_summary(results, cost_model, window_days_for=window_days_for)
+    print(f"\nTRAINING   {counts.tested} tested, {counts.skipped} skipped, "
+          f"{counts.profitable} profitable after fees, {summary.combos_beating_hold} beat holding "
+          f"({elapsed:.0f}s)")
+    print("  baskets (every stock on one timeframe, Rs 1 lakh each, per month):")
+    for b in summary.baskets:
+        print(f"    {b['timeframe']:4s} {b['avg_month_pct']:+6.2f}%/month · "
+              f"{b['months_positive_pct']:3.0f}% up · worst month {b['worst_month_pct']:+6.2f}% · "
+              f"{b['trades_per_month']:6.1f} trades/month · {b['luck_check']}"
+              + ("" if b["qualifies"] else f" · NOT PICKED: {b['why_not']}"))
 
-    p = pick.result
-    print(f"\nPICK       {p.symbol} · {p.timeframe}  (training: {pick.training.trades} trades, "
-          f"CAGR {pick.training.cagr_pct:.2f}%, worst dip {pick.training.worst_dip_pct:.1f}%)")
-
-    locked, hold, locked_trades, frame = locked_year(
-        strategy, p, reader, windows,
-        slippage_pct=settings.slippage_pct, cost_model=cost_model,
-    )
-    win_rate = 100 * locked.winning_trades / locked.trades if locked.trades else 0.0
-
-    print("\nLOCKED YEAR")
-    print(f"  Rs 1,00,000 -> {_rupees(locked.end_value)}")
-    print(f"  just holding {p.symbol} -> {_rupees(hold)}"
-          + ("  (the market's move; this strategy is short)" if strategy.position_type == "short" else ""))
-    print(f"  {locked.trades} trades ({locked.trades / 12:.1f}/month) · won {win_rate:.0f}% · "
-          f"worst dip {locked.worst_dip_pct:.1f}%")
-
-    # Coverage is a floor, so up to 10% of stocks may end before DATA_END. If
-    # the winner is one of them, its locked year is partly empty while still
-    # being judged over a full 365 days.
-    pick_last = frame.index[-1].astimezone(IST).date() if len(frame) else None
-    if pick_last is not None and pick_last < data_end:
-        print(f"  NOTE: this combination's candles stop {pick_last}, before DATA_END "
-              f"{data_end} - its locked year is only partly covered")
-
-    beat = hold is not None and locked.end_value > hold
-    print(f"  verdict: {'PASSED' if passed(locked) else 'FAILED'} · beat holding: {'yes' if beat else 'no'}")
-    print(f"  broad or lucky: profitable in {counts.profitable} of {counts.tested} training combinations")
-
+    pick = pick_timeframe(results)
     warnings = [
         f"prices frozen at {data_end}; today's NIFTY200 list applied to the past (survivorship)",
-        f"{counts.tested} combinations tried: some look good in training by luck alone",
     ]
-    if pick_last is not None and pick_last < data_end:
-        warnings.append(f"the pick's candles stop {pick_last}, before DATA_END {data_end}")
+    training_basket = None if pick is None else pick.basket
+
+    if pick is None:
+        print("\nNo qualifying timeframe: no basket beat holding while trading 10+ times a "
+              "month within a 30% dip. Locked year not opened.")
+        warnings.append(f"no qualifying timeframe among {counts.tested} combinations")
+        exam = None
+    else:
+        b = pick.basket
+        print(f"\nPICK       {pick.timeframe} basket of {b.stocks} stocks  (training: "
+              f"{b.avg_month_pct:+.2f}%/month, {b.months_positive_pct:.0f}% months up, "
+              f"worst dip {b.worst_dip_pct:.1f}%, {luck(b)})")
+        exam = locked_year(
+            strategy, pick.timeframe, stocks, reader, windows,
+            slippage_pct=settings.slippage_pct, cost_model=cost_model, workers=args.workers,
+        )
+        if exam is None:
+            print("\nThe basket has no locked-year data. Locked year not opened.")
+            warnings.append("the picked basket had no locked-year data")
+        else:
+            warnings += print_locked(exam, is_short=strategy.position_type == "short",
+                                     data_end=data_end)
+            if len(exam.trades) > 2000:
+                warnings.append(f"{len(exam.trades)} locked-year trades: too many to store, "
+                                "the daily balance is stored instead")
 
     print("\nWARNINGS")
     for line in warnings:
@@ -261,31 +315,37 @@ def main(argv: list[str] | None = None) -> int:
         print("\nnot saved (--no-save)")
         return 0
 
-    day_candles = reader.candles(p.symbol, "day", windows.locked_from_utc, windows.end_utc)
+    row = run_row(
+        started_at=started_at, finished_at=datetime.now(UTC), status="completed",
+        data_end=data_end, locked_from=windows.locked_from,
+        strategy_name=args.strategy,
+        pick_symbol=None if pick is None or exam is None else basket_label(exam.basket.stocks),
+        pick_timeframe=None if pick is None else pick.timeframe,
+        locked=None if exam is None else exam.lakh,
+        hold_end_value=None if exam is None else exam.hold_end_value,
+        combos_profitable=counts.profitable, combos_tested=counts.tested,
+        warnings=warnings,
+        basket=None if exam is None else exam.basket, training_basket=training_basket,
+    )
+    children: dict[str, Any] = {
+        "combos": combo_rows(_PENDING, results, cost_model, window_days_for=window_days_for),
+    }
+    if exam is not None:
+        children["locked_trades"] = basket_trade_rows(_PENDING, exam.trades, stocks=exam.basket.stocks)
+        children["equity"] = equity_rows(_PENDING, exam.equity)
     try:
-        saved = save_run(
-            store._client,
-            run=run_row(
-                started_at=started_at, finished_at=datetime.now(UTC), status="completed",
-                data_end=data_end, locked_from=windows.locked_from,
-                strategy_name=args.strategy, pick_symbol=p.symbol, pick_timeframe=p.timeframe,
-                locked=locked, hold_end_value=hold,
-                combos_profitable=counts.profitable, combos_tested=counts.tested,
-                warnings=warnings,
-            ),
-            combos=combo_rows(_PENDING, results, cost_model, window_days_for=window_days_for),
-            locked_trades=locked_trade_rows(_PENDING, locked_trades, cost_model),
-            equity=equity_rows(_PENDING, equity_series(
-                locked_trades, cost_model,
-                day_index=day_candles.index,
-                closes=day_candles["close"] if not day_candles.empty else None,
-            )),
-        )
+        saved = save_run(store._client, run=row, **children)
     except ResearchStoreError as exc:
         print(f"\nWARNING: the result was NOT stored: {exc}", file=sys.stderr)
         return 1
     print(f"\nsaved as run {saved}")
     return 0
+
+
+def luck(basket: Any) -> str:
+    from research.portfolio import luck_label
+
+    return luck_label(basket.edge_t)
 
 
 if __name__ == "__main__":

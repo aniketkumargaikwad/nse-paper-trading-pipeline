@@ -20,6 +20,7 @@ from typing import Any
 
 from costs import HoldingCostModel
 from research.lakh import START_VALUE, compound
+from research.picker import baskets_by_timeframe, disqualified
 from research.segment import classify, holding_days
 from research.sweep import ComboResult
 
@@ -43,9 +44,21 @@ class TrainingSummary:
     gross_pnl: float
     fees_paid: float
     per_timeframe: list[dict[str, Any]] = field(default_factory=list)
+    # THE figures that decide a version (design 2026-09-16): every stock on
+    # one timeframe at once, Rs 1 lakh each, month by month. One entry per
+    # stock timeframe, each saying why it would or would not be picked.
+    baskets: list[dict[str, Any]] = field(default_factory=list)
     top: list[dict[str, Any]] = field(default_factory=list)
     bottom: list[dict[str, Any]] = field(default_factory=list)
     skipped: dict[str, int] = field(default_factory=dict)
+
+    def best_basket(self) -> dict[str, Any] | None:
+        """The basket that would be picked, or failing that the best average month."""
+        if not self.baskets:
+            return None
+        qualified = [b for b in self.baskets if b.get("qualifies")]
+        pool = qualified or self.baskets
+        return max(pool, key=lambda b: b.get("avg_month_pct") or float("-inf"))
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +71,7 @@ class TrainingSummary:
             "gross_pnl": self.gross_pnl,
             "fees_paid": self.fees_paid,
             "per_timeframe": self.per_timeframe,
+            "baskets": self.baskets,
             "top": self.top,
             "bottom": self.bottom,
             "skipped": self.skipped,
@@ -152,6 +166,14 @@ def build_summary(
             "avg_hold_return_pct": round(sum(holds) / len(holds), 2) if holds else None,
         })
 
+    baskets = []
+    for timeframe, basket in baskets_by_timeframe(tested).items():
+        row = basket.as_dict()
+        reason = disqualified(basket)
+        row["qualifies"] = reason is None
+        row["why_not"] = reason
+        baskets.append(row)
+
     ordered = sorted(rows, key=_excess, reverse=True)
     return TrainingSummary(
         combos_tested=len(tested),
@@ -163,6 +185,7 @@ def build_summary(
         gross_pnl=round(gross, 2),
         fees_paid=round(fees, 2),
         per_timeframe=per_timeframe,
+        baskets=baskets,
         top=ordered[:LIST_SIZE],
         bottom=list(reversed(ordered[-LIST_SIZE:])) if ordered else [],
         skipped=skipped,

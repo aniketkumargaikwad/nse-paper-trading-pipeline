@@ -12,14 +12,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from research.segment import (
-    INTRADAY,
-    LONG_TERM,
-    SWING,
-    TARGET_MONTHLY_MAX,
-    TARGET_MONTHLY_MIN,
-    min_trades_per_month,
-)
+from research.segment import TARGET_MONTHLY_MAX, TARGET_MONTHLY_MIN
 from research.summary import TrainingSummary
 
 PROPOSE_SCHEMA: dict[str, Any] = {
@@ -72,13 +65,15 @@ What this strategy is being designed to achieve:
   which is {_YEARLY_MIN:.0f}-{_YEARLY_MAX:.0f}% a year. That is deliberately ambitious: say so in
   your hypothesis if you think the idea cannot reach it, rather than quietly
   aiming lower.
-- enough trades for the segment you choose, on the combination finally
-  picked: {min_trades_per_month(INTRADAY):.0f} a month for intraday, {min_trades_per_month(SWING):.0f} for swing,
-  {min_trades_per_month(LONG_TERM):.0f} for long-term. A combination below its own floor is DISCARDED
-  however good its total looks, so an idea that enters once a quarter cannot
-  win here whichever segment it claims.
-- beating simply holding the same stock. One that made money while holding
-  made more is discarded too.
+- judged as a BASKET: every stock at once on one timeframe, Rs 1,00,000 in
+  each, measured month by month. The timeframe whose basket earns the most
+  per month is picked - but only if it traded at least 10 trades a month
+  across the whole basket, never fell more than 30% from a high, and beat
+  holding the same basket on average. A basket failing any of those is
+  DISCARDED however good its best stock looks, so an idea that fires once a
+  quarter on a handful of stocks cannot win here.
+- one stock's spectacular result counts for nothing on its own; the best of
+  ~1,177 combinations is nearly always luck. Design for the average stock.
 
 Say in `description` which segment you are designing for: intraday (closed
 the same day), swing (held days to a few weeks), or long-term (held months).
@@ -159,11 +154,21 @@ def review_prompt(*, summary: TrainingSummary, version: int, versions_left: int)
         "",
         _summary_block(summary),
         "",
-        "Judge it honestly. A strategy that made money while simply holding the "
-        "same stocks made more has no edge; say so. The top and bottom tables "
-        "are ranked by excess_vs_hold_pct - what the strategy returned minus "
-        "what holding that symbol returned over the same window - not by "
-        "rupees, and combos_beating_hold is the count that matters.",
+        "Judge it honestly, and judge it on `baskets`: every stock on one "
+        "timeframe at once, Rs 1,00,000 each, measured month by month. That is "
+        "how the final version is picked and how it will be examined - the "
+        "timeframe whose basket has the best avg_month_pct among those with "
+        "`qualifies` true (why_not says what failed). Read months_positive_pct, "
+        "worst_month_pct, worst_dip_pct, the year-by-year rows, and luck_check "
+        "before believing an average. avg_excess_pct is the average month minus "
+        "what holding the same basket made that month; below zero there is no "
+        "edge, however large the return. The aim is an average month of "
+        f"{TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}%.",
+        "",
+        "The top and bottom tables are single combinations ranked by "
+        "excess_vs_hold_pct - the luckiest and unluckiest of ~1,177 tries. They "
+        "show what kind of stock the idea suits; they are not evidence of an "
+        "edge. combos_beating_hold counts how broadly the idea worked.",
         "",
         "Then set decision to one of:",
         "- next_version: keep this idea and change one thing (say what in change_hint)",

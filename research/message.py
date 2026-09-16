@@ -224,7 +224,46 @@ def version_rows(version: Mapping[str, Any], *, compact: bool = False) -> list[t
     if tested:
         rows.append(("Across all", f"{tested} combos · {profitable} made money "
                                    f"· {beat if beat is not None else '?'} beat holding"))
+    rows += basket_rows(facts, compact=compact)
     rows.append(("VERDICT", edge_verdict(beat, tested)))
+    return rows
+
+
+def best_basket(facts: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The basket the pick rule would choose, else the best average month.
+
+    A basket is every stock on one timeframe at once, Rs 1 lakh each, judged
+    month by month - the figure the day is actually decided on. Runs stored
+    before 16 September 2026 carry none.
+    """
+    baskets = facts.get("baskets") or []
+    if not baskets:
+        return None
+    pool = [b for b in baskets if b.get("qualifies")] or baskets
+    return max(pool, key=lambda b: b.get("avg_month_pct") if b.get("avg_month_pct") is not None
+               else float("-inf"))
+
+
+def basket_rows(facts: Mapping[str, Any], *, compact: bool = False) -> list[tuple[str, str]]:
+    """How the whole basket did, per month - the number the goal is stated in."""
+    best = best_basket(facts)
+    if best is None:
+        return []
+    monthly = best.get("avg_month_pct")
+    if monthly is None:
+        return []
+    against = meets_target(monthly)
+    if compact:
+        against = against.replace("the 4-7% target", "target")
+    label = f"{best.get('timeframe')} bars, all {best.get('stocks', '?')} stocks"
+    rows = [("Whole basket", label if best.get("qualifies") else f"{label} (not pickable)"),
+            ("Basket/month", f"{monthly:+.2f}%  ({against})")]
+    if not compact:
+        rows.append(("Months up", f"{best.get('months_positive_pct', 0):.0f}% · "
+                                  f"worst month {best.get('worst_month_pct', 0):+.1f}%"))
+        rows.append(("Luck check", str(best.get("luck_check") or "not measured")))
+        if not best.get("qualifies") and best.get("why_not"):
+            rows.append(("Not picked", str(best["why_not"])[:60]))
     return rows
 
 
@@ -235,8 +274,8 @@ def locked_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
 
     if not run.get("pick_symbol"):
         return [
-            ("Best stock", "none qualified"),
-            ("Why none", "nothing beat simply holding in training"),
+            ("Traded on", "nothing qualified"),
+            ("Why none", "no basket beat holding while trading enough"),
             ("VERDICT", "no strategy worth measuring"),
         ]
 
@@ -246,10 +285,18 @@ def locked_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
     wins = round((run.get("win_rate_pct") or 0) * trades / 100)
 
     rows = [
-        ("Best stock", f"{run['pick_symbol']}, {run.get('pick_timeframe')} bars"),
+        ("Traded on", f"{run['pick_symbol']}, {run.get('pick_timeframe')} bars"),
         ("Started with", rupees(START_VALUE)),
         ("Ended with", rupees(end)),
     ]
+    monthly = run.get("locked_avg_month_pct")
+    if monthly is not None:
+        monthly = float(monthly)
+        rows.append(("Average month", f"{monthly:+.2f}%  ({meets_target(monthly)})"))
+        up = run.get("locked_months_positive_pct")
+        worst_month = run.get("locked_worst_month_pct")
+        if up is not None and worst_month is not None:
+            rows.append(("Months up", f"{float(up):.0f}% · worst month {float(worst_month):+.1f}%"))
     if end is not None:
         change = end - START_VALUE
         rows.append(
