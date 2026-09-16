@@ -20,7 +20,7 @@ from typing import Any
 
 from costs import HoldingCostModel
 from research.lakh import START_VALUE, compound
-from research.picker import baskets_by_timeframe, disqualified
+from research.picker import accounts_by_timeframe, baskets_by_timeframe, disqualified
 from research.segment import classify, holding_days
 from research.sweep import ComboResult
 
@@ -48,17 +48,20 @@ class TrainingSummary:
     # one timeframe at once, Rs 1 lakh each, month by month. One entry per
     # stock timeframe, each saying why it would or would not be picked.
     baskets: list[dict[str, Any]] = field(default_factory=list)
+    # The same trades replayed as a ten-slot account (research.account): what
+    # the owner's money would actually have earned. The pick is made on this.
+    accounts: list[dict[str, Any]] = field(default_factory=list)
     top: list[dict[str, Any]] = field(default_factory=list)
     bottom: list[dict[str, Any]] = field(default_factory=list)
     skipped: dict[str, int] = field(default_factory=dict)
 
-    def best_basket(self) -> dict[str, Any] | None:
-        """The basket that would be picked, or failing that the best average month."""
-        if not self.baskets:
+    def best_account(self) -> dict[str, Any] | None:
+        """The account that would be picked, or failing that the best average month."""
+        if not self.accounts:
             return None
-        qualified = [b for b in self.baskets if b.get("qualifies")]
-        pool = qualified or self.baskets
-        return max(pool, key=lambda b: b.get("avg_month_pct") or float("-inf"))
+        qualified = [a for a in self.accounts if a.get("qualifies")]
+        pool = qualified or self.accounts
+        return max(pool, key=lambda a: a.get("avg_month_pct") or float("-inf"))
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +75,7 @@ class TrainingSummary:
             "fees_paid": self.fees_paid,
             "per_timeframe": self.per_timeframe,
             "baskets": self.baskets,
+            "accounts": self.accounts,
             "top": self.top,
             "bottom": self.bottom,
             "skipped": self.skipped,
@@ -166,13 +170,14 @@ def build_summary(
             "avg_hold_return_pct": round(sum(holds) / len(holds), 2) if holds else None,
         })
 
-    baskets = []
-    for timeframe, basket in baskets_by_timeframe(tested).items():
-        row = basket.as_dict()
-        reason = disqualified(basket)
+    baskets = [basket.as_dict() for basket in baskets_by_timeframe(tested).values()]
+    accounts = []
+    for timeframe, account in accounts_by_timeframe(tested).items():
+        row = account.as_dict()
+        reason = disqualified(account)
         row["qualifies"] = reason is None
         row["why_not"] = reason
-        baskets.append(row)
+        accounts.append(row)
 
     ordered = sorted(rows, key=_excess, reverse=True)
     return TrainingSummary(
@@ -186,6 +191,7 @@ def build_summary(
         fees_paid=round(fees, 2),
         per_timeframe=per_timeframe,
         baskets=baskets,
+        accounts=accounts,
         top=ordered[:LIST_SIZE],
         bottom=list(reversed(ordered[-LIST_SIZE:])) if ordered else [],
         skipped=skipped,

@@ -230,13 +230,15 @@ def version_rows(version: Mapping[str, Any], *, compact: bool = False) -> list[t
 
 
 def best_basket(facts: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    """The basket the pick rule would choose, else the best average month.
+    """The account the pick rule would choose, else the best average month.
 
-    A basket is every stock on one timeframe at once, Rs 1 lakh each, judged
-    month by month - the figure the day is actually decided on. Runs stored
-    before 16 September 2026 carry none.
+    An account is ten Rs 1 lakh slots taking signals as they arrive across
+    every stock on one timeframe, judged month by month on the whole capital
+    - the figure the day is actually decided on. Runs stored before 16
+    September 2026 carry none; runs from that morning carry only the
+    fully-funded basket, which is used in its place.
     """
-    baskets = facts.get("baskets") or []
+    baskets = facts.get("accounts") or facts.get("baskets") or []
     if not baskets:
         return None
     pool = [b for b in baskets if b.get("qualifies")] or baskets
@@ -255,9 +257,12 @@ def basket_rows(facts: Mapping[str, Any], *, compact: bool = False) -> list[tupl
     against = meets_target(monthly)
     if compact:
         against = against.replace("the 4-7% target", "target")
-    label = f"{best.get('timeframe')} bars, all {best.get('stocks', '?')} stocks"
-    rows = [("Whole basket", label if best.get("qualifies") else f"{label} (not pickable)"),
-            ("Basket/month", f"{monthly:+.2f}%  ({against})")]
+    slots = best.get("slots")
+    label = (f"{best.get('timeframe')} bars, {slots} slots over {best.get('stocks', '?')} stocks"
+             if slots else f"{best.get('timeframe')} bars, all {best.get('stocks', '?')} stocks")
+    rows = [("Account" if slots else "Whole basket",
+             label if best.get("qualifies") else f"{label} (not pickable)"),
+            ("Account/month" if slots else "Basket/month", f"{monthly:+.2f}%  ({against})")]
     if not compact:
         rows.append(("Months up", f"{best.get('months_positive_pct', 0):.0f}% · "
                                   f"worst month {best.get('worst_month_pct', 0):+.1f}%"))

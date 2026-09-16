@@ -136,16 +136,16 @@ def test_a_version_says_which_segment_it_trades():
 
 
 def test_a_version_in_the_target_band_says_so():
-    rows = labelled(version_rows(a_version(cagr_pct=70.0)))
-    assert "IN the 4-7% target" in rows["Return a month"]
+    rows = labelled(version_rows(a_version(cagr_pct=90.0)))
+    assert "IN the 5-7% target" in rows["Return a month"]
 
 
 def test_a_version_gives_yearly_and_monthly_return():
     rows = labelled(version_rows(a_version()))
     assert rows["Return a year"] == "+16.2%"
     # 16.2% a year compounds from about 1.26% a month, not 16.2/12 = 1.35%,
-    # and the line says where that sits against the 4-7% the owner wants.
-    assert rows["Return a month"] == "+1.26%  (below the 4-7% target)"
+    # and the line says where that sits against the 5-7% the owner wants.
+    assert rows["Return a month"] == "+1.26%  (below the 5-7% target)"
 
 
 def test_the_monthly_return_compounds_rather_than_divides():

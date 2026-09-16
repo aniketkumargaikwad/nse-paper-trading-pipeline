@@ -71,8 +71,8 @@ def test_the_description_carries_the_holding_period():
 
 
 def test_the_monthly_target_says_which_side_of_the_band_it_is_on():
-    assert meets_target(5.0).startswith("IN the 4-7% target")
-    assert meets_target(4.0).startswith("IN the")
+    assert meets_target(5.0).startswith("IN the 5-7% target")
+    assert meets_target(6.0).startswith("IN the")
     assert meets_target(7.0).startswith("IN the")
     assert meets_target(1.2).startswith("below")
     assert meets_target(12.0).startswith("above")

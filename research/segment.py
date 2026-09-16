@@ -34,12 +34,12 @@ UNKNOWN = "no trades"
 # Not a classification - a refusal. See the module docstring.
 UNSUPPORTED = ("f&o", "futures", "options")
 
-# What the owner is aiming for, as a monthly compounded return. Ambitious:
-# 4% a month compounds to 60% a year and 7% to 125%, which is far above what
-# most professional funds sustain. It is a target to steer towards and to
-# measure the distance from, NOT a filter - filtering on it would simply
-# produce empty days.
-TARGET_MONTHLY_MIN = 4.0
+# What the owner is aiming for, as a monthly return. Ambitious: 5% a month
+# compounds to 80% a year and 7% to 125%, which is far above what most
+# professional funds sustain. It is a target to steer towards and to measure
+# the distance from, NOT a filter - filtering on it would simply produce empty
+# days. The floor was 4% until 2026-09-16, when the owner restated it as 5%.
+TARGET_MONTHLY_MIN = 5.0
 TARGET_MONTHLY_MAX = 7.0
 
 def holding_days(trades: Sequence[Any]) -> float | None:

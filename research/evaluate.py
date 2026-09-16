@@ -48,9 +48,9 @@ def _rupees(value: float | None) -> str:
     return "n/a" if value is None else f"Rs {value:,.0f}"
 
 
-def basket_label(stocks: int) -> str:
-    """What the grid's 'traded on' column says for a basket."""
-    return f"NIFTY200 basket ({stocks} stocks)"
+def basket_label(account: Any) -> str:
+    """What the grid's 'traded on' column says for an account reading."""
+    return f"{account.slots}-slot account over {account.stocks} NIFTY200 stocks"
 
 
 def prepare_run(settings: Any, store: Any, stocks: Sequence[str]) -> tuple[Any, Any, Any, list]:
@@ -100,12 +100,17 @@ def prepare_run(settings: Any, store: Any, stocks: Sequence[str]) -> tuple[Any, 
 
 @dataclass(frozen=True)
 class LockedBasket:
-    """The exam, for one timeframe's basket (design 2026-09-16 §2.4)."""
+    """The exam, for one timeframe (design 2026-09-16 §2.4, revised the same day).
 
-    lakh: Any                       # research.lakh.LakhResult
+    `account` is the ten-slot replay the verdict is made on; `basket` is the
+    fully-funded per-stock average beside it.
+    """
+
+    lakh: Any                       # research.lakh.LakhResult, of the account
     hold_end_value: float | None
+    account: Any                    # research.portfolio.Basket (an account reading)
     basket: Any                     # research.portfolio.Basket
-    trades: list                    # every locked-year SimTrade across the basket
+    trades: list                    # the account's locked-year SimTrades (taken only)
     equity: list[dict[str, Any]]    # daily rows for the chart
     stocks_short: list[str]         # stocks whose candles stop before DATA_END
 
@@ -124,6 +129,7 @@ def locked_year(
 
     Returns None when not one stock produced a locked-year result.
     """
+    from research.account import SLOTS, account_weight, build_account, replay
     from research.lakh import LakhResult
     from research.portfolio import build_basket, daily_equity, dip_of_equity, restrict_to
     from research.sweep import run_sweep
@@ -137,7 +143,8 @@ def locked_year(
     )
     locked = [restrict_to(r, windows.locked_from_utc) for r in full if r.skipped_reason is None]
     basket = build_basket(locked, timeframe=timeframe)
-    if basket is None:
+    account = build_account(locked, timeframe=timeframe, slots=SLOTS)
+    if basket is None or account is None:
         return None
 
     closes = {}
@@ -150,22 +157,24 @@ def locked_year(
         if frame.index[-1].astimezone(IST).date() < windows.data_end:
             short.append(r.symbol)
 
-    equity = daily_equity(locked, closes_by_symbol=closes)
-    trades = [t for r in locked for t in r.trades]
-    end_value = basket.end_value()
+    taken = list(replay([t for r in locked for t in r.trades], slots=SLOTS).taken)
+    equity = daily_equity(locked, closes_by_symbol=closes, trades=taken,
+                          weight_of=account_weight(SLOTS))
+    trades = taken
+    end_value = account.end_value()
     years = LOCKED_DAYS / 365.25
     cagr = (round(((end_value / 100_000.0) ** (1 / years) - 1) * 100, 4)
             if end_value > 0 else None)
     lakh = LakhResult(
         start_value=100_000.0,
         end_value=end_value,
-        trades=basket.trades,
-        winning_trades=basket.winning_trades,
-        worst_dip_pct=dip_of_equity(equity) if equity else basket.worst_dip_pct,
+        trades=account.trades,
+        winning_trades=account.winning_trades,
+        worst_dip_pct=dip_of_equity(equity) if equity else account.worst_dip_pct,
         cagr_pct=cagr,
     )
     return LockedBasket(
-        lakh=lakh, hold_end_value=basket.holding_end_value(), basket=basket,
+        lakh=lakh, hold_end_value=account.holding_end_value(), account=account, basket=basket,
         trades=trades, equity=equity, stocks_short=short,
     )
 
@@ -176,17 +185,20 @@ def print_locked(exam: LockedBasket, *, is_short: bool, data_end: Any) -> list[s
     from research.portfolio import luck_label
     from research.segment import meets_target
 
-    b, lakh = exam.basket, exam.lakh
+    b, lakh = exam.account, exam.lakh
     win_rate = 100 * lakh.winning_trades / lakh.trades if lakh.trades else 0.0
     warnings: list[str] = []
     print("\nLOCKED YEAR")
-    print(f"  Rs 1,00,000 spread over {b.stocks} stocks -> {_rupees(lakh.end_value)}")
-    print(f"  just holding the same basket -> {_rupees(exam.hold_end_value)}"
+    print(f"  Rs 1,00,000 in a {b.slots}-slot account over {b.stocks} stocks -> "
+          f"{_rupees(lakh.end_value)}")
+    print(f"  just holding the same stocks -> {_rupees(exam.hold_end_value)}"
           + ("  (the market's move; this strategy is short)" if is_short else ""))
     print(f"  average month {b.avg_month_pct:+.2f}%  ({meets_target(b.avg_month_pct)}) · "
           f"{b.months_positive_pct:.0f}% of months up · worst month {b.worst_month_pct:+.2f}%")
     print(f"  {lakh.trades} trades ({b.trades_per_month:.1f}/month) · won {win_rate:.0f}% · "
           f"worst dip {lakh.worst_dip_pct:.1f}% (closed trades) · luck check: {luck_label(b.edge_t)}")
+    print(f"  slots busy {b.slot_use_pct:.0f}% of the time · {b.signals_skipped_pct:.0f}% of "
+          f"signals skipped · every stock funded: {exam.basket.avg_month_pct:+.2f}%/month")
     if exam.stocks_short:
         print(f"  NOTE: {len(exam.stocks_short)} stocks' candles stop before DATA_END {data_end}")
         warnings.append(f"{len(exam.stocks_short)} of the basket's stocks stop before DATA_END {data_end}")
@@ -270,8 +282,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nTRAINING   {counts.tested} tested, {counts.skipped} skipped, "
           f"{counts.profitable} profitable after fees, {summary.combos_beating_hold} beat holding "
           f"({elapsed:.0f}s)")
-    print("  baskets (every stock on one timeframe, Rs 1 lakh each, per month):")
-    for b in summary.baskets:
+    print("  accounts (ten Rs 1 lakh slots, signals taken as they arrive, per month):")
+    for b in summary.accounts:
         print(f"    {b['timeframe']:4s} {b['avg_month_pct']:+6.2f}%/month · "
               f"{b['months_positive_pct']:3.0f}% up · worst month {b['worst_month_pct']:+6.2f}% · "
               f"{b['trades_per_month']:6.1f} trades/month · {b['luck_check']}"
@@ -281,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     warnings = [
         f"prices frozen at {data_end}; today's NIFTY200 list applied to the past (survivorship)",
     ]
-    training_basket = None if pick is None else pick.basket
+    training_basket = None if pick is None else pick.account
 
     if pick is None:
         print("\nNo qualifying timeframe: no basket beat holding while trading 10+ times a "
@@ -289,8 +301,8 @@ def main(argv: list[str] | None = None) -> int:
         warnings.append(f"no qualifying timeframe among {counts.tested} combinations")
         exam = None
     else:
-        b = pick.basket
-        print(f"\nPICK       {pick.timeframe} basket of {b.stocks} stocks  (training: "
+        b = pick.account
+        print(f"\nPICK       {pick.timeframe} account over {b.stocks} stocks  (training: "
               f"{b.avg_month_pct:+.2f}%/month, {b.months_positive_pct:.0f}% months up, "
               f"worst dip {b.worst_dip_pct:.1f}%, {luck(b)})")
         exam = locked_year(
@@ -319,19 +331,19 @@ def main(argv: list[str] | None = None) -> int:
         started_at=started_at, finished_at=datetime.now(UTC), status="completed",
         data_end=data_end, locked_from=windows.locked_from,
         strategy_name=args.strategy,
-        pick_symbol=None if pick is None or exam is None else basket_label(exam.basket.stocks),
+        pick_symbol=None if pick is None or exam is None else basket_label(exam.account),
         pick_timeframe=None if pick is None else pick.timeframe,
         locked=None if exam is None else exam.lakh,
         hold_end_value=None if exam is None else exam.hold_end_value,
         combos_profitable=counts.profitable, combos_tested=counts.tested,
         warnings=warnings,
-        basket=None if exam is None else exam.basket, training_basket=training_basket,
+        basket=None if exam is None else exam.account, training_basket=training_basket,
     )
     children: dict[str, Any] = {
         "combos": combo_rows(_PENDING, results, cost_model, window_days_for=window_days_for),
     }
     if exam is not None:
-        children["locked_trades"] = basket_trade_rows(_PENDING, exam.trades, stocks=exam.basket.stocks)
+        children["locked_trades"] = basket_trade_rows(_PENDING, exam.trades, stocks=exam.account.slots)
         children["equity"] = equity_rows(_PENDING, exam.equity)
     try:
         saved = save_run(store._client, run=row, **children)

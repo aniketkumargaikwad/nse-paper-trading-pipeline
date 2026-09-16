@@ -57,22 +57,24 @@ def sleeve(symbol="A", timeframe="day", months=30, pct=1.0, per_month=12, hold=0
 def test_the_summary_carries_one_basket_per_stock_timeframe_and_says_why_not():
     got = build_summary([sleeve(timeframe="day"), sleeve(timeframe="60m", pct=-0.2)],
                         FREE, window_days_for=lambda r: 900)
-    by_tf = {b["timeframe"]: b for b in got.baskets}
+    by_tf = {a["timeframe"]: a for a in got.accounts}
     assert by_tf["day"]["qualifies"] is True and by_tf["day"]["why_not"] is None
     assert by_tf["60m"]["qualifies"] is False and "did not beat holding" in by_tf["60m"]["why_not"]
-    assert got.best_basket()["timeframe"] == "day"
+    assert got.best_account()["timeframe"] == "day"
+    assert {b["timeframe"] for b in got.baskets} == {"day", "60m"}
+    assert "qualifies" not in got.baskets[0]
 
 
 def test_the_baskets_carry_no_locked_year_word():
     got = build_summary([sleeve()], FREE, window_days_for=lambda r: 900)
-    blob = json.dumps(got.as_dict()["baskets"]).lower()
+    blob = json.dumps(got.as_dict()["baskets"] + got.as_dict()["accounts"]).lower()
     assert not any(word in blob for word in LOCKED_WORDS)
 
 
 def test_the_review_prompt_tells_opus_to_judge_on_the_baskets():
     text = review_prompt(summary=build_summary([sleeve()], FREE, window_days_for=lambda r: 900),
                          version=1, versions_left=3)
-    assert "`baskets`" in text and "avg_month_pct" in text and "luck_check" in text
+    assert "`accounts`" in text and "avg_month_pct" in text and "luck_check" in text
     assert "luckiest" in text.lower()
 
 
@@ -100,9 +102,9 @@ def test_run_row_without_a_basket_keeps_the_columns_null():
     assert basket_columns(None, None)["locked_target_met"] is None
 
 
-def test_target_met_needs_four_percent_a_month():
-    assert basket_columns(build_basket([sleeve(pct=3.9)], timeframe="day"), None)["locked_target_met"] is False
-    assert basket_columns(build_basket([sleeve(pct=4.0)], timeframe="day"), None)["locked_target_met"] is True
+def test_target_met_needs_five_percent_a_month():
+    assert basket_columns(build_basket([sleeve(pct=4.8)], timeframe="day"), None)["locked_target_met"] is False
+    assert basket_columns(build_basket([sleeve(pct=5.0)], timeframe="day"), None)["locked_target_met"] is True
 
 
 def test_basket_trade_rows_weight_each_trade_by_the_basket_size():
@@ -147,7 +149,7 @@ def test_the_best_basket_is_the_pickable_one_with_the_best_month():
 def test_a_version_block_says_how_the_whole_basket_did_per_month():
     rows = dict(version_rows(a_version_with_baskets()))
     assert rows["Whole basket"] == "day bars, all 200 stocks"
-    assert rows["Basket/month"].startswith("+1.20%") and "below the 4-7% target" in rows["Basket/month"]
+    assert rows["Basket/month"].startswith("+1.20%") and "below the 5-7% target" in rows["Basket/month"]
     assert rows["Months up"].startswith("61%") and "worst month -4.2%" in rows["Months up"]
     assert rows["Luck check"] == "could be luck"
 
@@ -156,6 +158,15 @@ def test_an_unpickable_basket_says_so_and_why():
     rows = dict(version_rows(a_version_with_baskets(qualifies=False)))
     assert rows["Whole basket"].endswith("(not pickable)")
     assert rows["Not picked"].startswith("too slow")
+
+
+def test_an_account_reading_is_labelled_as_one():
+    facts = {"accounts": [{"timeframe": "day", "stocks": 200, "slots": 10, "avg_month_pct": 5.5,
+                           "months_positive_pct": 70.0, "worst_month_pct": -2.0,
+                           "luck_check": "unlikely to be luck", "qualifies": True, "why_not": None}]}
+    rows = dict(basket_rows(facts))
+    assert rows["Account"] == "day bars, 10 slots over 200 stocks"
+    assert rows["Account/month"].startswith("+5.50%") and "IN the 5-7% target" in rows["Account/month"]
 
 
 def test_a_version_without_baskets_has_no_basket_rows():
@@ -168,11 +179,11 @@ def test_the_locked_block_reports_the_average_month_against_the_target():
         "pick_symbol": "NIFTY200 basket (200 stocks)", "pick_timeframe": "day",
         "lakh_end_value": 152_000.0, "hold_end_value": 120_000.0, "locked_trades": 2400,
         "win_rate_pct": 55.0, "worst_dip_pct": 9.0, "verdict_passed": True, "beat_holding": True,
-        "locked_avg_month_pct": 4.3, "locked_months_positive_pct": 75.0, "locked_worst_month_pct": -3.1,
+        "locked_avg_month_pct": 5.3, "locked_months_positive_pct": 75.0, "locked_worst_month_pct": -3.1,
     }
     rows = dict(locked_rows(run))
     assert rows["Traded on"] == "NIFTY200 basket (200 stocks), day bars"
-    assert rows["Average month"].startswith("+4.30%") and "IN the 4-7% target" in rows["Average month"]
+    assert rows["Average month"].startswith("+5.30%") and "IN the 5-7% target" in rows["Average month"]
     assert rows["Months up"] == "75% · worst month -3.1%"
     assert rows["VERDICT"].startswith("PASSED")
 
@@ -185,7 +196,7 @@ def test_the_ideas_index_carries_the_basket_numbers():
         "strategy_name": "R-20260915-x-v1", "lessons": "fees ate it",
         "training_summary": a_version_with_baskets()["training_summary"],
     })
-    assert "best basket day: +1.20%/month, 61% months up" in line
+    assert "best account day: +1.20%/month, 61% months up" in line
     assert "300 of 1177 beat holding" in line and line.endswith("fees ate it")
 
 

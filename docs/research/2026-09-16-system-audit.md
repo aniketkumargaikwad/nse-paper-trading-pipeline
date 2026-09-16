@@ -134,6 +134,26 @@ will now measure the distance to the goal honestly; it cannot close it.
 5. **A position cap** in the basket (say ten open at once) so the number the
    owner sees matches a real account rather than 200 funded sleeves.
 
+## 4a. Afternoon: the account replay, a 5% floor, and what the data already showed
+
+After the morning's changes the owner restated the target as **5% a month
+minimum**, made the trade floor soft, and asked for the most precise result
+possible. Two more changes followed:
+
+- **The account replay** (`research/account.py`). The 200-stock basket
+  funds every sleeve all the time, which understates a selective rule: a
+  signal on 5% of stocks leaves 95% of the money idle. The same trades are
+  now replayed as a **ten-slot ₹10 lakh account** - a signal is taken if a
+  slot is free at that instant and skipped otherwise. That is what the
+  owner's money would actually earn; it is now the pick, the exam and the
+  target check. The basket stays beside it as the per-stock average.
+- **Facts the AI reads first** (`research/facts.py`): every dead end the
+  memos measured - daily momentum reverses out of sample, 15-minute
+  breakouts lose before fees, 60-minute autocorrelation is untradeable,
+  what fees and slippage cost per month - plus where edge has *not* been
+  looked for yet. Three mornings had re-proposed the same beta family.
+- The review may now name an earlier version as the day's final one.
+
 ## 5. What was changed today
 
 - `research/portfolio.py`, `research/month_closes.py` (new): the basket.

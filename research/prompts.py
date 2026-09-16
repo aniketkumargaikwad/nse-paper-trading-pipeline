@@ -12,6 +12,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from research.facts import FACTS
 from research.segment import TARGET_MONTHLY_MAX, TARGET_MONTHLY_MIN
 from research.summary import TrainingSummary
 
@@ -38,6 +39,10 @@ REVIEW_SCHEMA: dict[str, Any] = {
         "lessons": {"type": "string", "maxLength": 800},
         "decision": {"type": "string", "enum": ["next_version", "new_idea", "stop"]},
         "change_hint": {"type": "string", "maxLength": 400},
+        # When stopping, which version the day should end on - "v1.3" - if an
+        # earlier one was better than the last. Absent means the one just
+        # reviewed.
+        "final_version": {"type": "string", "maxLength": 12},
     },
 }
 
@@ -65,13 +70,15 @@ What this strategy is being designed to achieve:
   which is {_YEARLY_MIN:.0f}-{_YEARLY_MAX:.0f}% a year. That is deliberately ambitious: say so in
   your hypothesis if you think the idea cannot reach it, rather than quietly
   aiming lower.
-- judged as a BASKET: every stock at once on one timeframe, Rs 1,00,000 in
-  each, measured month by month. The timeframe whose basket earns the most
-  per month is picked - but only if it traded at least 10 trades a month
-  across the whole basket, never fell more than 30% from a high, and beat
-  holding the same basket on average. A basket failing any of those is
-  DISCARDED however good its best stock looks, so an idea that fires once a
-  quarter on a handful of stocks cannot win here.
+- judged as an ACCOUNT: ten slots of Rs 1,00,000, taking entry signals as
+  they arrive across all 200 stocks on one timeframe and skipping a signal
+  when every slot is busy, measured month by month on the whole Rs 10,00,000.
+  The timeframe whose account earns the most per month is picked - but only
+  if it never fell more than 30% from a high, beat holding the same stocks
+  on average, and either traded 10+ times a month or averaged the target.
+  An account failing any of those is DISCARDED however good its best stock
+  looks. A selective rule is fine: ten slots mean a signal on 5% of stocks
+  still keeps the account busy.
 - one stock's spectacular result counts for nothing on its own; the best of
   ~1,177 combinations is nearly always luck. Design for the average stock.
 
@@ -118,6 +125,8 @@ def propose_prompt(
         AIM,
         "",
         RULES,
+        "",
+        FACTS,
     ]
     if notes:
         parts.append("\nWhat earlier days learned:")
@@ -154,16 +163,19 @@ def review_prompt(*, summary: TrainingSummary, version: int, versions_left: int)
         "",
         _summary_block(summary),
         "",
-        "Judge it honestly, and judge it on `baskets`: every stock on one "
-        "timeframe at once, Rs 1,00,000 each, measured month by month. That is "
-        "how the final version is picked and how it will be examined - the "
-        "timeframe whose basket has the best avg_month_pct among those with "
-        "`qualifies` true (why_not says what failed). Read months_positive_pct, "
-        "worst_month_pct, worst_dip_pct, the year-by-year rows, and luck_check "
-        "before believing an average. avg_excess_pct is the average month minus "
-        "what holding the same basket made that month; below zero there is no "
-        "edge, however large the return. The aim is an average month of "
-        f"{TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}%.",
+        "Judge it honestly, and judge it on `accounts`: a ten-slot account "
+        "taking signals as they arrive across every stock on one timeframe, "
+        "measured month by month on the whole capital. That is how the final "
+        "version is picked and how it will be examined - the timeframe whose "
+        "account has the best avg_month_pct among those with `qualifies` true "
+        "(why_not says what failed). Read months_positive_pct, worst_month_pct, "
+        "worst_dip_pct, years_positive_pct, the year-by-year rows, "
+        "signals_skipped_pct and luck_check before believing an average. "
+        "avg_excess_pct is the average month minus what holding the same stocks "
+        "made; below zero there is no edge, however large the return. `baskets` "
+        "is the same rule with every stock funded all the time - the per-stock "
+        "average, useful for seeing how broadly the rule works. The aim is an "
+        f"average account month of {TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}%.",
         "",
         "The top and bottom tables are single combinations ranked by "
         "excess_vs_hold_pct - the luckiest and unluckiest of ~1,177 tries. They "
@@ -173,7 +185,9 @@ def review_prompt(*, summary: TrainingSummary, version: int, versions_left: int)
         "Then set decision to one of:",
         "- next_version: keep this idea and change one thing (say what in change_hint)",
         "- new_idea: this idea is not worth more versions; start a different one",
-        "- stop: nothing further is worth trying today",
+        "- stop: nothing further is worth trying today. If an EARLIER version "
+        'of this idea was better, name it in final_version as "v<idea>.<version>" '
+        '(for example "v1.2"); otherwise the version just reviewed is the final one.',
     ]
     if versions_left <= 0:
         parts.append(

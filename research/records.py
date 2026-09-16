@@ -96,7 +96,8 @@ def run_row(
 def basket_columns(locked: Basket | None, training: Basket | None) -> dict[str, Any]:
     """The month-by-month figures (design 2026-09-16 3). Null when there was no basket."""
     out: dict[str, Any] = {
-        "basket_stocks": None, "locked_avg_month_pct": None,
+        "basket_stocks": None, "account_slots": None, "locked_slot_use_pct": None,
+        "locked_signals_skipped_pct": None, "locked_avg_month_pct": None,
         "locked_months_positive_pct": None, "locked_worst_month_pct": None,
         "locked_target_met": None, "locked_months": None,
         "training_avg_month_pct": None, "training_months": None, "training_edge_t": None,
@@ -104,6 +105,9 @@ def basket_columns(locked: Basket | None, training: Basket | None) -> dict[str, 
     if locked is not None:
         out.update({
             "basket_stocks": locked.stocks,
+            "account_slots": locked.slots,
+            "locked_slot_use_pct": locked.slot_use_pct,
+            "locked_signals_skipped_pct": locked.signals_skipped_pct,
             "locked_avg_month_pct": locked.avg_month_pct,
             "locked_months_positive_pct": locked.months_positive_pct,
             "locked_worst_month_pct": locked.worst_month_pct,
@@ -186,11 +190,12 @@ def basket_trade_rows(
     run_id: str, trades: Sequence[SimTrade], *, stocks: int, start_value: float = START_VALUE,
     notional: float = START_VALUE,
 ) -> list[dict[str, Any]]:
-    """The basket's locked-year trades, each with the basket balance it left.
+    """The account's locked-year trades, each with the balance it left.
 
-    A trade moves the basket by net P&L / (notional x stocks), the same
-    weight research.portfolio.daily_equity gives it, so the last row's
-    balance matches the chart. Empty when there are too many to store.
+    A trade moves the account by net P&L / (notional x `stocks`), where
+    `stocks` is the number of slots for an account replay - the same weight
+    research.portfolio.daily_equity gives it, so the last row's balance
+    matches the chart. Empty when there are too many to store.
     """
     if len(trades) > MAX_STORED_LOCKED_TRADES:
         return []

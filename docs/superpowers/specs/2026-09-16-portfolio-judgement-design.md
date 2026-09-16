@@ -169,6 +169,41 @@ labelled as the luckiest single combinations.
 `choose_final` scores a version by its best qualifying basket's average
 month (the §2.3 rule), never by yearly return.
 
+### 2.7a Revised the same afternoon: the ACCOUNT is the judge
+
+The owner read §0.3 and restated two things: the target floor is **5% a
+month**, and the ten-trades-a-month floor is **soft** - "if we're meeting
+the monthly minimum, I'm good with any number of trades".
+
+The fully-funded basket also turned out to understate exactly the kind of
+strategy that could reach the goal. A rule in the market 5% of the time
+leaves 95% of 200 sleeves idle, so a rule earning 5% a month on the money
+actually at work reads as 0.25% in the basket.
+
+So `research/account.py` replays the same trades as an account: **ten slots
+of ₹1 lakh**, an entry taken if a slot is free at that instant (ties by
+symbol), skipped otherwise; a position exiting at the same instant frees
+its slot first. Returns are stated on the ₹10 lakh; the ₹1 lakh headline
+is the same percentage. It reports `slot_use_pct` (position-time over
+slot-time) and `signals_skipped_pct`.
+
+- **Pick (replaces §2.3):** among stock timeframes whose training
+  *account* has ≥ 24 months, worst dip ≤ 30%, average excess over
+  equal-weight holding > 0, average month > 0, and either ≥ 10 trades a
+  month or an average month ≥ 5%: the highest average month.
+- **Exam (replaces §2.4):** the picked timeframe's account over the locked
+  year; the basket is reported beside it. `target_met` = account average
+  month ≥ 5%.
+- **Opus sees** `accounts` beside `baskets` and is told the account is the
+  judge. `years_positive_pct` (calendar years that beat holding) is added
+  to both. The propose prompt also carries `research/facts.py`: what the
+  data has already shown, so a measured dead end is not re-tried.
+- **Review** may name `final_version` ("v1.2") when stopping, so an earlier
+  version of the day can be the final one.
+- **Storage:** `sql/013_research_account.sql` adds `account_slots`,
+  `locked_slot_use_pct`, `locked_signals_skipped_pct`; the §3 monthly
+  columns now hold the account's figures.
+
 ### 2.7 Ideas index
 
 `tried_ideas` lines become

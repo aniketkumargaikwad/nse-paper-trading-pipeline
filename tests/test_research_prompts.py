@@ -115,18 +115,32 @@ def test_review_says_the_tables_are_ranked_by_excess_over_holding():
 
 def test_propose_states_the_monthly_return_being_aimed_at():
     text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
-    assert "4-7% A MONTH" in text
-    assert "60-125% a year" in text
+    assert "5-7% A MONTH" in text
+    assert "80-125% a year" in text
     assert "deliberately ambitious" in text
 
 
 def test_propose_states_the_basket_rule_the_pick_is_made_by():
     """Opus designs for the judge it will face: the whole basket, per month."""
     text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
-    assert "every stock at once" in text
-    assert "10 trades a month" in text and "across the whole basket" in text
-    assert "holding the same basket" in text
+    assert "judged as an ACCOUNT" in text
+    assert "ten slots" in text and "10+ times a month" in text
+    assert "holding the same stocks" in text
     assert "DISCARDED" in text
+
+
+def test_propose_carries_what_the_data_already_showed():
+    """A fact that costs a day to re-learn is a fact worth stating."""
+    text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
+    assert "already been measured" in text
+    assert "REVERSED out of sample" in text
+    assert "survivorship" in text
+
+
+def test_review_lets_opus_name_an_earlier_version_as_final():
+    text = review_prompt(summary=a_summary(), version=3, versions_left=2)
+    assert "final_version" in text and '"v1.2"' in text
+    assert "final_version" in REVIEW_SCHEMA["properties"]
 
 
 def test_propose_asks_which_segment_it_is_designing_for():

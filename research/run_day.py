@@ -131,11 +131,11 @@ def idea_line(row: Mapping[str, Any]) -> str:
         except ValueError:
             facts = {}
     parts = [name]
-    baskets = facts.get("baskets") or []
-    if baskets:
-        best = max(baskets, key=lambda b: b.get("avg_month_pct") or float("-inf"))
+    accounts = facts.get("accounts") or facts.get("baskets") or []
+    if accounts:
+        best = max(accounts, key=lambda b: b.get("avg_month_pct") or float("-inf"))
         parts.append(
-            f"best basket {best.get('timeframe')}: {best.get('avg_month_pct', 0):+.2f}%/month, "
+            f"best account {best.get('timeframe')}: {best.get('avg_month_pct', 0):+.2f}%/month, "
             f"{best.get('months_positive_pct', 0):.0f}% months up"
             + ("" if best.get("qualifies") else " (not pickable)")
         )
@@ -251,6 +251,11 @@ def choose_final(tested: Sequence[tuple[Any, Any]], score: Any) -> tuple[Any, An
     """
     stopped = [pair for pair in tested if pair[0].review.get("decision") == "stop"]
     if stopped:
+        # Opus may name an earlier version of the day as the better one.
+        named = str(stopped[-1][0].review.get("final_version") or "").strip().lower()
+        for pair in tested:
+            if named and named == f"v{pair[0].idea_no}.{pair[0].version_no}":
+                return pair
         return stopped[-1]
     if not tested:
         return None
@@ -379,8 +384,8 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
               f"after fees, {summary.combos_beating_hold} beat holding, "
               f"{summary.total_trades} trades, net {_rupees(summary.net_pnl)}  "
               f"({elapsed:.0f}s)")
-        for b in summary.baskets:
-            print(f"    basket {b['timeframe']:4s} {b['avg_month_pct']:+6.2f}%/month · "
+        for b in summary.accounts:
+            print(f"    account {b['timeframe']:4s} {b['avg_month_pct']:+6.2f}%/month · "
                   f"{b['months_positive_pct']:3.0f}% up · {b['trades_per_month']:6.1f} trades/month"
                   + ("" if b["qualifies"] else f" · not pickable: {b['why_not']}"))
         return summary
@@ -440,7 +445,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
             data_end=data_end, locked_from=windows.locked_from,
             strategy_name=(final_version.checked.document["name"] if final_version else None),
             final_version_id=version_ids.get(id(final_version)) if final_version else None,
-            pick_symbol=None if exam is None else basket_label(exam.basket.stocks),
+            pick_symbol=None if exam is None else basket_label(exam.account),
             pick_timeframe=None if pick is None else pick.timeframe,
             locked=None if exam is None else exam.lakh,
             hold_end_value=None if exam is None else exam.hold_end_value,
@@ -449,8 +454,8 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
             ai_review=(final_version.review.get("lessons") if final_version else None),
             trigger="dry_run" if args.dry_run else "manual",
             warnings=warnings,
-            basket=None if exam is None else exam.basket,
-            training_basket=None if pick is None else pick.basket,
+            basket=None if exam is None else exam.account,
+            training_basket=None if pick is None else pick.account,
         )
         children: dict[str, Any] = {}
         if results is not None:
@@ -458,7 +463,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
                                             window_days_for=window_days_for)
         if exam is not None:
             children["locked_trades"] = basket_trade_rows(
-                _PENDING, exam.trades, stocks=exam.basket.stocks)
+                _PENDING, exam.trades, stocks=exam.account.slots)
             children["equity"] = equity_rows(_PENDING, exam.equity)
         version_rows = [
             {
@@ -534,8 +539,8 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
         warnings.append(f"no qualifying timeframe among {counts.tested} combinations")
         return finish(results=final_results, pick=None, exam=None, counts=counts)
 
-    b = pick.basket
-    print(f"\nPICK       {pick.timeframe} basket of {b.stocks} stocks  (training: "
+    b = pick.account
+    print(f"\nPICK       {pick.timeframe} account over {b.stocks} stocks  (training: "
           f"{b.avg_month_pct:+.2f}%/month, {b.months_positive_pct:.0f}% months up, "
           f"worst dip {b.worst_dip_pct:.1f}%)")
 
