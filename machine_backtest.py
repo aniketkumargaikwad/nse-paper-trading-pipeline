@@ -41,7 +41,7 @@ import pandas as pd
 from backtest import _make_trade
 from backtest_types import SimResult, SimTrade, SkippedEntry
 from config import IST
-from risk_levels import level_from_spec
+from risk_levels import WARMING_UP, atr_ready, level_from_spec
 from state_runner import MachineStepper, PositionView
 from strategy.parse import resolve_quantity
 from strategy.v3 import StateMachine
@@ -181,10 +181,24 @@ def simulate_machine(
                 e_intended = opens[i]
                 e_price = fill_buy(opens[i]) if is_long else fill_sell(opens[i])
                 qty = resolve_quantity(machine.sizing, e_price)
+                needs_risk = [
+                    spec for spec, named in (
+                        (machine.risk.stop_loss, event.stop), (machine.risk.target, event.target),
+                    ) if named is None
+                ]
                 if qty < 1:
                     skipped.append(SkippedEntry(
                         signal_ts=index[event.bar], price=float(opens[i]),
                         reason="notional_below_price",
+                    ))
+                    stepper.position_closed()
+                elif not atr_ready(needs_risk, event.bar, atr_series):
+                    # Fired before the risk block's ATR warmed up. Skipped and
+                    # recorded rather than fatal; the machine is told the
+                    # position never opened so it does not wait forever.
+                    skipped.append(SkippedEntry(
+                        signal_ts=index[event.bar], price=float(opens[i]),
+                        reason=WARMING_UP,
                     ))
                     stepper.position_closed()
                 else:

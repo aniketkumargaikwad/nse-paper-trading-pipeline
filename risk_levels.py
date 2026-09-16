@@ -12,10 +12,16 @@ So both rules live here, in one place, rather than in each engine:
   Both engines fill at the next candle's open, so reading ATR at the fill
   candle would let a level depend on data the fill could not have seen.
 
-* Insufficient history is a HARD ERROR, never a silently-NaN level. A strategy
-  that produced no trades because its indicator never warmed up looks exactly
-  like one whose edge does not exist, and that ambiguity is what this refuses
-  to allow.
+* A frame too short for the ATR period is a HARD ERROR, never a silently-NaN
+  level. A strategy that produced no trades because its indicator never
+  warmed up looks exactly like one whose edge does not exist, and that
+  ambiguity is what this refuses to allow.
+
+* A signal that fires while the ATR is still warming up - RSI(2) is ready on
+  bar 3, ATR(14) on bar 15 - is SKIPPED and recorded, not fatal. It used to
+  be fatal, and that threw away eight years of a combination for the sake of
+  its first two weeks: measured on 16 September 2026, an RSI(2) dip rule
+  lost 8 of 19 combinations to it. `atr_ready` is how a simulator asks.
 
 Pure module: no network, no database, no clock.
 """
@@ -71,6 +77,24 @@ def build_atr_series(df: pd.DataFrame, strategy: Strategy) -> dict[int, np.ndarr
             )
         series[period] = indicators.atr(df, period).to_numpy()
     return series
+
+
+def atr_ready(specs, signal_idx: int, atr_series: dict[int, np.ndarray]) -> bool:
+    """Are every ATR-based level's inputs usable at `signal_idx`?
+
+    `specs` are StopSpecs (None allowed). Percent levels are always ready.
+    """
+    for spec in specs:
+        if spec is None or spec.type != "atr":
+            continue
+        value = float(atr_series[spec.period][signal_idx])
+        if not value > 0 or value != value:      # zero or NaN
+            return False
+    return True
+
+
+# The SkippedEntry reason for a signal that fired before its ATR warmed up.
+WARMING_UP = "risk_warming_up"
 
 
 def level_from_spec(

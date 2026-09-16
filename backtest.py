@@ -77,7 +77,7 @@ from metrics import (
     pooled_metrics,
     risk_metrics,
 )
-from risk_levels import build_atr_series, level_from_spec
+from risk_levels import WARMING_UP, atr_ready, build_atr_series, level_from_spec
 from config import (
     IST,
     SUPPORTED_TIMEFRAMES,
@@ -287,6 +287,18 @@ def simulate_with_skips(
                             signal_ts=index[pending_entry_from],
                             price=float(opens[i]),
                             reason="notional_below_price",
+                        )
+                    )
+                elif not atr_ready(
+                    (strategy.risk.stop_loss, strategy.risk.target), pending_entry_from, atr_series,
+                ):
+                    # The rule fired before its ATR stop could be priced. A
+                    # skip, not an error: the rest of the history is intact.
+                    skipped.append(
+                        SkippedEntry(
+                            signal_ts=index[pending_entry_from],
+                            price=float(opens[i]),
+                            reason=WARMING_UP,
                         )
                     )
                 else:
