@@ -176,8 +176,12 @@ def tried_ideas(client: Any, *, limit: int = IDEAS_LIMIT) -> list[str]:
 class OpusBrain:
     """The two calls the loop makes, each one `claude -p` with no tools."""
 
-    def __init__(self, claude: Any, formats: Sequence[str], *, echo: Any = print) -> None:
+    def __init__(
+        self, claude: Any, formats: Sequence[str], *, echo: Any = print,
+        atlas: Sequence[str] = (),
+    ) -> None:
         self._claude, self._formats, self._echo = claude, formats, echo
+        self._atlas = list(atlas)
 
     def _ask(self, prompt: str, schema: dict[str, Any], instruction: str) -> dict[str, Any]:
         """Ask once, and again if the reply cannot be read.
@@ -203,7 +207,7 @@ class OpusBrain:
             self._echo(f"  repairing: {error.splitlines()[0][:140]}")
         prompt = propose_prompt(
             formats=self._formats, notes=notes, ideas_tried=ideas_tried,
-            previous=previous, change_hint=change_hint, error=error,
+            previous=previous, change_hint=change_hint, error=error, atlas=self._atlas,
         )
         return self._ask(prompt, PROPOSE_SCHEMA, PROPOSE_INSTRUCTION)
 
@@ -352,11 +356,16 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     print(f"versions   up to {max_versions}, budget {budget_seconds / 3600:.1f} h, "
           f"{args.workers} worker(s)")
 
+    from research.atlas import atlas_lines
+
     notes = recent_notes(store._client, limit=NOTES_LIMIT)
     ideas = tried_ideas(store._client)
-    print(f"history    {len(notes)} note(s), {len(ideas)} idea(s) already tried")
+    atlas = atlas_lines(store._client)
+    print(f"history    {len(notes)} note(s), {len(ideas)} idea(s) already tried, "
+          f"{len(atlas)} baseline(s) in the atlas")
 
-    brain: Any = DryBrain() if args.dry_run else OpusBrain(Claude(), format_documents())
+    brain: Any = (DryBrain() if args.dry_run
+                  else OpusBrain(Claude(), format_documents(), atlas=atlas))
 
     # The sweep of each valid version, in the order the loop tested them. The
     # loop's own valid versions come out in that same order, so the two zip

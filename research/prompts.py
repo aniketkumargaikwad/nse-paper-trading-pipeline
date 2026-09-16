@@ -117,6 +117,7 @@ def propose_prompt(
     previous: TrainingSummary | None = None,
     change_hint: str | None = None,
     error: str | None = None,
+    atlas: Sequence[str] = (),
 ) -> str:
     """The ask for a strategy: a first idea, or the next version of one."""
     parts = [
@@ -128,6 +129,13 @@ def propose_prompt(
         "",
         FACTS,
     ]
+    if atlas:
+        parts.append(
+            "\nBaseline signals already measured on this exact data, each as a "
+            "ten-slot account per month on the training years (the same judge "
+            "your strategy faces). Build on what works; do not re-test what does not:"
+        )
+        parts.extend(f"- {line}" for line in atlas)
     if notes:
         parts.append("\nWhat earlier days learned:")
         for note in notes:

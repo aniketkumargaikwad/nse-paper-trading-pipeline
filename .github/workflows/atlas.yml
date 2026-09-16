@@ -1,0 +1,72 @@
+# The atlas: every baseline signal measured once on the training years, one
+# job each, in parallel. No Claude call - this is number-crunching only.
+#
+# Manual only. Prices are frozen, so the atlas needs re-running only when
+# the store is topped up or a baseline is added.
+name: atlas
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategies:
+        description: "Comma-separated baseline names, or 'all'"
+        default: "all"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      names: ${{ steps.pick.outputs.names }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - id: pick
+        run: |
+          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os, sys
+          sys.path.insert(0, ".")
+          from research.atlas import STRATEGIES
+          asked = "${{ inputs.strategies }}".strip()
+          names = list(STRATEGIES) if asked in ("", "all") else [n.strip() for n in asked.split(",")]
+          unknown = [n for n in names if n not in STRATEGIES]
+          if unknown:
+              raise SystemExit(f"unknown baseline(s): {unknown}")
+          print("names=" + json.dumps(names))
+          EOF
+
+  measure:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        name: ${{ fromJson(needs.plan.outputs.names) }}
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      CANDLE_STORE: parquet
+      CANDLE_ROOT: data/candles
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore the candles from the cache
+        uses: actions/cache@v4
+        with:
+          path: data/candles
+          key: candles-${{ vars.DATA_END }}
+          restore-keys: candles-
+      - name: Fill any gaps from Supabase Storage
+        run: python scripts/restore_candles_from_storage.py
+      - name: Measure ${{ matrix.name }}
+        run: python -m research.atlas --strategy "${{ matrix.name }}"

@@ -204,6 +204,20 @@ slot-time) and `signals_skipped_pct`.
   `locked_slot_use_pct`, `locked_signals_skipped_pct`; the §3 monthly
   columns now hold the account's figures.
 
+### 2.7b The atlas: baseline signals measured once
+
+`research/atlas.py` holds fifteen plain baselines (RSI-2 dips with and
+without a trend filter, Donchian and 250-bar breakouts, Bollinger reverts,
+gap fades and bounces, a VWAP revert, Supertrend, MACD zero cross, EMA
+cross, pullbacks in an uptrend, rate-of-change momentum, a volatility
+squeeze, an intraday RSI-2 short). Each passes the same checker a proposal
+does and is swept on the training years only; its `TrainingSummary` is
+stored in `research_atlas` (`sql/014`). The `atlas` workflow measures them
+in parallel on GitHub, one job each. The propose prompt lists every row as
+"rule — best account per month, months up, luck check — per-timeframe
+months — how many beat holding", so a version is spent combining what
+works rather than re-testing what does not.
+
 ### 2.7 Ideas index
 
 `tried_ideas` lines become

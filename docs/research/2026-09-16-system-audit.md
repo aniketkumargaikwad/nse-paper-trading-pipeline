@@ -153,6 +153,11 @@ possible. Two more changes followed:
   what fees and slippage cost per month - plus where edge has *not* been
   looked for yet. Three mornings had re-proposed the same beta family.
 - The review may now name an earlier version as the day's final one.
+- **The atlas** (`research/atlas.py`, the `atlas` GitHub job): fifteen
+  ordinary building-block signals measured once on the training years as
+  ten-slot accounts, per timeframe, and listed in every proposal prompt
+  with their numbers. The AI now starts from what the data says each block
+  earns, and can combine the ones that work.
 
 ## 5. What was changed today
 
