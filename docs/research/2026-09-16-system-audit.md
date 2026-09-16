@@ -172,4 +172,10 @@ possible. Two more changes followed:
 - `research/message.py`, `app_pages/research_page.py`: monthly figures and
   the target on the phone and the page.
 - `research/notify.py`: records whether the message was delivered.
-- 46 new tests; 1,481 pass.
+- Afternoon: `research/account.py` (the ten-slot account), `research/facts.py`,
+  `research/atlas.py` with the `atlas` workflow and `sql/014`, the 5% floor,
+  the soft trade floor, `final_version` in the review, and an engine fix:
+  an entry that fires before its ATR stop has warmed up is now a recorded
+  skip instead of a lost combination (it was costing the RSI-2 baseline 8 of
+  19 combinations, and would have cost any fast AI proposal the same).
+- 1,505 tests pass.
