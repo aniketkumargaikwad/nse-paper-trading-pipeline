@@ -15,7 +15,29 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+# Every stock timeframe the store can produce, lowest first. This is the
+# WHITELIST - what a caller is allowed to ask for - not what a research day
+# tests. `research.atlas` still measures baselines across all six, because the
+# atlas is the evidence that justifies narrowing the daily sweep.
 STOCK_TIMEFRAMES: tuple[str, ...] = ("5m", "15m", "25m", "30m", "60m", "day")
+
+# What one research DAY tests. Sub-hour bars are gone deliberately, not for
+# speed: the atlas (16 Sep 2026) measured every sub-hour reading of every
+# baseline between -0.2% and -38% a month, because a round trip pays about
+# 0.08% in fees plus 0.10% in slippage and these rules churn. Five days of
+# proposals since then have each spent one of their five lessons re-deriving
+# that ("sub-hourly should be dropped outright", 20 Sep), which is a lesson
+# slot and a fifth of the day's AI allowance spent on a settled question.
+#
+# 60m stays. It is the only intraday resolution left, and three of the
+# directions in research.directions - a same-day short, gap behaviour at the
+# open, time of day - need SOME intraday bar to exist at all.
+#
+# Not a permanent verdict: `--stock-timeframes 5m,15m,25m,30m,60m,day`
+# re-opens the full grid for a one-off run, and research.evaluate and
+# research.atlas still default to the whole whitelist.
+SWEEP_TIMEFRAMES: tuple[str, ...] = ("60m", "day")
+
 INDEX_TIMEFRAMES: tuple[str, ...] = ("60m", "day")
 
 # Store symbol -> Yahoo symbol. Store symbols are rows already in the
@@ -105,3 +127,18 @@ def research_combos(
             if tf != "day" or s not in INDEX_DAILY_UNRELIABLE
         ]
     return combos
+
+
+def lowest_timeframe(timeframes: Sequence[str] = SWEEP_TIMEFRAMES) -> str:
+    """The shortest bar in `timeframes`, by the whitelist's own order.
+
+    research.checker validates a proposal against one placeholder timeframe,
+    and an operand may only reference a HIGHER timeframe than the strategy's
+    own. Validating against a bar SHORTER than anything the sweep runs would
+    let a rule reading, say, 15-minute closes pass the checker and then fail
+    to simulate on every combination - a whole version spent on 1,213 skips.
+    """
+    for candidate in STOCK_TIMEFRAMES:
+        if candidate in timeframes:
+            return candidate
+    raise ValueError(f"no known stock timeframe among {timeframes!r}")

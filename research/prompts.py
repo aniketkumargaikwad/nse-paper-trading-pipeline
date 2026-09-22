@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from research.facts import FACTS
+from research.universe import SWEEP_TIMEFRAMES, research_combos
 from research.segment import TARGET_MONTHLY_MAX, TARGET_MONTHLY_MIN
 from research.summary import TrainingSummary
 
@@ -61,6 +62,13 @@ Write ONE strategy as a single top-level YAML mapping, not a file of them:
 _YEARLY_MIN = (1 + TARGET_MONTHLY_MIN / 100) ** 12 * 100 - 100
 _YEARLY_MAX = (1 + TARGET_MONTHLY_MAX / 100) ** 12 * 100 - 100
 
+# How many combinations a day actually runs, so the "the best of N is luck"
+# line cannot drift from the sweep the way it did when the grid shrank: it
+# said 1,177 for a run that tests 413. Counted from the same function the
+# sweep uses, over a stand-in universe of 200 stocks.
+_COMBOS = len(research_combos([f"stock{i}" for i in range(200)], include_indexes=True,
+                              stock_timeframes=SWEEP_TIMEFRAMES))
+
 # What the owner actually wants, stated up front. Without it Opus optimised
 # for "profitable somewhere", which is how six versions in a row came back
 # holding one stock for two years and trading twice a quarter.
@@ -80,7 +88,7 @@ What this strategy is being designed to achieve:
   looks. A selective rule is fine: ten slots mean a signal on 5% of stocks
   still keeps the account busy.
 - one stock's spectacular result counts for nothing on its own; the best of
-  ~1,177 combinations is nearly always luck. Design for the average stock.
+  ~{_COMBOS:,} combinations is nearly always luck. Design for the average stock.
 
 Say in `description` which segment you are designing for: intraday (closed
 the same day), swing (held days to a few weeks), or long-term (held months).
@@ -96,8 +104,14 @@ RULES = """\
 Rules the tool applies to whatever you write, so do not spend words on them:
 - sizing is forced to notional, 100000 rupees per trade
 - the symbols and timeframe you write are replaced: every strategy is tested on
-  200 NSE stocks across 5m, 15m, 25m, 30m, 60m and day, and on 9 indexes at 60m
-  and day
+  200 NSE stocks across 60m and day bars, and on 9 indexes at 60m and day.
+  Sub-hour bars are no longer swept - the atlas measured every sub-hour reading
+  of every baseline as a loss, so proposing for 5m/15m/25m/30m tests nothing
+- an operand may reference a HIGHER timeframe than the bar it runs on and never
+  a lower one, so a rule reading anything under 60m is rejected by the checker
+- a rule reads ITS OWN stock only. There is no operand that names another
+  symbol, so a rule cannot rank this stock against the other 199, read an
+  index as a filter, or read the clock
 - enabled is forced to false; nothing you write can trade real or paper money
 - a short strategy MUST set session.square_off, e.g. "15:10"
 - fees are charged per trade, and a position held overnight pays delivery
@@ -118,14 +132,26 @@ def propose_prompt(
     change_hint: str | None = None,
     error: str | None = None,
     atlas: Sequence[str] = (),
+    direction: str | None = None,
 ) -> str:
-    """The ask for a strategy: a first idea, or the next version of one."""
+    """The ask for a strategy: a first idea, or the next version of one.
+
+    `direction` is set only for the FIRST version of an idea, and sits above
+    the evidence rather than under it. Below forty lines of what failed, a
+    suggestion reads as one more fact; above them it reads as the ask - which
+    is the whole point, since five days running proposed a neighbour of the
+    thing the facts had just called dead (see research.directions).
+    """
     parts = [
         "You are designing ONE trading strategy to be tested on Indian equities.",
         "",
         AIM,
         "",
         RULES,
+    ]
+    if direction:
+        parts += ["", direction]
+    parts += [
         "",
         FACTS,
     ]

@@ -200,14 +200,19 @@ class OpusBrain:
                 self._echo(f"  unreadable reply ({attempt}/{BRAIN_ATTEMPTS}): {str(exc)[:160]}")
         raise BrainStopped(f"Claude's reply could not be read {BRAIN_ATTEMPTS} times: {last}")
 
-    def propose(self, *, notes, ideas_tried, previous, change_hint, error) -> dict[str, Any]:
+    def propose(
+        self, *, notes, ideas_tried, previous, change_hint, error, direction=None,
+    ) -> dict[str, Any]:
         from research.prompts import PROPOSE_SCHEMA, propose_prompt
 
         if error:
             self._echo(f"  repairing: {error.splitlines()[0][:140]}")
+        elif direction:
+            self._echo(f"  direction: {direction.splitlines()[1]}")
         prompt = propose_prompt(
             formats=self._formats, notes=notes, ideas_tried=ideas_tried,
             previous=previous, change_hint=change_hint, error=error, atlas=self._atlas,
+            direction=direction,
         )
         return self._ask(prompt, PROPOSE_SCHEMA, PROPOSE_INSTRUCTION)
 
@@ -277,7 +282,9 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     parser.add_argument("--max-stocks", type=int, default=0,
                         help="test only the first N stocks (quick run)")
     parser.add_argument("--stock-timeframes", default="",
-                        help="comma-separated, e.g. day,60m (quick run)")
+                        help="comma-separated; overrides universe.SWEEP_TIMEFRAMES, "
+                             "e.g. 'day' for a quick run or the full six to re-open "
+                             "sub-hour bars for one day")
     parser.add_argument("--no-save", action="store_true",
                         help="print the day without storing anything")
     parser.add_argument("--dry-run", action="store_true",
@@ -315,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     )
     from research.summary import build_summary
     from research.sweep import count_results, run_sweep
-    from research.universe import STOCK_TIMEFRAMES, document_uses_volume, research_combos
+    from research.universe import SWEEP_TIMEFRAMES, document_uses_volume, research_combos
     from universes import newest_snapshot, parse_constituent_csv
 
     max_versions = args.max_versions or MAX_VERSIONS
@@ -329,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     if args.max_stocks:
         stocks = stocks[: args.max_stocks]
     timeframes = tuple(t.strip() for t in args.stock_timeframes.split(",") if t.strip()) \
-        or STOCK_TIMEFRAMES
+        or SWEEP_TIMEFRAMES
 
     try:
         reader, windows, data_end, symbol_ends = prepare_run(settings, store, stocks)

@@ -47,8 +47,16 @@ re-discovering these):
   every baseline is NEGATIVE, from -0.2% to -38% a month: fees and slippage
   eat the churn. Mean-reversion baselines (RSI-2 dips, band reverts, gap
   fades and bounces, VWAP reverts) lose on every timeframe.
-Where edge has NOT been measured yet: short-side rules squared off the same
-day; relative strength ACROSS stocks (rank, not level); regime filters built
-from index breadth; gap behaviour at the open; time-of-day effects; holding
-periods of 2-10 days with volatility-scaled exits.
+- BECAUSE of that last one, sub-hour bars are no longer swept. A day is
+  tested on 60m and day bars only, so there is nothing to gain by designing
+  for 5m, 15m, 25m or 30m, and a rule that reads a bar under 60m is rejected
+  by the checker before it is tested.
+Where edge has NOT been measured yet, and CAN be tested today: short-side
+rules squared off the same day; gap behaviour at the open; holding periods of
+2-10 days with volatility-scaled exits.
+Untested and NOT expressible with today's engine, so do not propose them:
+relative strength ACROSS stocks (rank, not level) and regime filters built
+from index breadth both need a rule that can read a symbol other than its own,
+and there is no such operand; time-of-day effects need a clock operand, and
+there is none. A rule sees its own stock's bars and nothing else.
 """

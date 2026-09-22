@@ -18,6 +18,7 @@ from datetime import date
 from typing import Any
 
 from research.brain import BrainStopped
+from research.directions import direction_block, direction_for
 
 # Five, not seven. Seven versions is fourteen Opus calls, which exhausted
 # the owner's shared Pro allowance mid-run on 2026-09-15 and left the day
@@ -104,6 +105,12 @@ def run_versions(
                 proposal = brain.propose(
                     notes=notes, ideas_tried=ideas_tried, previous=previous_summary,
                     change_hint=change_hint, error=error,
+                    # Only a FIRST version is steered. Once an idea exists, the
+                    # review's own change_hint is the ask, and a second voice
+                    # pointing elsewhere would pull the version off the thing
+                    # it is meant to be a version OF.
+                    direction=(direction_block(direction_for(day, idea_no))
+                               if previous_summary is None else None),
                 )
             except BrainStopped as exc:
                 return cut_short(exc)

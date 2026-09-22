@@ -16,13 +16,18 @@ from typing import Any
 
 import yaml
 
+from research.universe import lowest_timeframe
 from strategy.v3 import is_v3_document, parse_machine
 from strategy_schema import parse_strategy_dict
 
-# The sweep supplies the real symbols and timeframe per combination. These
-# placeholders only have to parse: 5m is the lowest stock timeframe, so a rule
-# referencing any higher timeframe is still legal.
-PLACEHOLDER_TIMEFRAME = "5m"
+# The sweep supplies the real symbols and timeframe per combination. The
+# placeholder only has to parse - but it must be the LOWEST timeframe the
+# sweep actually runs, not the lowest the store can produce. An operand may
+# reference a higher timeframe than the strategy's own and never a lower one,
+# so validating against 5m while sweeping 60m and day would wave through a
+# rule reading 15-minute closes that then fails to simulate on every single
+# combination. Derived, so narrowing the sweep cannot leave this behind.
+PLACEHOLDER_TIMEFRAME = lowest_timeframe()
 PLACEHOLDER_INSTRUMENTS = ["NSE:RELIANCE"]
 NOTIONAL_PER_TRADE = 100000
 

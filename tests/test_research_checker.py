@@ -12,6 +12,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from research.checker import CheckError, check_proposal, research_name  # noqa: E402
+from research.universe import SWEEP_TIMEFRAMES, lowest_timeframe  # noqa: E402
 
 GOOD = """
 name: whatever-opus-called-it
@@ -52,7 +53,10 @@ def test_the_strategy_is_never_enabled():
 def test_symbols_and_timeframe_are_replaced_because_the_sweep_supplies_them():
     doc = checked().document
     assert doc["instruments"] == ["NSE:RELIANCE"]
-    assert doc["timeframe"] == "5m"
+    # The lowest bar the sweep actually runs, not the lowest the store holds:
+    # an operand may only look at a HIGHER timeframe, so validating against a
+    # shorter bar than the sweep uses would pass a rule that cannot simulate.
+    assert doc["timeframe"] == "60m" == lowest_timeframe(SWEEP_TIMEFRAMES)
 
 
 def test_the_name_is_generated_not_taken_from_the_proposal():
