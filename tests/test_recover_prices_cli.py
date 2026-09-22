@@ -382,3 +382,18 @@ def test_daily_recovery_mid_morning_does_not_report_today_as_missing():
                             HOLIDAYS, NOW)
     assert date(2026, 9, 22) not in report.sessions_missing
     assert date(2026, 9, 21) in report.sessions_missing
+
+
+def test_universe_symbols_come_back_already_qualified():
+    # They arrive as 'NSE:SYMBOL' from parse_constituent_csv. Prefixing again
+    # gave 'NSE:NSE:TATASTEEL' and refused all 200 symbols - invisible to the
+    # --symbols path, which never reaches this branch.
+    from instruments import SYMBOL_RE
+
+    args = type("A", (), {"symbols": None, "universe": "NIFTY200"})()
+    symbols = resolve_symbols(args)
+
+    assert len(symbols) > 100
+    assert all(SYMBOL_RE.match(s) for s in symbols)
+    assert all(s.count(":") == 1 for s in symbols)
+    assert "NSE:TATASTEEL" in symbols

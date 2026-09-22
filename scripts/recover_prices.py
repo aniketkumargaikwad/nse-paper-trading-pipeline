@@ -233,7 +233,11 @@ def resolve_symbols(args: argparse.Namespace) -> list[str]:
     constituents = load_constituents(args.universe)
     if constituents.warning:
         print(f"  note: {constituents.warning}")
-    return [f"NSE:{s}" for s in constituents.symbols]
+    # Already 'NSE:SYMBOL' - parse_constituent_csv qualifies them. Prefixing
+    # again produced 'NSE:NSE:TATASTEEL' and refused all 200 symbols, which
+    # the three-symbol trial missed because --symbols does not come through
+    # here at all.
+    return list(constituents.symbols)
 
 
 def last_expected_session(timeframe: str, now_utc: datetime) -> date:
