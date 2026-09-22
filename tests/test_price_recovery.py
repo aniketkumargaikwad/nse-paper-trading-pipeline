@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from price_recovery import (  # noqa: E402
     EXPECTED_BARS,
+    MAX_RATIO_DISPERSION,
     JOIN_BREAK_RATIO,
     MIN_OVERLAP_SESSIONS,
     RecoveryError,
@@ -259,7 +260,8 @@ def test_rebasing_refuses_when_the_ratios_do_not_agree():
                          **{d: 100.0 for d in AUGUST}}, bars=3)
     rebasing = measure_rebasing(stored, incoming)
     assert not rebasing.ok
-    assert "spread" in rebasing.reason
+    assert "shifts" in rebasing.reason
+    assert "2026-07-30" in rebasing.reason      # names the session it moved on
 
 
 def test_apply_rebasing_scales_prices_and_never_volume():
@@ -480,3 +482,89 @@ def test_a_genuinely_thin_session_is_still_reported_after_the_join_fix():
     ]).sort_index()
     _, report = run_recover(stored, incoming, expected=[join])
     assert report.thin_sessions == {join: 20}          # 5 stored + 15 recovered
+
+
+def _ratio_case(ratios: list[float]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """A stored/incoming pair whose per-session close ratios are `ratios`."""
+    days: list[date] = []
+    day = date(2026, 7, 1)
+    while len(days) < len(ratios):
+        if day.weekday() < 5:
+            days.append(day)
+        day += timedelta(days=1)
+    stored = intraday({d: 100.0 * r for d, r in zip(days, ratios)}, bars=3)
+    incoming = pd.concat([
+        intraday({d: 100.0 for d in days}, bars=3),
+        intraday({d: 100.0 for d in AUGUST}, bars=3),
+    ]).sort_index()
+    return stored, incoming
+
+
+def test_a_wobbly_but_centred_overlap_is_accepted_not_refused():
+    # Two feeds always price a session's close slightly differently. That is
+    # scatter about one basis, and the median is the right estimator for it -
+    # the earlier range test called this a corporate action and refused.
+    stored, incoming = _ratio_case([1.000, 1.004, 0.996, 1.003, 0.997, 1.002,
+                                    0.998, 1.005, 0.995, 1.001])
+    rebasing = measure_rebasing(stored, incoming)
+    assert rebasing.ok
+    assert rebasing.factor == pytest.approx(1.0, abs=0.005)
+    assert rebasing.dispersion < MAX_RATIO_DISPERSION
+
+
+def test_more_shared_sessions_no_longer_make_refusal_more_likely():
+    # The range grows with the sample, so the symbols with the BEST evidence
+    # were the ones most likely to be refused. The scatter measure does not.
+    noise = [1.000, 1.004, 0.996, 1.003, 0.997, 1.002, 0.998, 1.005, 0.995]
+    short = measure_rebasing(*_ratio_case(noise[:5]))
+    long = measure_rebasing(*_ratio_case(noise * 3))
+    assert short.ok and long.ok
+    assert long.dispersion == pytest.approx(short.dispersion, abs=0.004)
+
+
+def test_one_odd_session_does_not_condemn_the_whole_symbol():
+    # A single halted or thinly-traded close used to set max/min by itself.
+    stored, incoming = _ratio_case([1.000, 1.001, 0.999, 1.000, 1.030,
+                                    1.000, 0.999, 1.001, 1.000])
+    rebasing = measure_rebasing(stored, incoming)
+    assert rebasing.ok
+    assert rebasing.factor == pytest.approx(1.0, abs=0.002)
+    # The outlier is still visible in the range, it just does not decide.
+    assert rebasing.spread > 0.02
+
+
+def test_a_sustained_step_is_still_refused_however_quiet_the_rest_is():
+    stored, incoming = _ratio_case([1.000, 1.001, 0.999, 1.000,
+                                    1.050, 1.051, 1.049, 1.050])
+    rebasing = measure_rebasing(stored, incoming)
+    assert not rebasing.ok
+    assert "shifts" in rebasing.reason
+
+
+def test_a_genuinely_scattered_overlap_is_still_refused():
+    # No step, but the ratios do not describe one basis at all.
+    stored, incoming = _ratio_case([1.00, 1.02, 0.97, 1.03, 0.98, 1.04, 0.96])
+    rebasing = measure_rebasing(stored, incoming)
+    assert not rebasing.ok
+    assert "scatter" in rebasing.reason
+
+
+def test_a_clean_step_is_reported_as_a_step_not_as_scatter():
+    # A step inflates the overall scatter - the median sits between the two
+    # levels - so a scatter-first check labelled every corporate action as
+    # noise. The step wins when each side is tight about its own level.
+    stored, incoming = _ratio_case([1.000, 1.001, 0.999, 1.000,
+                                    1.050, 1.051, 1.049, 1.050])
+    rebasing = measure_rebasing(stored, incoming)
+    assert not rebasing.ok
+    assert "shifts" in rebasing.reason
+    assert "scatter" not in rebasing.reason
+
+
+def test_the_reported_step_date_is_where_the_level_actually_changes():
+    stored, incoming = _ratio_case([1.00, 1.00, 1.00, 1.00,
+                                    1.08, 1.08, 1.08, 1.08])
+    rebasing = measure_rebasing(stored, incoming)
+    assert not rebasing.ok
+    # Fifth weekday from 1 Jul 2026: 1,2,3 Jul then 6,7 Jul.
+    assert "2026-07-07" in rebasing.reason

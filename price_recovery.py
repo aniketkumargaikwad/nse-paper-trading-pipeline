@@ -71,13 +71,33 @@ THIN_SESSION_RATIO = 0.8
 # for the same reason: a median over two points is not a median.
 MIN_OVERLAP_SESSIONS = 3
 
-# How far the per-session ratios may spread before the factor is refused.
-# The two feeds price a session's last candle a few basis points apart
-# (different closing-auction handling, see price_adjust), measured at up to
-# 1.1% on clean symbols. Beyond 2% the ratios are not describing one constant
-# basis difference, so their median is not a correction - it is an average of
-# two different things.
-MAX_RATIO_SPREAD = 0.02
+# How far the per-session ratios may SCATTER about their median before the
+# factor is refused, measured as the median absolute deviation.
+#
+# The first version of this used the range (max/min - 1) against 2%, and the
+# first full run refused 47 of 400 pairs on it - most of them by a hair
+# (2.01%, 2.02%, 2.03%). The range is the wrong statistic: it grows with the
+# number of sessions sampled, so a symbol with 45 shared sessions was held to
+# the same number as one with 5, and a single halted or thinly-traded close
+# condemned the whole symbol. More evidence made refusal MORE likely, which
+# is backwards.
+#
+# The median absolute deviation does not grow with the sample and is not
+# moved by one bad session. price_adjust measures ordinary closing-auction
+# disagreement between two feeds at up to 1.1% day to day with the 95th
+# percentile near 0.5%, so 1% of scatter about the median is generous for
+# noise while still far below any real corporate action.
+MAX_RATIO_DISPERSION = 0.01
+
+# A STEP in the ratio series is the thing that actually invalidates a single
+# factor: it means the basis changed partway through the overlap. Scatter
+# does not - it is two feeds disagreeing slightly about the same basis, and
+# the median is exactly the right estimator for that.
+#
+# Borrowed from price_adjust rather than restated, because it is the same
+# judgement about the same two feeds: a day-to-day move in the ratio beyond
+# this is a corporate action rather than noise.
+from price_adjust import STEP_THRESHOLD as RATIO_STEP_THRESHOLD  # noqa: E402
 
 # A factor this close to 1.0 is noise, not a correction. Mirrors
 # price_adjust.NEGLIGIBLE so the two layers cannot disagree about what counts
@@ -303,9 +323,11 @@ class Rebasing:
     """The factor putting an incoming feed onto the stored price basis."""
 
     factor: float
-    method: str                         # 'overlap' | 'identity' | 'refused'
+    method: str                         # 'overlap' | 'refused'
     sessions: int
-    spread: float                       # max/min of the per-session ratios - 1
+    dispersion: float                   # median |r - median| / median
+    step: float = 0.0                   # biggest day-to-day move in the ratio
+    spread: float = float("nan")        # max/min - 1; reported, never tested
     ratios: tuple[float, ...] = ()
     reason: str = ""
 
@@ -327,7 +349,8 @@ class Rebasing:
             )
         return (
             f"x{self.factor:.6f} over {self.sessions} shared session(s), "
-            f"ratios spread {self.spread * 100:.2f}%"
+            f"scatter {self.dispersion * 100:.2f}%, "
+            f"largest day-to-day move {self.step * 100:.2f}%"
         )
 
 
@@ -349,18 +372,34 @@ def measure_rebasing(
     incoming: pd.DataFrame,
     *,
     min_sessions: int = MIN_OVERLAP_SESSIONS,
-    max_spread: float = MAX_RATIO_SPREAD,
+    max_dispersion: float = MAX_RATIO_DISPERSION,
+    step_threshold: float = RATIO_STEP_THRESHOLD,
 ) -> Rebasing:
     """Measure what the incoming feed must be multiplied by, or refuse.
 
-    Refusing is the point. Recovering candles onto an unverified basis is
-    worse than not recovering them: the gap is visible and a silent 3% step
-    at the join is not.
+    Two different things can be wrong with the overlap, and only one of them
+    is a reason to refuse:
+
+    * **A step** - the ratio jumps partway through and stays there. The basis
+      genuinely changed mid-overlap (a corporate action), so no single factor
+      describes it. Refuse.
+    * **Scatter** - the ratio wobbles around a stable centre. That is two
+      feeds pricing the same session's close slightly differently, which they
+      always do, and the median is exactly the right estimator for it. Accept.
+
+    Telling those apart is the whole job. Measuring the RANGE conflates them
+    and, worse, grows with the number of sessions sampled - so the symbols
+    with the best evidence were the ones most likely to be refused.
+
+    Refusing is still the point where the basis is genuinely unknowable:
+    recovering candles onto an unverified basis is worse than not recovering
+    them, because the gap is visible and a silent step at the join is not.
     """
     ratios = overlap_ratios(stored, incoming)
     if len(ratios) < min_sessions:
         return Rebasing(
-            factor=1.0, method="refused", sessions=len(ratios), spread=float("nan"),
+            factor=1.0, method="refused", sessions=len(ratios),
+            dispersion=float("nan"),
             ratios=tuple(float(r) for r in ratios),
             reason=(
                 f"only {len(ratios)} session(s) are held by both feeds, and "
@@ -371,27 +410,109 @@ def measure_rebasing(
         )
 
     values = ratios.to_numpy(dtype=float)
+    median = float(np.median(values))
+    dispersion = float(np.median(np.abs(values - median)) / median)
     spread = float(values.max() / values.min() - 1.0)
-    if spread > max_spread:
+
+    step, at, within = _largest_level_shift(values)
+
+    stepped = Rebasing(
+        factor=median, method="refused", sessions=len(ratios),
+        dispersion=dispersion, step=step, spread=spread,
+        ratios=tuple(float(v) for v in values),
+        reason=(
+            f"the ratio between the feeds shifts {step * 100:.2f}% and stays "
+            f"there from {ratios.index[at]}, which is a corporate action "
+            "inside the overlap rather than noise. The basis changed partway "
+            "through, so one factor cannot describe it"
+        ),
+    )
+
+    # A clean step INFLATES the overall scatter - the median sits between the
+    # two levels - so checking scatter first would report every corporate
+    # action as noise. The step is reported when it EXPLAINS the scatter:
+    # each side tight about its own level, the levels apart.
+    if step > step_threshold and within <= max_dispersion:
+        return stepped
+
+    if dispersion > max_dispersion:
         return Rebasing(
-            factor=1.0, method="refused", sessions=len(ratios), spread=spread,
-            ratios=tuple(float(r) for r in values),
+            factor=median, method="refused", sessions=len(ratios),
+            dispersion=dispersion, step=step, spread=spread,
+            ratios=tuple(float(v) for v in values),
             reason=(
-                f"the per-session ratios spread {spread * 100:.2f}%, beyond "
-                f"the {max_spread * 100:.0f}% two feeds differ by on ordinary "
-                "closing-auction noise. Something moved inside the overlap "
-                "(a corporate action, or the feeds disagreeing about a "
-                "session), so one factor cannot describe it"
+                f"the per-session ratios scatter {dispersion * 100:.2f}% "
+                f"about their median, beyond the {max_dispersion * 100:.0f}% "
+                "two feeds differ by on ordinary closing-auction noise. They "
+                "are not describing one basis, so their median is not a "
+                "correction"
             ),
         )
 
+    if step > step_threshold:
+        return stepped
+
     return Rebasing(
-        factor=float(np.median(values)),
-        method="overlap",
-        sessions=len(ratios),
-        spread=spread,
+        factor=median, method="overlap", sessions=len(ratios),
+        dispersion=dispersion, step=step, spread=spread,
         ratios=tuple(float(v) for v in values),
     )
+
+
+# Sessions required either side of a candidate step. price_adjust uses three
+# for the same job, but the overlap here can be as short as five sessions,
+# and a three-and-three rule would make the test inapplicable exactly where
+# it is needed most - the symbols pinned at DATA_END, whose scatter measure
+# is also weakest because a majority cluster hides a minority one.
+MIN_STEP_SIDE = 2
+
+
+def _largest_level_shift(values: np.ndarray) -> tuple[float, int, float]:
+    """The biggest SUSTAINED change of level, where it starts, and how tidy.
+
+    The third value is the worse of the two sides' own scatter. It is what
+    separates "two clean levels" - a corporate action - from "no level at
+    all", which is a different finding and deserves a different sentence.
+
+    Compares the median before a candidate split against the median after it,
+    rather than one day against the next. A corporate action moves the ratio
+    and leaves it moved; a halted or thinly-traded session moves it for one
+    day and it comes back. Day-to-day differencing cannot tell those apart
+    and condemned symbols for a single odd close.
+
+    Returns a zero shift when the overlap is too short to split, which is
+    honest rather than reassuring: the scatter test is the only guard left.
+    """
+    if len(values) < 2 * MIN_STEP_SIDE:
+        return 0.0, 0, float("inf")
+    best, best_at, best_noise = 0.0, 0, float("inf")
+    best_within = float("inf")
+    for cut in range(MIN_STEP_SIDE, len(values) - MIN_STEP_SIDE + 1):
+        left, right = values[:cut], values[cut:]
+        before, after = float(np.median(left)), float(np.median(right))
+        if before <= 0:
+            continue
+        shift = abs(after / before - 1.0)
+        # Several cuts near a step score the same, because moving the
+        # boundary by one does not move either median. Break the tie on the
+        # cut whose two sides are internally tidiest - that is the real
+        # boundary, and it is the date the report names. Mean rather than
+        # median deviation, because the median is zero on both sides of a
+        # clean step and cannot separate the candidates at all.
+        noise = float(np.mean(np.abs(left - before))
+                      + np.mean(np.abs(right - after)))
+        if shift > best or (shift == best and noise < best_noise):
+            best, best_at, best_noise = shift, cut, noise
+            best_within = max(_scatter(left), _scatter(right))
+    return best, best_at, (best_within if best else float("inf"))
+
+
+def _scatter(values: np.ndarray) -> float:
+    """Median absolute deviation as a fraction of the median."""
+    centre = float(np.median(values))
+    if centre <= 0:
+        return float("inf")
+    return float(np.median(np.abs(values - centre)) / centre)
 
 
 def apply_rebasing(frame: pd.DataFrame, rebasing: Rebasing) -> pd.DataFrame:
