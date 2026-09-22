@@ -62,7 +62,13 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from config import IST, UTC, get_settings, use_utf8_stdout  # noqa: E402
+from config import (  # noqa: E402
+    IST,
+    MARKET_CLOSE_IST,
+    UTC,
+    get_settings,
+    use_utf8_stdout,
+)
 from data_quality import check_ohlc_sanity  # noqa: E402
 from market_calendar import covered_years, load_holidays  # noqa: E402
 from price_recovery import (  # noqa: E402
@@ -230,6 +236,21 @@ def resolve_symbols(args: argparse.Namespace) -> list[str]:
     return [f"NSE:{s}" for s in constituents.symbols]
 
 
+def last_expected_session(timeframe: str, now_utc: datetime) -> date:
+    """The most recent session that could legitimately have candles yet.
+
+    A daily candle does not exist until the session closes, so listing today
+    as an expected daily session reports "absent from the feed" every single
+    morning about a candle nobody could have. Intraday is the opposite case:
+    a part-finished session is real data, and its shortness is worth saying.
+    """
+    today = now_utc.astimezone(IST).date()
+    if timeframe != "day":
+        return today
+    closed = now_utc.astimezone(IST).time() >= MARKET_CLOSE_IST
+    return today if closed else today - timedelta(days=1)
+
+
 def recover_one(
     symbol: str,
     timeframe: str,
@@ -265,7 +286,8 @@ def recover_one(
         else earliest - timedelta(days=1)
     )
     expected = trading_sessions(
-        store_ends + timedelta(days=1), now_utc.astimezone(IST).date(), holidays
+        store_ends + timedelta(days=1), last_expected_session(timeframe, now_utc),
+        holidays,
     )
 
     invalid = [f.ts for f in check_ohlc_sanity(incoming)]

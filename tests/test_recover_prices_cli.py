@@ -357,3 +357,28 @@ def test_summarise_names_the_symbols_written_with_a_step_at_the_join(capsys):
     out = capsys.readouterr().out
     assert "step at the join" in out
     assert "NSE:A" in out and "-50.0%" in out
+
+
+def test_today_is_not_an_expected_daily_session_until_the_market_closes():
+    # A daily candle does not exist until 15:30 IST, so listing today reports
+    # "absent from the feed" every morning about a candle nobody could have.
+    from recover_prices import last_expected_session
+
+    morning = datetime(2026, 9, 22, 4, 0, tzinfo=UTC)        # 09:30 IST
+    after_close = datetime(2026, 9, 22, 10, 30, tzinfo=UTC)  # 16:00 IST
+    assert last_expected_session("day", morning) == date(2026, 9, 21)
+    assert last_expected_session("day", after_close) == date(2026, 9, 22)
+    # Intraday is the opposite case: a part-finished session is real data and
+    # its shortness is worth saying.
+    assert last_expected_session("5m", morning) == date(2026, 9, 22)
+
+
+def test_daily_recovery_mid_morning_does_not_report_today_as_missing():
+    stored = frame(JULY, {d: 100.0 for d in JULY}, bars=1, at_ist=time(15, 30))
+    served = frame(JULY + AUGUST, {d: 100.0 for d in JULY + AUGUST},
+                   bars=1, at_ist=time(0, 0))
+    _, report = recover_one("NSE:RELIANCE", "day", FakeBackend(stored),
+                            FakeYahoo(served, max_days=10_000), "RELIANCE.NS",
+                            HOLIDAYS, NOW)
+    assert date(2026, 9, 22) not in report.sessions_missing
+    assert date(2026, 9, 21) in report.sessions_missing

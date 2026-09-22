@@ -449,3 +449,34 @@ def test_alignment_rejects_a_grid_the_resampler_does_not_know():
     alignment = check_alignment(stored, incoming, "15m")
     assert not alignment.ok
     assert "not a stored intraday timeframe" in alignment.note
+
+
+def test_the_join_session_is_not_called_thin_for_being_split_across_feeds():
+    # The store holds the morning of the join session and the recovery brings
+    # the rest. Counting only what came back flagged every symbol's first
+    # recovered session as thin - 200 false flags on one day, which is how a
+    # real thin session goes unnoticed.
+    join = date(2026, 8, 3)
+    morning = session_frame(join, bars=20)
+    stored = pd.concat([intraday({d: 100.0 for d in JULY}, bars=EXPECTED_BARS["5m"]),
+                        morning]).sort_index()
+    rest = session_frame(join, bars=EXPECTED_BARS["5m"])   # whole session
+    incoming = pd.concat([
+        intraday({d: 100.0 for d in JULY}, bars=EXPECTED_BARS["5m"]), rest,
+    ]).sort_index()
+
+    fresh, report = run_recover(stored, incoming, expected=[join])
+    assert len(fresh) == EXPECTED_BARS["5m"] - 20      # only the afternoon is new
+    assert report.thin_sessions == {}                  # together they are a full day
+
+
+def test_a_genuinely_thin_session_is_still_reported_after_the_join_fix():
+    join = date(2026, 8, 3)
+    stored = pd.concat([intraday({d: 100.0 for d in JULY}, bars=EXPECTED_BARS["5m"]),
+                        session_frame(join, bars=5)]).sort_index()
+    incoming = pd.concat([
+        intraday({d: 100.0 for d in JULY}, bars=EXPECTED_BARS["5m"]),
+        session_frame(join, bars=20),
+    ]).sort_index()
+    _, report = run_recover(stored, incoming, expected=[join])
+    assert report.thin_sessions == {join: 20}          # 5 stored + 15 recovered

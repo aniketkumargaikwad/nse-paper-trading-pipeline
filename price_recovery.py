@@ -610,10 +610,19 @@ def recover(
     present = set(counts.index)
     report.sessions_missing = tuple(d for d in recoverable if d not in present)
 
+    # Counted across the STORED candles too, not just the recovered ones.
+    # The join session is normally split between the two - the store holds
+    # the morning, the recovery brings the rest - so counting only what came
+    # back called every symbol's first recovered session thin. Across 200
+    # symbols that is 200 false flags on the same day, which is exactly how
+    # a real thin session goes unnoticed.
     expected_bars = EXPECTED_BARS.get(timeframe, 1)
     floor = max(1, int(expected_bars * THIN_SESSION_RATIO))
+    already_held = session_bar_counts(stored)
     report.thin_sessions = {
-        day: int(n) for day, n in counts.items() if int(n) < floor
+        day: int(n) + int(already_held.get(day, 0))
+        for day, n in counts.items()
+        if int(n) + int(already_held.get(day, 0)) < floor
     }
 
     report.join_ratio = _join_ratio(stored, fresh)
