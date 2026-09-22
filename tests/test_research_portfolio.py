@@ -124,12 +124,14 @@ def test_the_summary_figures_read_off_the_months():
     assert basket.years[0]["trades"] == 3
 
 
-def test_totals_are_linear_sums_of_the_months():
+def test_the_months_add_up_but_the_balance_compounds():
+    """total_pct is the months summed - a reading of the months, not a balance.
+    What the money became is the second month earning on the first month's gain."""
     trades = [a_trade(1, 10.0), a_trade(2, 10.0)]
     basket = build_basket([sleeve("A", trades, [("2024-01", 100, 100), ("2024-02", 100, 100)])],
                           timeframe="day")
     assert basket.total_pct() == pytest.approx(20.0)
-    assert basket.end_value(100_000) == pytest.approx(120_000)
+    assert basket.end_value(100_000) == pytest.approx(121_000)      # not 120,000
 
 
 def test_excess_is_strategy_minus_holding_month_by_month():
@@ -155,7 +157,40 @@ def test_the_worst_dip_walks_the_monthly_path():
     trades = [a_trade(1, 10.0), a_trade(2, -22.0), a_trade(3, 5.0)]
     months = [(f"2024-0{m}", 100, 100) for m in (1, 2, 3)]
     basket = build_basket([sleeve("A", trades, months)], timeframe="day")
-    assert basket.worst_dip_pct == pytest.approx(20.0)          # 110 -> 88
+    assert basket.worst_dip_pct == pytest.approx(22.0)          # 110 -> 85.80
+
+
+def test_a_balance_cannot_fall_by_more_than_everything():
+    """The 21 Sep 2026 run reported 'fell 961.4% from a high' on the 5-minute
+    account: every month of -9.61% was subtracted from the STARTING
+    balance, so the path ran through zero into negative rupees. A losing month
+    takes its share of what is left."""
+    losing = [a_trade(m, -9.61) for m in range(1, 13)]
+    months = [(f"2024-{m:02d}", 100, 100) for m in range(1, 13)]
+    basket = build_basket([sleeve("A", losing, months)], timeframe="day")
+    assert basket.worst_dip_pct < 100.0
+    assert basket.worst_dip_pct == pytest.approx(70.25, abs=0.05)
+    assert basket.end_value(100_000) > 0
+
+
+def test_a_month_worse_than_everything_wipes_the_account_out_and_leaves_it_out():
+    """-140% in a month is ruin: the balance is zero, the fall is 100%, and
+    later winning months do not multiply zero back into money."""
+    trades = [a_trade(1, 10.0), a_trade(2, -140.0), a_trade(3, 50.0)]
+    months = [(f"2024-0{m}", 100, 100) for m in (1, 2, 3)]
+    basket = build_basket([sleeve("A", trades, months)], timeframe="day")
+    assert basket.worst_dip_pct == pytest.approx(100.0)
+    assert basket.end_value(100_000) == pytest.approx(0.0)
+
+
+def test_a_grown_balance_is_not_flattered_by_the_dip_it_took():
+    """The old path divided a fall by a peak that had barely moved, so an
+    account up for years read as having fallen less than it did. Six months at
+    +10% reach 1.77x; three at -10% give back 27.1% of THAT, not of the start."""
+    trades = [a_trade(m, 10.0) for m in range(1, 7)] + [a_trade(m, -10.0) for m in range(7, 10)]
+    months = [(f"2024-{m:02d}", 100, 100) for m in range(1, 10)]
+    basket = build_basket([sleeve("A", trades, months)], timeframe="day")
+    assert basket.worst_dip_pct == pytest.approx(27.1, abs=0.1)      # the old path said 17.5%
 
 
 def test_sleeve_use_says_how_much_of_the_basket_actually_traded():
