@@ -53,7 +53,11 @@ jobs:
       # Pinned: research/brain.py's flags were measured against this exact
       # version, and two of them do not behave as documented. Read that
       # module's docstring before bumping this.
+      #
+      # Skipped when the repository variable MODEL_PROVIDER says openai: that
+      # path posts to a chat endpoint and never shells out to the CLI.
       - name: Install Claude Code
+        if: ${{ vars.MODEL_PROVIDER != 'openai' }}
         run: npm install -g @anthropic-ai/claude-code@2.1.251
 
       - name: Restore the candles from the cache
@@ -78,7 +82,15 @@ jobs:
             --fallback-file research-fallback.json \
             --commit-journal
         env:
+          # Used when MODEL_PROVIDER is unset or "claude" (the default).
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Used when MODEL_PROVIDER is "openai": DeepSeek, OpenAI, or any
+          # other OpenAI-compatible endpoint. See docs/DEPLOYING.md.
+          MODEL_PROVIDER: ${{ vars.MODEL_PROVIDER }}
+          MODEL_BASE_URL: ${{ vars.MODEL_BASE_URL }}
+          MODEL_NAME: ${{ vars.MODEL_NAME }}
+          MODEL_JSON_MODE: ${{ vars.MODEL_JSON_MODE }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
 
       # Only exists when the database refused the day. Keeping it means a
       # refused write costs a re-upload, not a re-run.
