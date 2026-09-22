@@ -1,0 +1,132 @@
+# Recover the sessions the candle store is missing, from Yahoo.
+#
+# Run by hand, never on a schedule. This exists because the recovery needs
+# three things at once - the 663 MB store, the Supabase credentials, and a
+# machine that can reach Yahoo - and a GitHub runner is the only place all
+# three are already true.
+#
+# Triggers are `workflow_dispatch` ONLY. Never add pull_request or
+# pull_request_target: this repository is public, and those would let an
+# outside contribution run with the secrets.
+#
+# THE DEFAULTS ARE THE SAFE ONES. A run with nothing changed fetches
+# everything, checks everything, and writes nothing anywhere. Turn `dry_run`
+# off to write the recovered candles into the runner's copy of the store, and
+# `upload` on only when you have read a dry run's report and want those
+# candles in the bucket for good.
+name: recover-prices
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Comma-separated symbols, or blank for the whole NIFTY200"
+        default: ""
+      timeframes:
+        description: "Stored timeframes to recover"
+        default: "5m,day"
+      dry_run:
+        description: "Check everything and write nothing"
+        type: boolean
+        default: true
+      upload:
+        description: "Publish the recovered candles to Supabase Storage (needs dry_run off)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: recover-prices
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      CANDLE_STORE: parquet
+      CANDLE_ROOT: data/candles
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Printed before anything is fetched, because the answer decides
+      # whether the rest of the run is worth starting.
+      - name: How much is still reachable
+        run: python scripts/recover_prices.py --window
+
+      - name: Restore the candles from the cache
+        uses: actions/cache@v4
+        with:
+          path: data/candles
+          key: candles-${{ vars.DATA_END }}
+          restore-keys: candles-
+
+      # The recovery compares each symbol against what the store already
+      # holds, so a partial store would refuse symbols for want of an overlap
+      # rather than recover them wrongly - but it would still waste the run.
+      - name: Fill any gaps from Supabase Storage
+        run: python scripts/restore_candles_from_storage.py
+
+      - name: Recover
+        run: |
+          python scripts/recover_prices.py \
+            ${{ inputs.symbols && format('--symbols {0}', inputs.symbols) || '' }} \
+            --timeframes "${{ inputs.timeframes }}" \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            | tee recovery-report.txt
+        # The command exits 1 when any symbol was refused, which is
+        # information rather than a broken run: the report still has to be
+        # kept and read.
+        continue-on-error: true
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-report
+          path: recovery-report.txt
+          if-no-files-found: warn
+          retention-days: 90
+
+      # Only the year files the recovery touched, so this is a handful of
+      # megabytes rather than the whole store. It is the copy to keep if the
+      # bucket upload is not wanted yet: the runner's disk goes away.
+      - name: Keep the recovered candles
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovered-candles
+          path: data/candles/**/2026.parquet
+          if-no-files-found: warn
+          retention-days: 90
+
+      # Deliberately last, deliberately opt-in, and deliberately impossible
+      # during a dry run: this is the only step that changes anything outside
+      # the runner.
+      - name: Publish to Supabase Storage
+        if: ${{ inputs.upload && !inputs.dry_run }}
+        run: python scripts/backup_candles_to_storage.py
+
+      - name: Say what to do next
+        if: always()
+        run: |
+          echo "Report: the 'recovery-report' artifact on this run."
+          if [ "${{ inputs.upload }}" = "true" ] && [ "${{ inputs.dry_run }}" != "true" ]; then
+            echo "Candles were published. Update the DATA_END repository variable"
+            echo "to the last recovered session, or the research cache will keep"
+            echo "serving the frozen store."
+          else
+            echo "Nothing was published to Supabase Storage."
+          fi

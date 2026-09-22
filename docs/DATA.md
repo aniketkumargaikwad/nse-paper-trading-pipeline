@@ -37,6 +37,22 @@ limitation.
 Expanded from NIFTY50 to NIFTY200 on 2026-08-28. The whole store is 660 MB of
 Parquet against Supabase Storage's 1 GB free tier, so this cost nothing.
 
+### Out of date since 2026-09-22: the store is frozen and the gap is closing
+
+Dhan's subscription lapsed on **11 September 2026**, so nothing has topped
+these numbers up. `DATA_END` is **2026-07-31** and the freeze is ragged — the
+September audit found 16 of the 200 stocks holding complete 5-minute sessions
+past 6 August and the rest stopping in July.
+
+Yahoo still serves 5-minute candles for about the last 58 days, which is the
+only free way left to get those sessions back. It is a **rolling** window, so
+the missing sessions expire one at a time, oldest first — "August is available
+until late October" is true only of the end of August.
+
+    python scripts/recover_prices.py --window     # what is left, and until when
+
+See section 8.
+
 ### Careful: `candle_coverage` is not "where the data starts"
 
 That table records the range we have ASKED Dhan for, so it will not re-ask.
@@ -268,3 +284,55 @@ After any backfill, check what arrived:
 ```bash
 python scripts/audit_data_quality.py --dry-run
 ```
+
+---
+
+## 8. Recovering the frozen sessions
+
+`scripts/recover_prices.py` refills the gap from Yahoo. The interesting part
+is not the fetching, it is the **price basis**.
+
+Dhan's intraday feed is raw. Yahoo is fetched with `auto_adjust=True`, so it
+is split *and* dividend adjusted to today. Appending one to the other puts a
+step at the join that nothing downstream can tell from a real overnight move —
+the same artefact section 6 describes, arriving by a new route. A few percent
+of unremoved dividend adjustment is small enough to look ordinary and large
+enough to be the best signal a momentum rule has ever seen.
+
+So the recovery measures the two feeds against each other on the sessions they
+**both** hold, rescales the incoming candles onto the stored basis, and
+**refuses** any symbol whose basis it cannot verify. A visible gap can be
+filled later; a silent step gets backtested on.
+
+That overlap is why the deadline is earlier than the data expiry. It is made
+of sessions on or before `DATA_END`, which are *older* than everything being
+recovered, so it runs out first — and when it does, the candles are still
+fetchable but there is nothing left to check them against.
+
+What the command will not do, all for the reasons in section 6:
+
+* **It never overwrites a stored candle.** Incoming candles are trimmed to
+  strictly after the store's last timestamp; where the feeds overlap, the
+  stored candle stays the record and the incoming one is used as evidence.
+* **It never rescales volume.** Same finding as `price_adjust.Adjustment`:
+  the volume gap between two feeds tracks how they count volume, not corporate
+  actions. Volume rules stay wrong across the join.
+* **It never uploads.** Recovered candles land in the local `CANDLE_ROOT`.
+  Putting them in the bucket is `scripts/backup_candles_to_storage.py`, run
+  deliberately, after reading a dry run's report.
+
+```bash
+python scripts/recover_prices.py --window                    # the deadline
+python scripts/recover_prices.py --dry-run                   # check, write nothing
+python scripts/recover_prices.py --symbols NSE:RELIANCE      # one symbol
+python scripts/recover_prices.py                             # write locally
+```
+
+On a machine without the store or the credentials, the `recover-prices`
+workflow does the same thing on GitHub's runners. It is `workflow_dispatch`
+only, defaults to a dry run, and publishes to Supabase Storage only when the
+`upload` input is turned on.
+
+After publishing, update the `DATA_END` repository variable to the last
+recovered session, or the research cache key will keep serving the frozen
+store.
