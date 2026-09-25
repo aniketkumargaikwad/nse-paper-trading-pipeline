@@ -150,3 +150,12 @@ def test_any_other_failure_is_a_plain_error():
     run = FakeRun(stdout="", stderr="something broke", returncode=2)
     with pytest.raises(BrainError, match="something broke"):
         Claude(runner=run).ask("prompt", SCHEMA)
+
+
+def test_the_day_asks_opus_5_5_by_its_exact_name():
+    """An alias means whatever the pinned CLI thinks the latest Opus is; the
+    owner asked for 5.5 (25 Sep 2026), so it is named outright."""
+    run = FakeRun(stdout=answered(a="x"))
+    Claude(runner=run).ask("p", SCHEMA)
+    command = run.calls[0][0]
+    assert command[command.index("--model") + 1] == "claude-opus-5-5"
