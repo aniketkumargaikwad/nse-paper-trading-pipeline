@@ -42,7 +42,8 @@ Parquet against Supabase Storage's 1 GB free tier, so this cost nothing.
 Dhan's subscription lapsed on **11 September 2026**. The table above is the
 Dhan store; since then, `scripts/recover_prices.py` (section 8) has refilled
 sessions from Yahoo — on 24 September, **392 of 400** symbol/timeframe pairs
-through **2026-09-24**, published to Storage.
+through **2026-09-24**, published to Storage — and it now runs itself every
+Sunday (section 8).
 
 **Yahoo's 5-minute day is not whole.** Measured 24 September: 73 candles a
 session, the last starting **15:15**. The 15:20 and 15:25 candles are never
@@ -348,15 +349,20 @@ python scripts/recover_prices.py                             # write locally
 ```
 
 On a machine without the store or the credentials, the `recover-prices`
-workflow does the same thing on GitHub's runners. It is `workflow_dispatch`
-only, defaults to a dry run, and publishes to Supabase Storage only when the
-`upload` input is turned on.
+workflow does the same thing on GitHub's runners.
 
-After publishing, update the `DATA_END` repository variable to the last
-recovered session. It is **only the Actions cache key** (`research.yml`) — it
-does not decide where a run's prices end; `research.windows` measures that
-from the candles. A stale key costs a download, not correctness: the research
-run's "Fill any gaps from Supabase Storage" step re-fetches every file whose
-size changed (the 24 September run pulled all 392 before the key was bumped).
-Bumping it gives the refreshed store its own cache entry, so later days skip
-that download.
+**It runs itself every week, since 25 September 2026** — Sunday 20:17 UTC
+(Monday 01:47 IST), at the owner's request, so the daily-only research keeps
+moving forward. A scheduled run recovers the whole NIFTY200, 5m and day, and
+publishes. A run started by hand still defaults to a dry run and publishes only
+when the `upload` input is turned on. Each run's report is kept as the
+`recovery-report` artifact for 90 days; the refusals listed there are the
+symbols falling behind.
+
+Nothing needs bumping afterwards. `recover-prices` saves the store it leaves
+behind as a cache entry of its own, and `research.yml` keys its cache on the
+ISO week, so Monday's research day misses, takes the newest `candles-*` entry
+— the one Sunday's recovery just saved — and the rest of the week hits it. The
+`DATA_END` repository variable that used to name that cache is no longer read
+by anything. It never decided where a run's prices end: `research.windows`
+measures that from the candles.
