@@ -25,6 +25,7 @@ Two rules shape the wiring:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import subprocess
@@ -36,7 +37,15 @@ from typing import Any
 
 from config import IST, UTC, get_settings, use_utf8_stdout
 from research.brain import BrainError, BrainStopped, brain_description, make_brain
-from research.evaluate import _PENDING, _rupees, basket_label, locked_year, prepare_run, print_locked
+from research.evaluate import (
+    _PENDING,
+    _rupees,
+    basket_label,
+    data_end_basis,
+    locked_year,
+    prepare_run,
+    print_locked,
+)
 
 # How many times a reply we cannot read is asked for again. The answer shape
 # is asked for in words rather than enforced by the CLI (see research.brain),
@@ -277,7 +286,9 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     parser.add_argument("--max-stocks", type=int, default=0,
                         help="test only the first N stocks (quick run)")
     parser.add_argument("--stock-timeframes", default="",
-                        help="comma-separated, e.g. day,60m (quick run)")
+                        help="comma-separated; overrides universe.SWEEP_TIMEFRAMES (daily "
+                             "only). Any bar under a day moves DATA_END back to where the "
+                             "5-minute sessions are whole")
     parser.add_argument("--no-save", action="store_true",
                         help="print the day without storing anything")
     parser.add_argument("--dry-run", action="store_true",
@@ -322,7 +333,12 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     )
     from research.summary import build_summary
     from research.sweep import count_results, run_sweep
-    from research.universe import STOCK_TIMEFRAMES, document_uses_volume, research_combos
+    from research.universe import (
+        SWEEP_TIMEFRAMES,
+        document_uses_volume,
+        index_timeframes_within,
+        research_combos,
+    )
     from universes import newest_snapshot, parse_constituent_csv
 
     max_versions = args.max_versions or MAX_VERSIONS
@@ -336,10 +352,11 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     if args.max_stocks:
         stocks = stocks[: args.max_stocks]
     timeframes = tuple(t.strip() for t in args.stock_timeframes.split(",") if t.strip()) \
-        or STOCK_TIMEFRAMES
+        or SWEEP_TIMEFRAMES
 
     try:
-        reader, windows, data_end, symbol_ends = prepare_run(settings, store, stocks)
+        reader, windows, data_end, symbol_ends = prepare_run(settings, store, stocks,
+                                                             timeframes=timeframes)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -354,8 +371,9 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
         )
 
     print(f"day        {day}")
-    print(f"prices     frozen at {data_end} (DATA_END, complete for "
-          f"{len(symbol_ends)} of {len(stocks)} stocks)")
+    print(f"prices     frozen at {data_end} (DATA_END from {data_end_basis(timeframes)}, "
+          f"complete for {len(symbol_ends)} of {len(stocks)} stocks)")
+    print(f"bars       {', '.join(timeframes)}")
     print(f"training   before {windows.locked_from}")
     print(f"locked     {windows.locked_from} -> {data_end}  (opened once, at the end)")
     print(f"universe   NIFTY200 as of {as_of} ({len(stocks)} stocks)")
@@ -385,6 +403,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
             stocks,
             include_indexes=not document_uses_volume(checked.document),
             stock_timeframes=timeframes,
+            index_timeframes=index_timeframes_within(timeframes),
         )
         print(f"  testing {len(combos)} combinations...", flush=True)
         started = datetime.now(UTC)
@@ -407,7 +426,10 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
         return summary
 
     outcome = run_versions(
-        brain=brain, check=check_proposal, test=test, day=day,
+        # The checker validates against the bars this day actually sweeps: a
+        # rule that cannot run on them goes back to Opus instead of being tested.
+        brain=brain, check=functools.partial(check_proposal, timeframes=timeframes),
+        test=test, day=day,
         notes=notes, ideas_tried=ideas,
         max_versions=max_versions, budget_seconds=budget_seconds,
     )

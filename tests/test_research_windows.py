@@ -14,8 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from research.windows import (  # noqa: E402
     ResearchWindows,
+    daily_data_end_from,
     data_end_from,
     ist_midnight,
+    reads_intraday,
     training_start,
     trim_to_data_end,
     universe_data_end,
@@ -226,3 +228,49 @@ def test_closed_interval_boundaries_match_what_the_backend_expects():
     start, end = w.full(is_index=False, timeframe="day")
     full = frame[(frame.index >= start) & (frame.index <= end)]
     assert list(full["close"]) == [1.0, 2.0]
+
+
+# ---- Daily-only runs (25 Sep 2026) ----
+
+
+def test_a_yahoo_session_ending_at_1515_never_counts_as_a_whole_5_minute_day():
+    """Measured 24 Sep 2026: Yahoo serves 73 candles a session, the last starting
+    15:15. Nothing moves the 5-minute DATA_END past the last Dhan session."""
+    idx = five_min(date(2026, 7, 31), time(15, 25)).append(
+        five_min(date(2026, 9, 24), time(15, 15)))
+    assert data_end_from(idx, daily(date(2026, 7, 31), date(2026, 9, 24))) == date(2026, 7, 31)
+
+
+def test_a_daily_only_run_ends_at_the_last_daily_candle():
+    assert daily_data_end_from(daily(date(2026, 7, 31), date(2026, 9, 24))) == date(2026, 9, 24)
+
+
+def test_the_daily_end_is_the_indian_date_not_the_utc_one():
+    """ist_midnight(24 Sep) is 18:30 UTC on the 23rd."""
+    assert daily_data_end_from(daily(date(2026, 9, 24))) == date(2026, 9, 24)
+
+
+def test_no_daily_candles_is_refused():
+    with pytest.raises(ValueError, match="no daily candles"):
+        daily_data_end_from(pd.DatetimeIndex([], tz="UTC"))
+
+
+@pytest.mark.parametrize("timeframes, expected", [
+    (("day",), False),
+    (("60m", "day"), True),     # 60m is resampled from the 5-minute base
+    (("5m",), True),
+    (("5m", "15m", "25m", "30m", "60m", "day"), True),
+])
+def test_any_bar_under_a_day_reads_the_5_minute_base(timeframes, expected):
+    assert reads_intraday(timeframes) is expected
+
+
+def test_reads_intraday_refuses_a_bare_string():
+    """'day' iterates as 'd','a','y' - every one of them 'not day'."""
+    with pytest.raises(TypeError):
+        reads_intraday("day")
+
+
+def test_reads_intraday_refuses_nothing_at_all():
+    with pytest.raises(ValueError):
+        reads_intraday(())

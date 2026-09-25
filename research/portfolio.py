@@ -35,9 +35,19 @@ WHAT THE NUMBERS MEAN
   survivorship bias every result here carries (today's list applied to the
   past); the holding line carries the same bias, which is why excess over
   holding is the honest comparison.
-* Totals are LINEAR sums of months, not compounded: a decade of history then
-  reads as an average month rather than a multiplied figure, and the daily
-  path's last point equals the sum of the months by construction.
+* A month's PERCENTAGE stays linear, and deliberately so: it is that month's
+  net P&L over the money the sweep put at risk, which is what "average month"
+  has to mean for the owner's goal to be checkable. avg_month_pct,
+  median_month_pct, best/worst_month_pct and the excess figures all read
+  those months and are unaffected by anything below.
+* The BALANCE those months add up to is COMPOUNDED: each month multiplies the
+  running balance rather than adding a slice of the starting one. See
+  `equity_path`. A balance is what a real account holds, so it cannot go
+  below zero, and everything measured on the balance - the worst dip, the end
+  value, the daily path - inherits that.
+* `total_pct` / `holding_total_pct` remain the plain sum of the months, which
+  is "the average month times the months" and not a balance. They are a
+  reading of the months, not a claim about what the money became.
 
 Pure: no I/O, no clock, no database.
 """
@@ -154,16 +164,20 @@ class Basket:
         return self.slots is not None
 
     def total_pct(self) -> float:
+        """The months added up. Not a balance - see the module docstring."""
         return sum(m["strategy_pct"] for m in self.months)
 
     def holding_total_pct(self) -> float:
         return sum(m["holding_pct"] for m in self.months)
 
     def end_value(self, start: float = NOTIONAL) -> float:
-        return round(start * (1 + self.total_pct() / 100), 2)
+        """What `start` became, month compounding on month."""
+        return round(equity_path([m["strategy_pct"] for m in self.months], start=start)[-1], 2)
 
     def holding_end_value(self, start: float = NOTIONAL) -> float:
-        return round(start * (1 + self.holding_total_pct() / 100), 2)
+        """What `start` became just holding - compounded the same way, or the
+        comparison would be a strategy's balance against holding's sum."""
+        return round(equity_path([m["holding_pct"] for m in self.months], start=start)[-1], 2)
 
     def as_dict(self, *, with_months: bool = False) -> dict[str, Any]:
         """Compact by default: the months are ~100 rows per timeframe."""
@@ -207,6 +221,41 @@ def luck_label(t: float | None) -> str:
     return "cannot be told from luck"
 
 
+def equity_path(monthly_pct: Sequence[float], *, start: float = NOTIONAL) -> list[float]:
+    """The balance after each month, starting at `start`.
+
+    Each month MULTIPLIES the balance. Until 22 Sep 2026 it added a slice of
+    the STARTING balance instead:
+
+        path.append(path[-1] + notional * month_pct / 100)
+
+    which is not an account. Money that is down 50% and loses another 10%
+    loses 10% of what is left, not 10% of what it began with, so a run of
+    losing months drove that path through zero and into negative rupees. The
+    worst-dip figure measured on it then reported falls no cash account can
+    have: the 21 Sep 2026 run logged "fell 961.4% from a high" on the 5-minute
+    account, and the picker refused it for a 30% limit on the strength of that
+    number. It was wrong in the flattering direction too - an account that had
+    grown for years was divided by a peak that had barely moved, so its falls
+    read far smaller than they were.
+
+    The trades themselves are sized at a fixed Rs 1 lakh, so a month's figure
+    is a RETURN, and a return is what a real account earns on whatever it
+    holds at the time. Applying it to the running balance is the same account
+    sized to its own equity. What the sweep does NOT model - sizing that never
+    scales down, so ten Rs 1 lakh slots stay ten Rs 1 lakh slots after the
+    account has halved - is a separate question, and deliberately left alone
+    here: it is a choice about how to trade, not arithmetic.
+
+    Floored at zero. A month below -100% wipes the account out, and nothing
+    multiplies it back afterwards, which is exactly what ruin is.
+    """
+    path = [float(start)]
+    for pct in monthly_pct:
+        path.append(max(path[-1] * (1 + pct / 100), 0.0))
+    return path
+
+
 def _dip_of(path: Sequence[float]) -> float:
     """Deepest fall from a running high, in percent of that high."""
     worst = 0.0
@@ -239,9 +288,7 @@ def summarise(
         if sd > 0:
             edge_t = round(statistics.mean(excess) / (sd / len(excess) ** 0.5), 3)
 
-    path = [notional]
-    for s in strategy:
-        path.append(path[-1] + notional * s / 100)
+    path = equity_path(strategy, start=notional)
 
     by_year: dict[str, dict[str, Any]] = {}
     for m in months:
@@ -364,10 +411,14 @@ def daily_equity(
     """A Rs 1 lakh balance day by day, beside equal-weight holding.
 
     By default every sleeve's trades count, each moving the balance by
-    net P&L / (notional x stocks in its exit month) - so the days of a month
-    add up to exactly that month's basket return and the last point equals
-    the sum of the months. An account replay passes its own `trades` and
-    `weight_of` (net P&L / (notional x slots)).
+    net P&L / (notional x stocks in its exit month). An account replay passes
+    its own `trades` and `weight_of` (net P&L / (notional x slots)).
+
+    Within a calendar month the day's moves add up, so the days of a month
+    still add to exactly that month's return; across months the balance
+    compounds, so the last point matches `Basket.end_value` (to rounding) and
+    it is the same path `summarise` measures the worst dip on. Floored at zero
+    for the reason `equity_path` gives.
 
     Holding is the mean over stocks with a close that day of
     (close / their first close - 1), linear.
@@ -408,10 +459,18 @@ def daily_equity(
 
     days = sorted(set(by_day) | set(hold_rows))
     out: list[dict[str, Any]] = []
-    running = 0.0
+    opening = float(start_value)          # the balance this month began with
+    running = 0.0                         # this month's return so far
+    month = None
     for day in days:
+        key = (day.year, day.month)
+        if month is not None and key != month:
+            opening = max(opening * (1 + running), 0.0)
+            running = 0.0
+        month = key
         running += by_day.get(day, 0.0)
-        row: dict[str, Any] = {"day": day, "lakh_balance": round(start_value * (1 + running), 2)}
+        row: dict[str, Any] = {"day": day,
+                               "lakh_balance": round(max(opening * (1 + running), 0.0), 2)}
         if day in hold_rows:
             row["hold_balance"] = round(start_value * (1 + float(np.mean(hold_rows[day]))), 2)
         out.append(row)

@@ -1,9 +1,16 @@
 """The frozen research calendar.
 
-DATA_END is the last date complete in every stored timeframe. The LOCKED year
-is the 365 days ending on it; everything a strategy is built from comes before
-it. Windows are closed intervals [start, end] in UTC, matching what
-ParquetCandleBackend.read_candles expects.
+DATA_END is the last date complete in every timeframe the run READS. The
+LOCKED year is the 365 days ending on it; everything a strategy is built from
+comes before it. Windows are closed intervals [start, end] in UTC, matching
+what ParquetCandleBackend.read_candles expects.
+
+"Every timeframe the run reads" rather than "every stored timeframe", because
+since 25 Sep 2026 the two differ. Sessions after July 2026 were recovered from
+Yahoo, whose 5-minute day ends with a candle starting 15:15 - the 15:20 and
+15:25 candles are simply not served. A run that reads 5-minute bars (or 60m,
+which is built from them) has to stop where the 5-minute data is whole. A
+daily-only run reads Yahoo's own daily candle, which is whole, and need not.
 """
 
 from __future__ import annotations
@@ -68,6 +75,34 @@ def data_end_from(five_min_index: pd.DatetimeIndex, day_index: pd.DatetimeIndex)
     if not both:
         raise ValueError("no date is complete in both the 5-minute and the daily candles")
     return max(both)
+
+
+def daily_data_end_from(day_index: pd.DatetimeIndex) -> date:
+    """Last date with a daily candle - DATA_END for a run that reads nothing finer.
+
+    There is no 15:25 test to apply to a daily candle: it is one bar, and it
+    either exists or it does not. What it cannot tell is whether the session
+    had CLOSED when the candle was written, so that guarantee lives with the
+    writer - `scripts/recover_prices.py` lists today as a daily session only
+    after 15:30 IST - rather than being guessed at here from one bar.
+    """
+    if len(day_index) == 0:
+        raise ValueError("cannot place DATA_END: the reference symbol has no daily candles")
+    return max(pd.DatetimeIndex(day_index).tz_convert(IST).date)
+
+
+def reads_intraday(timeframes: Sequence[str]) -> bool:
+    """True when any of `timeframes` is built from the 5-minute candles.
+
+    Decides which completeness rule places DATA_END: every stock timeframe
+    below a day is resampled from the 5-minute base, so it inherits whatever
+    that base is missing.
+    """
+    if isinstance(timeframes, str):
+        raise TypeError(f"timeframes must be a sequence, not a bare string {timeframes!r}")
+    if not timeframes:
+        raise ValueError("a run must read at least one timeframe")
+    return any(tf != "day" for tf in timeframes)
 
 
 def universe_data_end(symbol_ends: Sequence[date], *, coverage: float = DATA_END_COVERAGE) -> date:

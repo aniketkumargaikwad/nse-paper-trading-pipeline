@@ -15,6 +15,12 @@ from typing import Any
 from research.facts import FACTS
 from research.segment import TARGET_MONTHLY_MAX, TARGET_MONTHLY_MIN
 from research.summary import TrainingSummary
+from research.universe import (
+    SWEEP_TIMEFRAMES,
+    index_timeframes_within,
+    lowest_timeframe,
+    research_combos,
+)
 
 PROPOSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -61,6 +67,30 @@ Write ONE strategy as a single top-level YAML mapping, not a file of them:
 _YEARLY_MIN = (1 + TARGET_MONTHLY_MIN / 100) ** 12 * 100 - 100
 _YEARLY_MAX = (1 + TARGET_MONTHLY_MAX / 100) ** 12 * 100 - 100
 
+# What a day actually sweeps, read from the same constants the sweep uses, so
+# no line below can drift from it. The "best of N is luck" line said 1,177 long
+# after that stopped being the count.
+_INDEX_TIMEFRAMES = index_timeframes_within(SWEEP_TIMEFRAMES)
+_COMBOS = len(research_combos([f"stock{i}" for i in range(200)], include_indexes=True,
+                              stock_timeframes=SWEEP_TIMEFRAMES,
+                              index_timeframes=_INDEX_TIMEFRAMES))
+_DAILY_ONLY = lowest_timeframe(SWEEP_TIMEFRAMES) == "day"
+
+
+_SEGMENTS = (
+    "swing (held days to a few weeks) or long-term (held months). Intraday -\n"
+    "closed the same day - cannot be tested on daily bars, so do not design for it"
+    if _DAILY_ONLY else
+    "intraday (closed the same day), swing (held days to a few weeks), or\n"
+    "long-term (held months)"
+)
+
+
+def _bars(timeframes: Sequence[str]) -> str:
+    """'daily bars' or '60m and daily bars', as a person would say it."""
+    words = ["daily" if tf == "day" else tf for tf in timeframes]
+    return (", ".join(words[:-1]) + " and " + words[-1] if len(words) > 1 else words[0]) + " bars"
+
 # What the owner actually wants, stated up front. Without it Opus optimised
 # for "profitable somewhere", which is how six versions in a row came back
 # holding one stock for two years and trading twice a quarter.
@@ -80,10 +110,10 @@ What this strategy is being designed to achieve:
   looks. A selective rule is fine: ten slots mean a signal on 5% of stocks
   still keeps the account busy.
 - one stock's spectacular result counts for nothing on its own; the best of
-  ~1,177 combinations is nearly always luck. Design for the average stock.
+  ~{_COMBOS:,} combinations is nearly always luck. Design for the average stock.
 
-Say in `description` which segment you are designing for: intraday (closed
-the same day), swing (held days to a few weeks), or long-term (held months).
+Say in `description` which segment you are designing for:
+{_SEGMENTS}.
 The tool MEASURES the segment from your trades' holding periods and reports
 it, so an intraday claim that holds for three weeks is shown as swing.
 
@@ -92,17 +122,37 @@ equities only - no expiries, strikes, lot sizes or margin - so do not propose
 an F&O strategy.
 """
 
-RULES = """\
-Rules the tool applies to whatever you write, so do not spend words on them:
-- sizing is forced to notional, 100000 rupees per trade
-- the symbols and timeframe you write are replaced: every strategy is tested on
-  200 NSE stocks across 5m, 15m, 25m, 30m, 60m and day, and on 9 indexes at 60m
-  and day
-- enabled is forced to false; nothing you write can trade real or paper money
+_DAILY_RULES = """\
+- DAILY BARS ONLY. Prices after July 2026 come from a feed whose intraday
+  sessions are missing their last ten minutes, so only daily candles are whole
+  and only daily bars are tested. Three things follow, and the checker rejects
+  a strategy that breaks any of them:
+  - LONG ONLY. A short in NSE cash equities must close the same day, and a
+    daily bar has no time of day to close it at.
+  - NO session times (no_entry_before, no_entry_after, square_off). Every daily
+    bar is stamped at midnight, so they would block every entry or never fire.
+  - read the bar itself, daily. or prev_day. - never hourly., which is a LOWER
+    timeframe than a daily bar
+- a position opens at the next day's open and is held at least overnight, so
+  every trade pays delivery charges (about 0.21% of turnover)
+"""
+
+_INTRADAY_RULES = """\
 - a short strategy MUST set session.square_off, e.g. "15:10"
 - fees are charged per trade, and a position held overnight pays delivery
   charges (about 0.21% of turnover) rather than intraday ones
 """
+
+RULES = f"""\
+Rules the tool applies to whatever you write, so do not spend words on them:
+- sizing is forced to notional, 100000 rupees per trade
+- the symbols and timeframe you write are replaced: every strategy is tested
+  on 200 NSE stocks on {_bars(SWEEP_TIMEFRAMES)}, and on the indexes on {_bars(_INDEX_TIMEFRAMES)}
+- a rule reads ITS OWN stock only. There is no operand that names another
+  symbol, so a rule cannot rank this stock against the other 199, read an index
+  as a filter, or read the clock
+- enabled is forced to false; nothing you write can trade real or paper money
+{_DAILY_RULES if _DAILY_ONLY else _INTRADAY_RULES}"""
 
 
 def _summary_block(summary: TrainingSummary) -> str:

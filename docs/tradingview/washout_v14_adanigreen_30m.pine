@@ -1,0 +1,82 @@
+//@version=6
+// Port of research strategy_versions.id = 30
+//   R-20260915-washout-entry-38-of-peak-structural-trai-v4   (run 2026-09-15, "v1.4")
+// Ported from the stored state-machine definition, not from prose.
+//
+// Mapping notes:
+//   * machine_backtest.py:210/217 - a transition's own stop:/target: expression
+//     WINS over the risk block, so risk.target 49% / risk.stop_loss 45% are inert.
+//     Effective stop  = signal-bar close * 0.55   (-45%)
+//     Effective target = signal-bar close * 100   (never reached)
+//   * expr_eval._align_from_higher - a daily bar is visible only once fully
+//     closed, decided against the intraday bar's START. That is exactly
+//     request.security(..., lookahead = barmerge.lookahead_off).
+//   * research/lakh.py - each trade uses the WHOLE balance, so percent_of_equity 100.
+//   * costs.DeliveryCostModel - these are multi-day holds, so delivery rates:
+//     STT 0.1% per leg + exchange + stamp + DP ~= 0.11% a side.
+strategy("Washout v1.4 port - ADANIGREEN 30m", overlay = true,
+     initial_capital         = 100000,
+     default_qty_type        = strategy.percent_of_equity,
+     default_qty_value       = 100,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.11,
+     pyramiding              = 0,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false)
+
+useRange = input.bool(true, "Limit to the research window (to 31 Jul 2026)")
+fromDate = timestamp("25 Jun 2019 00:00 +0530")
+toDate   = timestamp("31 Jul 2026 23:59 +0530")
+inWin    = not useRange or (time >= fromDate and time <= toDate)
+
+dClose  = request.security(syminfo.tickerid, "D", close,              lookahead = barmerge.lookahead_off)
+dSma200 = request.security(syminfo.tickerid, "D", ta.sma(close, 200), lookahead = barmerge.lookahead_off)
+dRsi2   = request.security(syminfo.tickerid, "D", ta.rsi(close, 2),   lookahead = barmerge.lookahead_off)
+dEma50  = request.security(syminfo.tickerid, "D", ta.ema(close, 50),  lookahead = barmerge.lookahead_off)
+
+ready     = not na(dSma200) and not na(dRsi2) and not na(dEma50)
+trendOk   = ready and dClose > dSma200
+washout   = trendOk and dRsi2 < 10                 // flat -> in_position
+rebuildOk = trendOk and dClose > dEma50            // trend_rebuild -> in_position
+
+var int   st     = 0        // 0 flat, 1 in_position, 2 trend_rebuild
+var float peak   = na
+var float stopPx = na
+
+// on_position_closed: trend_rebuild - a stop fill took us out, so land in state 2.
+if st == 1 and strategy.position_size == 0
+    st   := 2
+    peak := na
+
+enterSig = false
+
+if st == 0
+    if washout and inWin
+        enterSig := true
+else if st == 1
+    // Exit transition is listed first in the definition, so it is tested first
+    // and the peak is NOT updated with this bar's high before the test.
+    if close < peak * 0.62 or dClose < dSma200 * 0.95
+        strategy.close("L", comment = "structural_trend_break")
+        st   := 2
+        peak := na
+    else if high > peak
+        peak := high
+else if st == 2
+    if (rebuildOk or washout) and inWin
+        enterSig := true
+
+if enterSig
+    strategy.entry("L", strategy.long)
+    stopPx := close * 0.55
+    peak   := high
+    st     := 1
+
+if strategy.position_size > 0 and not na(stopPx)
+    strategy.exit("Stop", from_entry = "L", stop = stopPx)
+
+if useRange and time > toDate and strategy.position_size > 0
+    strategy.close("L", comment = "window_end")
+
+plot(dSma200, "daily SMA200", color.new(color.orange, 0))
+plot(peak,    "running peak", color.new(color.teal, 0))
