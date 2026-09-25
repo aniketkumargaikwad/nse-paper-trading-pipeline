@@ -144,9 +144,18 @@ jobs:
 
       # Deliberately last, and deliberately impossible during a dry run: this
       # is the only step that changes anything outside the runner.
+      #
+      # Retried once: a re-run uploads only what still differs, and one
+      # dropped reply (25 Sep 2026: 391 of 392 files, the last answered with an
+      # empty body) would otherwise fail the week - and a failed job saves no
+      # cache, so Monday's research would not start from this store.
       - name: Publish to Supabase Storage
         if: ${{ env.UPLOAD == 'true' && env.DRY_RUN != 'true' }}
-        run: python scripts/backup_candles_to_storage.py
+        run: |
+          python scripts/backup_candles_to_storage.py && exit 0
+          echo "Retrying what is still missing in 30 seconds..."
+          sleep 30
+          python scripts/backup_candles_to_storage.py
 
       - name: Say what happened
         if: always()
