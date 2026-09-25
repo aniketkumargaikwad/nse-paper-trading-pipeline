@@ -37,21 +37,40 @@ limitation.
 Expanded from NIFTY50 to NIFTY200 on 2026-08-28. The whole store is 660 MB of
 Parquet against Supabase Storage's 1 GB free tier, so this cost nothing.
 
-### Out of date since 2026-09-22: the store is frozen and the gap is closing
+### Since 2026-09-25: recovered to late September, and research is daily-only
 
-Dhan's subscription lapsed on **11 September 2026**, so nothing has topped
-these numbers up. `DATA_END` is **2026-07-31** and the freeze is ragged — the
-September audit found 16 of the 200 stocks holding complete 5-minute sessions
-past 6 August and the rest stopping in July.
+Dhan's subscription lapsed on **11 September 2026**. The table above is the
+Dhan store; since then, `scripts/recover_prices.py` (section 8) has refilled
+sessions from Yahoo — on 24 September, **392 of 400** symbol/timeframe pairs
+through **2026-09-24**, published to Storage.
 
-Yahoo still serves 5-minute candles for about the last 58 days, which is the
-only free way left to get those sessions back. It is a **rolling** window, so
-the missing sessions expire one at a time, oldest first — "August is available
-until late October" is true only of the end of August.
+**Yahoo's 5-minute day is not whole.** Measured 24 September: 73 candles a
+session, the last starting **15:15**. The 15:20 and 15:25 candles are never
+served. Dhan's stored sessions end at 15:25 (172 of 172 checked). So:
 
-    python scripts/recover_prices.py --window     # what is left, and until when
+* No recovered session passes the 5-minute completeness test, which looks for
+  a candle starting exactly at 15:25. A run that reads 5-minute bars — or 60m,
+  which is resampled from them — still ends at **2026-07-31**, however many
+  sessions are recovered.
+* Yahoo's **daily** candle is whole. A run that reads daily bars only places
+  `DATA_END` at the last daily candle instead (`research.windows`).
 
-See section 8.
+So the research day sweeps **daily bars only** (`research.universe.
+SWEEP_TIMEFRAMES`, the owner's choice on 25 September). `--stock-timeframes`
+still re-opens intraday bars for a one-off run, and `DATA_END` then falls back
+to July on its own.
+
+The 5-minute recovery deadline in the `--window` report — it said
+**2026-09-27** on 24 September — is about Yahoo's **58-day** 5-minute reach.
+Yahoo keeps about 10,000 days of daily candles, so it does not bind daily
+top-ups.
+
+Two gaps the recovery cannot close, because it never overwrites a stored
+candle: 3–27 August (sessions Dhan wrote without their closing candles), and
+eight pairs refused for a corporate action inside the overlap — ADANIENT 5m;
+HINDPETRO, INDUSTOWER, M&MFIN, MPHASIS, TECHM, ULTRACEMCO and UNIONBANK daily.
+COFORGE daily was written **with** a +5.9% step at the seam; do not trust a
+daily backtest across 2026-08-27/28 for it.
 
 ### Careful: `candle_coverage` is not "where the data starts"
 
@@ -334,5 +353,10 @@ only, defaults to a dry run, and publishes to Supabase Storage only when the
 `upload` input is turned on.
 
 After publishing, update the `DATA_END` repository variable to the last
-recovered session, or the research cache key will keep serving the frozen
-store.
+recovered session. It is **only the Actions cache key** (`research.yml`) — it
+does not decide where a run's prices end; `research.windows` measures that
+from the candles. A stale key costs a download, not correctness: the research
+run's "Fill any gaps from Supabase Storage" step re-fetches every file whose
+size changed (the 24 September run pulled all 392 before the key was bumped).
+Bumping it gives the refreshed store its own cache entry, so later days skip
+that download.

@@ -153,3 +153,31 @@ def test_propose_rules_out_futures_and_options():
     """The candle store is cash equities; an F&O idea cannot be tested at all."""
     text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
     assert "FUTURES AND OPTIONS ARE NOT TESTABLE" in text
+
+
+
+def test_propose_says_daily_bars_and_long_only():
+    """A day that sweeps daily bars must not invite shorts, session times or
+    hourly reads - each is refused by the checker and costs a version."""
+    text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
+    assert "DAILY BARS ONLY" in text
+    assert "LONG ONLY" in text
+    assert "never hourly." in text
+    assert "5m, 15m, 25m, 30m, 60m and day" not in text
+    assert 'MUST set session.square_off' not in text
+
+
+def test_the_luck_line_counts_the_combinations_a_day_actually_runs():
+    from research.universe import SWEEP_TIMEFRAMES, index_timeframes_within, research_combos
+    runs = len(research_combos([f"s{i}" for i in range(200)], include_indexes=True,
+                               stock_timeframes=SWEEP_TIMEFRAMES,
+                               index_timeframes=index_timeframes_within(SWEEP_TIMEFRAMES)))
+    text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
+    assert f"~{runs:,} combinations is nearly always luck" in text
+
+
+def test_propose_says_a_rule_reads_only_its_own_stock():
+    """The facts once listed cross-stock ranking as untested; no operand can
+    name another symbol, so every such proposal was untestable."""
+    text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
+    assert "reads ITS OWN stock only" in text

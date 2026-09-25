@@ -47,8 +47,11 @@ re-discovering these):
   every baseline is NEGATIVE, from -0.2% to -38% a month: fees and slippage
   eat the churn. Mean-reversion baselines (RSI-2 dips, band reverts, gap
   fades and bounces, VWAP reverts) lose on every timeframe.
-Where edge has NOT been measured yet: short-side rules squared off the same
-day; relative strength ACROSS stocks (rank, not level); regime filters built
-from index breadth; gap behaviour at the open; time-of-day effects; holding
-periods of 2-10 days with volatility-scaled exits.
+Where edge has NOT been measured yet: holding periods of 2-10 days with
+volatility-scaled exits.
+Not testable here, so do not propose them: short-side rules, which must close
+the same day, and anything inside the session - gaps at the open, time of
+day - because only daily bars are swept; relative strength ACROSS stocks
+(rank, not level) and regime filters built from index breadth, because a rule
+reads only its own stock's bars.
 """
