@@ -14,9 +14,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from config import IST, UTC, get_settings, use_utf8_stdout
@@ -53,48 +53,91 @@ def basket_label(account: Any) -> str:
     return f"{account.slots}-slot account over {account.stocks} NIFTY200 stocks"
 
 
-def prepare_run(settings: Any, store: Any, stocks: Sequence[str]) -> tuple[Any, Any, Any, list]:
+def place_data_end(
+    stocks: Sequence[str],
+    day_index: Mapping[str, Any],
+    read_five_min: Callable[[str, datetime], Any],
+    *,
+    timeframes: Sequence[str],
+) -> tuple[date, list[date]]:
+    """Where the prices end for a run reading `timeframes`, and the per-stock ends.
+
+    DATA_END comes from the whole universe, never one reference symbol. In
+    August 2026, 184 of 200 stocks lost their closing candles every day; a
+    single symbol would have let that month into the locked year.
+
+    Which completeness rule applies depends on what the run reads (see
+    research.windows): a run that reads any 5-minute-built timeframe stops
+    where the 5-minute sessions are whole; a daily-only run stops at the last
+    daily candle, and never reads a 5-minute candle to find out.
+
+    `read_five_min(symbol, from_utc)` returns that symbol's 5-minute index
+    from `from_utc` on. Only the tail of a history can decide where it ends, so
+    the scan starts SCAN_DAYS before the newest daily candle.
+    """
+    from research.windows import (
+        daily_data_end_from,
+        data_end_from,
+        reads_intraday,
+        universe_data_end,
+    )
+
+    newest_daily = max((idx.max() for idx in day_index.values() if len(idx)), default=None)
+    if newest_daily is None:
+        raise ValueError("no daily candles for any stock, so DATA_END cannot be placed")
+    intraday = reads_intraday(timeframes)
+    scan_from = newest_daily - timedelta(days=SCAN_DAYS)
+
+    symbol_ends = []
+    for symbol in stocks:
+        try:
+            if intraday:
+                symbol_ends.append(data_end_from(read_five_min(symbol, scan_from), day_index[symbol]))
+            else:
+                symbol_ends.append(daily_data_end_from(day_index[symbol]))
+        except ValueError:
+            continue        # no complete session in the scan window: counts against coverage
+    return universe_data_end(symbol_ends), symbol_ends
+
+
+def data_end_basis(timeframes: Sequence[str]) -> str:
+    """What DATA_END was measured on, in the words the run prints."""
+    from research.windows import reads_intraday
+
+    return "whole 5-minute sessions" if reads_intraday(timeframes) else "daily candles"
+
+
+def prepare_run(
+    settings: Any, store: Any, stocks: Sequence[str], *, timeframes: Sequence[str] | None = None,
+) -> tuple[Any, Any, Any, list]:
     """The frozen prices and the research calendar every research command needs.
 
     Returns `(reader, windows, data_end, symbol_ends)`, where `symbol_ends`
     holds one date per stock whose history ends in a complete session - the
     coverage DATA_END was placed from, which the caller prints.
 
+    `timeframes` is what the run will read; left out, it is every stock
+    timeframe, which places DATA_END by the strictest rule.
+
     Raises ValueError when not one stock has a daily candle, because DATA_END
     cannot be placed without one.
     """
     from research.prices import FrozenPriceReader, load_adjustments, load_instrument_ids
-    from research.universe import INDEXES
-    from research.windows import ResearchWindows, data_end_from, universe_data_end
+    from research.universe import INDEXES, STOCK_TIMEFRAMES
+    from research.windows import ResearchWindows
 
     ids = load_instrument_ids(store._client, [*stocks, *INDEXES])
     stock_ids = [ids[s] for s in stocks]
     reader = FrozenPriceReader(settings.candle_root, ids, load_adjustments(store._client, stock_ids),
                                frozenset(INDEXES))
 
-    # DATA_END comes from the whole universe, never one reference symbol. In
-    # August 2026, 184 of 200 stocks lost their closing candles every day; a
-    # single symbol would have let that month into the locked year.
-    #
-    # Daily candles are small, so they are read in full; the 5-minute scan
-    # starts SCAN_DAYS before the newest daily candle, because only the tail
-    # of a history can decide where it ends.
+    # Daily candles are small, so they are read in full.
     day_index = {s: reader.candles(s, "day", FAR_PAST, FAR_FUTURE).index for s in stocks}
-    newest_daily = max((idx.max() for idx in day_index.values() if len(idx)), default=None)
-    if newest_daily is None:
-        raise ValueError("no daily candles for any stock, so DATA_END cannot be placed")
-    scan_from = newest_daily - timedelta(days=SCAN_DAYS)
-
-    symbol_ends = []
-    for symbol in stocks:
-        try:
-            symbol_ends.append(data_end_from(
-                reader.candles(symbol, "5m", scan_from, FAR_FUTURE).index,
-                day_index[symbol],
-            ))
-        except ValueError:
-            continue        # no complete session in the scan window: counts against coverage
-    data_end = universe_data_end(symbol_ends)
+    data_end, symbol_ends = place_data_end(
+        stocks, day_index,
+        lambda symbol, scan_from: reader.candles(symbol, "5m", scan_from, FAR_FUTURE).index,
+        timeframes=STOCK_TIMEFRAMES if timeframes is None else timeframes,
+    )
     return reader, ResearchWindows(data_end), data_end, symbol_ends
 
 
@@ -227,7 +270,12 @@ def main(argv: list[str] | None = None) -> int:
     from research.store import ResearchStoreError, save_run
     from research.summary import build_summary
     from research.sweep import count_results, run_sweep
-    from research.universe import STOCK_TIMEFRAMES, document_uses_volume, research_combos
+    from research.universe import (
+        STOCK_TIMEFRAMES,
+        document_uses_volume,
+        index_timeframes_within,
+        research_combos,
+    )
     from strategy.v3 import is_v3_document, parse_machine
     from strategy_schema import parse_strategy_dict
     from universes import newest_snapshot, parse_constituent_csv
@@ -245,18 +293,20 @@ def main(argv: list[str] | None = None) -> int:
     timeframes = tuple(t.strip() for t in args.stock_timeframes.split(",") if t.strip()) or STOCK_TIMEFRAMES
 
     try:
-        reader, windows, data_end, symbol_ends = prepare_run(settings, store, stocks)
+        reader, windows, data_end, symbol_ends = prepare_run(settings, store, stocks,
+                                                             timeframes=timeframes)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
     volume_rules = document_uses_volume(doc)
-    combos = research_combos(stocks, include_indexes=not volume_rules, stock_timeframes=timeframes)
+    combos = research_combos(stocks, include_indexes=not volume_rules, stock_timeframes=timeframes,
+                             index_timeframes=index_timeframes_within(timeframes))
     cost_model = HoldingCostModel()
 
     print(f"strategy   {args.strategy}")
-    print(f"prices     frozen at {data_end} (DATA_END, complete for "
-          f"{len(symbol_ends)} of {len(stocks)} stocks)")
+    print(f"prices     frozen at {data_end} (DATA_END from {data_end_basis(timeframes)}, "
+          f"complete for {len(symbol_ends)} of {len(stocks)} stocks)")
     print(f"training   before {windows.locked_from}")
     print(f"locked     {windows.locked_from} -> {data_end}  (opened once, at the end)")
     print(f"universe   NIFTY200 as of {as_of} ({len(stocks)} stocks)"

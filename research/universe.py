@@ -15,8 +15,29 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+# Every stock timeframe the store can produce, lowest first. This is the
+# WHITELIST - what a caller is allowed to ask for - not what a research day
+# tests. `research.evaluate` and `research.atlas` still default to all six.
 STOCK_TIMEFRAMES: tuple[str, ...] = ("5m", "15m", "25m", "30m", "60m", "day")
 INDEX_TIMEFRAMES: tuple[str, ...] = ("60m", "day")
+
+# What one research DAY tests: daily bars only, since 25 Sep 2026.
+#
+# Chosen by the owner, for a reason in the data rather than a taste. Dhan's
+# subscription lapsed in September; everything after July 2026 is recovered
+# from Yahoo, and Yahoo's 5-minute day stops at a candle starting 15:15 - the
+# last two candles of every session are never served. Every sub-day stock
+# timeframe here is resampled from those 5-minute candles, so all of them
+# inherit the missing close. Only Yahoo's DAILY candle is whole. Sweeping
+# daily bars alone is what lets DATA_END move past July at all (see
+# research.windows).
+#
+# It also matches what was measured: the atlas (16 Sep 2026) found every
+# sub-hour reading of every baseline losing -0.2% to -38% a month to fees.
+#
+# Not permanent: `--stock-timeframes` re-opens intraday bars for a one-off
+# run, and DATA_END then falls back to where the 5-minute data is whole.
+SWEEP_TIMEFRAMES: tuple[str, ...] = ("day",)
 
 # Store symbol -> Yahoo symbol. Store symbols are rows already in the
 # `instruments` table, so each index gets a real instrument_id and an ordinary
@@ -84,24 +105,52 @@ def research_combos(
     *,
     include_indexes: bool,
     stock_timeframes: Sequence[str] = STOCK_TIMEFRAMES,
+    index_timeframes: Sequence[str] = INDEX_TIMEFRAMES,
 ) -> list[Combo]:
     """Every stock x timeframe, then every index x timeframe. Order is stable."""
-    if isinstance(stock_timeframes, str):
-        raise TypeError(
-            f"stock_timeframes must be a sequence of timeframes, not a bare "
-            f"string {stock_timeframes!r} — pass a tuple such as (\"day\",)"
-        )
-    unknown = [tf for tf in stock_timeframes if tf not in STOCK_TIMEFRAMES]
-    if unknown:
-        raise ValueError(
-            f"unknown stock timeframe(s) {unknown!r}; allowed: {STOCK_TIMEFRAMES!r}"
-        )
+    for label, given, allowed in (("stock", stock_timeframes, STOCK_TIMEFRAMES),
+                                  ("index", index_timeframes, INDEX_TIMEFRAMES)):
+        if isinstance(given, str):
+            raise TypeError(
+                f"{label}_timeframes must be a sequence of timeframes, not a bare "
+                f"string {given!r} — pass a tuple such as (\"day\",)"
+            )
+        unknown = [tf for tf in given if tf not in allowed]
+        if unknown:
+            raise ValueError(
+                f"unknown {label} timeframe(s) {unknown!r}; allowed: {allowed!r}"
+            )
     combos = [Combo(s, tf, False) for s in stocks for tf in stock_timeframes]
     if include_indexes:
         combos += [
             Combo(s, tf, True)
             for s in INDEXES
-            for tf in INDEX_TIMEFRAMES
+            for tf in index_timeframes
             if tf != "day" or s not in INDEX_DAILY_UNRELIABLE
         ]
     return combos
+
+
+def index_timeframes_within(timeframes: Sequence[str]) -> tuple[str, ...]:
+    """The index timeframes a run on `timeframes` should also test.
+
+    An index is tested on the timeframes the run asked for, where an index can
+    be tested on them at all - so a daily-only day tests indexes daily, and
+    does not quietly keep reading their 60-minute bars.
+    """
+    return tuple(tf for tf in INDEX_TIMEFRAMES if tf in timeframes)
+
+
+def lowest_timeframe(timeframes: Sequence[str] = SWEEP_TIMEFRAMES) -> str:
+    """The shortest bar in `timeframes`, by the whitelist's own order.
+
+    research.checker validates a proposal against one placeholder timeframe,
+    and an operand may only reference a HIGHER timeframe than the strategy's
+    own. Validating against a bar SHORTER than anything the sweep runs would
+    let a rule reading, say, hourly closes pass the checker and then misbehave
+    on every combination.
+    """
+    for candidate in STOCK_TIMEFRAMES:
+        if candidate in timeframes:
+            return candidate
+    raise ValueError(f"no known stock timeframe among {timeframes!r}")

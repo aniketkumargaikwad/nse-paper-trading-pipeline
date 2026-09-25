@@ -222,7 +222,12 @@ def main(argv: list[str] | None = None) -> int:
     from research.evaluate import prepare_run
     from research.summary import build_summary
     from research.sweep import count_results, run_sweep
-    from research.universe import STOCK_TIMEFRAMES, document_uses_volume, research_combos
+    from research.universe import (
+        STOCK_TIMEFRAMES,
+        document_uses_volume,
+        index_timeframes_within,
+        research_combos,
+    )
     from universes import newest_snapshot, parse_constituent_csv
 
     settings = get_settings(require_supabase=True)
@@ -234,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     timeframes = tuple(t.strip() for t in args.stock_timeframes.split(",") if t.strip()) \
         or STOCK_TIMEFRAMES
     try:
-        reader, windows, data_end, _ = prepare_run(settings, store, stocks)
+        reader, windows, data_end, _ = prepare_run(settings, store, stocks, timeframes=timeframes)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -253,7 +258,8 @@ def main(argv: list[str] | None = None) -> int:
         description, yaml_text = STRATEGIES[name]
         checked = check_proposal(yaml_text, idea=name, day=day, version=1)
         combos = research_combos(stocks, include_indexes=not document_uses_volume(checked.document),
-                                 stock_timeframes=timeframes)
+                                 stock_timeframes=timeframes,
+                                 index_timeframes=index_timeframes_within(timeframes))
         started = datetime.now(UTC)
         results = run_sweep(
             checked.strategy, combos, reader,

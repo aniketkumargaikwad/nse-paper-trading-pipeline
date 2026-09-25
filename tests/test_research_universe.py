@@ -14,9 +14,12 @@ from research.universe import (  # noqa: E402
     INDEX_TIMEFRAMES,
     INDEXES,
     STOCK_TIMEFRAMES,
+    SWEEP_TIMEFRAMES,
     VOLUME_INPUTS,
     Combo,
     document_uses_volume,
+    index_timeframes_within,
+    lowest_timeframe,
     research_combos,
 )
 from strategy.vocabulary import (  # noqa: E402
@@ -155,3 +158,42 @@ def test_reliable_daily_indexes_are_tested_both_hourly_and_daily():
     for symbol in reliable:
         timeframes = {c.timeframe for c in combos if c.symbol == symbol}
         assert timeframes == {"60m", "day"}
+
+
+# ---- What one research day sweeps (25 Sep 2026) ----
+
+
+def test_a_research_day_sweeps_daily_bars_only():
+    """Yahoo's 5-minute day stops at 15:15, and every sub-day stock bar is built
+    from it. Only the daily candle is whole."""
+    assert SWEEP_TIMEFRAMES == ("day",)
+    assert set(SWEEP_TIMEFRAMES) <= set(STOCK_TIMEFRAMES)
+
+
+def test_a_daily_day_is_200_stocks_and_the_reliable_daily_indexes():
+    stocks = [f"NSE:S{i}" for i in range(200)]
+    combos = research_combos(stocks, include_indexes=True, stock_timeframes=SWEEP_TIMEFRAMES,
+                             index_timeframes=index_timeframes_within(SWEEP_TIMEFRAMES))
+    assert {c.timeframe for c in combos} == {"day"}
+    assert len(combos) == 200 + len(INDEXES) - len(INDEX_DAILY_UNRELIABLE) == 204
+
+
+def test_indexes_follow_the_timeframes_the_run_asked_for():
+    assert index_timeframes_within(("day",)) == ("day",)
+    assert index_timeframes_within(("60m", "day")) == ("60m", "day")
+    assert index_timeframes_within(("5m",)) == ()
+
+
+def test_index_timeframes_are_checked_like_stock_ones():
+    with pytest.raises(ValueError, match="unknown index timeframe"):
+        research_combos([], include_indexes=True, index_timeframes=("5m",))
+    with pytest.raises(TypeError):
+        research_combos([], include_indexes=True, index_timeframes="day")
+
+
+def test_the_lowest_timeframe_follows_the_whitelist_order():
+    assert lowest_timeframe(("day",)) == "day"
+    assert lowest_timeframe(("day", "60m")) == "60m"
+    assert lowest_timeframe(STOCK_TIMEFRAMES) == "5m"
+    with pytest.raises(ValueError):
+        lowest_timeframe(("weekly",))
