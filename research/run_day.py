@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from config import IST, UTC, get_settings, use_utf8_stdout
-from research.brain import BrainError, BrainStopped
+from research.brain import MODEL, BrainError, BrainStopped
 from research.evaluate import (
     _PENDING,
     _rupees,
@@ -370,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     print(f"training   before {windows.locked_from}")
     print(f"locked     {windows.locked_from} -> {data_end}  (opened once, at the end)")
     print(f"universe   NIFTY200 as of {as_of} ({len(stocks)} stocks)")
-    print(f"brain      {'dry run - no AI is asked' if args.dry_run else 'claude -p, model opus, no tools'}")
+    print(f"brain      {'dry run - no AI is asked' if args.dry_run else f'claude -p, model {MODEL}, no tools'}")
     print(f"versions   up to {max_versions}, budget {budget_seconds / 3600:.1f} h, "
           f"{args.workers} worker(s)")
 

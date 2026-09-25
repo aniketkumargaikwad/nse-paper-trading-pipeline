@@ -44,6 +44,11 @@ from collections.abc import Callable
 from typing import Any
 
 TIMEOUT_SECONDS = 900
+# The owner's choice (25 Sep 2026): the newest Opus, named exactly. Not the
+# alias `opus`: an alias means whatever the PINNED CLI thinks the latest Opus
+# is, so it only moves when .github/workflows/research.yml bumps the CLI -
+# and 2.1.251 did not know this model at all (it logged `unrecognized_model`).
+MODEL = "claude-opus-5-5"
 # With no tools there is nothing to iterate on, so one turn is the answer.
 # The second is headroom for a turn spent on a preamble.
 MAX_TURNS = 2
@@ -157,7 +162,7 @@ class Claude:
     def __init__(
         self,
         *,
-        model: str = "opus",
+        model: str = MODEL,
         runner: Callable[..., Any] = subprocess.run,
         timeout: int = TIMEOUT_SECONDS,
     ) -> None:
