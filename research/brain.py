@@ -26,6 +26,12 @@ So the denylist stays, the answer shape is asked for in words, and the reply
 is parsed here. Verified the same day: with `--disallowed-tools "*"` Claude
 reports it has no tools at all and answers in one turn.
 
+Re-verified on 2026-09-25, on a GitHub runner, before the pin moved to
+2.1.282 for MODEL: through `Claude().ask`, claude-opus-5-5 answered, parsed,
+and listed its tools as `[]`. Told to run `ls` and quote a line from
+research/journal/, it returned nothing from the repository - one turn, no
+permission denials, no error.
+
 The schema text goes on STDIN, never in the `-p` argument. On Windows the CLI
 is a `claude.CMD` shim, so every argument passes through cmd.exe, and an
 argument full of braces and quotes comes out re-split: the prompt still

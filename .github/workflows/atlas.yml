@@ -60,11 +60,16 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
+      # Same weekly key as research.yml, so the atlas starts from the store
+      # the latest recover-prices run saved.
+      - name: Name this week's candle cache
+        id: week
+        run: echo "id=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
       - name: Restore the candles from the cache
         uses: actions/cache@v4
         with:
           path: data/candles
-          key: candles-${{ vars.DATA_END }}
+          key: candles-${{ steps.week.outputs.id }}
           restore-keys: candles-
       - name: Fill any gaps from Supabase Storage
         run: python scripts/restore_candles_from_storage.py
