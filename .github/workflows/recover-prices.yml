@@ -1,22 +1,33 @@
 # Recover the sessions the candle store is missing, from Yahoo.
 #
-# Run by hand, never on a schedule. This exists because the recovery needs
-# three things at once - the 663 MB store, the Supabase credentials, and a
-# machine that can reach Yahoo - and a GitHub runner is the only place all
-# three are already true.
+# This exists because the recovery needs three things at once - the 663 MB
+# store, the Supabase credentials, and a machine that can reach Yahoo - and a
+# GitHub runner is the only place all three are already true.
 #
-# Triggers are `workflow_dispatch` ONLY. Never add pull_request or
-# pull_request_target: this repository is public, and those would let an
-# outside contribution run with the secrets.
+# WEEKLY, SINCE 25 SEP 2026, AT THE OWNER'S REQUEST. It was built to be run by
+# hand, with a person reading a dry run's report before anything was
+# published. Research moved to daily bars that day, and the locked year only
+# moves forward if the store does, so the owner asked for it to run every
+# week. What still guards the bucket is the recovery itself: it never
+# overwrites a stored candle, and it refuses any symbol whose price basis it
+# cannot verify rather than write a step into the history. Every run's report
+# is kept as an artifact for 90 days.
 #
-# THE DEFAULTS ARE THE SAFE ONES. A run with nothing changed fetches
-# everything, checks everything, and writes nothing anywhere. Turn `dry_run`
-# off to write the recovered candles into the runner's copy of the store, and
-# `upload` on only when you have read a dry run's report and want those
-# candles in the bucket for good.
+# A SCHEDULED run has no inputs, so it states its own: the whole NIFTY200,
+# 5m and day, written and published. A run started by hand still defaults to
+# the safe settings - fetch and check everything, write nothing anywhere.
+#
+# Never add pull_request or pull_request_target: this repository is public,
+# and those would let an outside contribution run with the secrets.
 name: recover-prices
 
 on:
+  # Sunday 20:17 UTC (Monday 01:47 IST): after Friday's close, and before
+  # Monday's research day, which is the first of a new ISO week and so picks
+  # up the cache this run saves (see research.yml). Not on the hour: GitHub's
+  # scheduler is best-effort, and the hour is when everyone else's fires.
+  schedule:
+    - cron: "17 20 * * 0"
   workflow_dispatch:
     inputs:
       symbols:
@@ -50,6 +61,14 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       CANDLE_STORE: parquet
       CANDLE_ROOT: data/candles
+      # What this run does, decided once. A schedule passes no inputs, and
+      # `inputs.upload` would read as empty - i.e. a weekly run that quietly
+      # published nothing. Read as shell variables below rather than pasted
+      # into the scripts, so a symbols list cannot become shell code.
+      SYMBOLS: ${{ inputs.symbols || '' }}
+      TIMEFRAMES: ${{ inputs.timeframes || '5m,day' }}
+      DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || inputs.dry_run }}
+      UPLOAD: ${{ github.event_name == 'schedule' && 'true' || inputs.upload }}
 
     steps:
       - uses: actions/checkout@v4
@@ -61,16 +80,28 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: What this run will do
+        run: |
+          echo "trigger:    ${{ github.event_name }}"
+          echo "symbols:    ${SYMBOLS:-whole NIFTY200}"
+          echo "timeframes: $TIMEFRAMES"
+          echo "dry run:    $DRY_RUN"
+          echo "publish:    $UPLOAD"
+
       # Printed before anything is fetched, because the answer decides
       # whether the rest of the run is worth starting.
       - name: How much is still reachable
         run: python scripts/recover_prices.py --window
 
+      # A key per run, so this run always SAVES the store it leaves behind -
+      # recovered sessions included - and restore-keys takes the newest
+      # candles-* entry. research.yml's weekly key misses on Monday and so
+      # restores exactly this one.
       - name: Restore the candles from the cache
         uses: actions/cache@v4
         with:
           path: data/candles
-          key: candles-${{ vars.DATA_END }}
+          key: candles-recovered-${{ github.run_id }}
           restore-keys: candles-
 
       # The recovery compares each symbol against what the store already
@@ -81,11 +112,10 @@ jobs:
 
       - name: Recover
         run: |
-          python scripts/recover_prices.py \
-            ${{ inputs.symbols && format('--symbols {0}', inputs.symbols) || '' }} \
-            --timeframes "${{ inputs.timeframes }}" \
-            ${{ inputs.dry_run && '--dry-run' || '' }} \
-            | tee recovery-report.txt
+          args=(--timeframes "$TIMEFRAMES")
+          if [ -n "$SYMBOLS" ]; then args+=(--symbols "$SYMBOLS"); fi
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          python scripts/recover_prices.py "${args[@]}" | tee recovery-report.txt
         # The command exits 1 when any symbol was refused, which is
         # information rather than a broken run: the report still has to be
         # kept and read.
@@ -104,7 +134,7 @@ jobs:
       # megabytes rather than the whole store. It is the copy to keep if the
       # bucket upload is not wanted yet: the runner's disk goes away.
       - name: Keep the recovered candles
-        if: ${{ !inputs.dry_run }}
+        if: ${{ env.DRY_RUN != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: recovered-candles
@@ -112,21 +142,28 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      # Deliberately last, deliberately opt-in, and deliberately impossible
-      # during a dry run: this is the only step that changes anything outside
-      # the runner.
+      # Deliberately last, and deliberately impossible during a dry run: this
+      # is the only step that changes anything outside the runner.
+      #
+      # Retried once: a re-run uploads only what still differs, and one
+      # dropped reply (25 Sep 2026: 391 of 392 files, the last answered with an
+      # empty body) would otherwise fail the week - and a failed job saves no
+      # cache, so Monday's research would not start from this store.
       - name: Publish to Supabase Storage
-        if: ${{ inputs.upload && !inputs.dry_run }}
-        run: python scripts/backup_candles_to_storage.py
+        if: ${{ env.UPLOAD == 'true' && env.DRY_RUN != 'true' }}
+        run: |
+          python scripts/backup_candles_to_storage.py && exit 0
+          echo "Retrying what is still missing in 30 seconds..."
+          sleep 30
+          python scripts/backup_candles_to_storage.py
 
-      - name: Say what to do next
+      - name: Say what happened
         if: always()
         run: |
           echo "Report: the 'recovery-report' artifact on this run."
-          if [ "${{ inputs.upload }}" = "true" ] && [ "${{ inputs.dry_run }}" != "true" ]; then
-            echo "Candles were published. Update the DATA_END repository variable"
-            echo "to the last recovered session, or the research cache will keep"
-            echo "serving the frozen store."
+          if [ "$UPLOAD" = "true" ] && [ "$DRY_RUN" != "true" ]; then
+            echo "Candles were published to Supabase Storage, and this run's"
+            echo "cache is the one the next research week starts from."
           else
             echo "Nothing was published to Supabase Storage."
           fi

@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from research.brain import (  # noqa: E402
+    MODEL,
     BrainError,
     BrainStopped,
     ChatApi,
@@ -197,6 +198,13 @@ def test_an_unknown_provider_stops_the_day():
 
 
 def test_the_header_line_names_the_endpoint_actually_used():
-    assert "opus" in brain_description({})
+    assert MODEL in brain_description({})
     line = brain_description(OPENAI_ENV)
     assert "api.deepseek.com" in line and "deepseek-chat" in line
+
+
+def test_the_claude_path_keeps_the_pinned_model_when_nothing_is_set():
+    """No MODEL_NAME must mean research.brain.MODEL, not the `opus` alias:
+    the alias resolves to whatever the pinned CLI thinks is newest."""
+    assert make_brain({})._model == MODEL
+    assert make_brain({"MODEL_NAME": "sonnet"})._model == "sonnet"

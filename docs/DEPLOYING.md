@@ -76,7 +76,7 @@ in any public repository.
 
 | Variable | Value |
 |---|---|
-| `DATA_END` | `2026-07-31`. The candle cache key — change it only when you top prices up. |
+| `DATA_END` | No longer read by anything (since 25 Sep 2026). It used to name the candle cache; the cache now rolls weekly on its own — see below. Safe to leave or delete. |
 | `CLAUDE_TOKEN_CREATED` | the day you ran `claude setup-token`. A token lasts a year, and this is the only thing that knows when the clock started. |
 | `MODEL_PROVIDER` / `MODEL_BASE_URL` / `MODEL_NAME` | only if you are using a non-Anthropic model — see "Using a different model" below |
 | `DASHBOARD_URL` | the Streamlit address from Part 2, so the message can link to it |
@@ -140,6 +140,11 @@ Two optional ones:
   back cut off.
 
 Locally the same four go in `.env`.
+
+**Switching back:** clear `MODEL_PROVIDER` — and clear `MODEL_NAME` with it.
+That one is read on both paths, so a DeepSeek model name left behind would be
+handed to the Claude CLI, which does not know it. Cleared, the Claude path
+uses `research.brain.MODEL`, as it always has.
 
 What changes when you switch:
 
@@ -306,9 +311,12 @@ It only sends what changed, so a routine run is quick.
 
 ### How GitHub gets them
 
-Each run restores a cache keyed on `DATA_END`, then runs
+Each run restores a cache keyed on the ISO week, then runs
 `scripts/restore_candles_from_storage.py` to fill any gaps — which normally
-finds nothing to do. Supabase's free tier allows **5 GB of egress a month**,
+finds nothing to do. The weekly `recover-prices` run (Sunday evening) saves
+the store it publishes as a cache entry of its own; Monday's first research
+run misses the new week's key and restores that newest entry, so the week
+starts from the freshest prices without re-downloading them. Supabase's free tier allows **5 GB of egress a month**,
 about **seven full restores**, so the cache is what keeps ordinary days from
 spending any of it. Cache entries are evicted after 7 days unused.
 
@@ -345,8 +353,8 @@ Occasional maintenance, not day to day:
 .\.venv\Scripts\python.exe scripts/backup_candles_to_storage.py
 ```
 
-After a backfill, update the `DATA_END` variable on GitHub to the new date —
-that is the cache key, and a stale one serves stale candles.
+Nothing on GitHub needs updating after a backfill. The research run re-fetches
+every file whose size changed, and the next week's cache is saved from that.
 
 ---
 

@@ -52,21 +52,31 @@ jobs:
 
       # Pinned: research/brain.py's flags were measured against this exact
       # version, and two of them do not behave as documented. Read that
-      # module's docstring before bumping this.
+      # module's docstring before bumping this. 2.1.282 is the first pin that
+      # knows research.brain.MODEL (2.1.251 logged it as unrecognized_model).
       #
       # Skipped when the repository variable MODEL_PROVIDER says openai: that
       # path posts to a chat endpoint and never shells out to the CLI.
       - name: Install Claude Code
         if: ${{ vars.MODEL_PROVIDER != 'openai' }}
-        run: npm install -g @anthropic-ai/claude-code@2.1.251
+        run: npm install -g @anthropic-ai/claude-code@2.1.282
+
+      # The store changes once a week, when recover-prices publishes. A key
+      # per ISO week means the first run of a week misses, and restore-keys
+      # then hands back the NEWEST candles-* entry - the one recover-prices
+      # saved after publishing (it runs Sunday evening, before Monday's day).
+      # The rest of the week is an exact hit. Replaces a key built from the
+      # DATA_END variable, which had to be bumped by hand after every publish
+      # or each day re-downloaded the changed files.
+      - name: Name this week's candle cache
+        id: week
+        run: echo "id=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Restore the candles from the cache
         uses: actions/cache@v4
         with:
           path: data/candles
-          # DATA_END moves only when prices are topped up, so this key is
-          # stable for months. Cache entries are evicted after 7 days unused.
-          key: candles-${{ vars.DATA_END }}
+          key: candles-${{ steps.week.outputs.id }}
           restore-keys: candles-
 
       # Always run: it only fetches what is missing, so a cache hit costs a

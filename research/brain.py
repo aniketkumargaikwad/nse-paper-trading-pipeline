@@ -31,6 +31,12 @@ So the denylist stays, the answer shape is asked for in words, and the reply
 is parsed here. Verified the same day: with `--disallowed-tools "*"` Claude
 reports it has no tools at all and answers in one turn.
 
+Re-verified on 2026-09-25, on a GitHub runner, before the pin moved to
+2.1.282 for MODEL: through `Claude().ask`, claude-opus-5-5 answered, parsed,
+and listed its tools as `[]`. Told to run `ls` and quote a line from
+research/journal/, it returned nothing from the repository - one turn, no
+permission denials, no error.
+
 The schema text goes on STDIN, never in the `-p` argument. On Windows the CLI
 is a `claude.CMD` shim, so every argument passes through cmd.exe, and an
 argument full of braces and quotes comes out re-split: the prompt still
@@ -49,6 +55,11 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 TIMEOUT_SECONDS = 900
+# The owner's choice (25 Sep 2026): the newest Opus, named exactly. Not the
+# alias `opus`: an alias means whatever the PINNED CLI thinks the latest Opus
+# is, so it only moves when .github/workflows/research.yml bumps the CLI -
+# and 2.1.251 did not know this model at all (it logged `unrecognized_model`).
+MODEL = "claude-opus-5-5"
 # With no tools there is nothing to iterate on, so one turn is the answer.
 # The second is headroom for a turn spent on a preamble.
 MAX_TURNS = 2
@@ -162,7 +173,7 @@ class Claude:
     def __init__(
         self,
         *,
-        model: str = "opus",
+        model: str = MODEL,
         runner: Callable[..., Any] = subprocess.run,
         timeout: int = TIMEOUT_SECONDS,
     ) -> None:
@@ -354,7 +365,7 @@ def make_brain(env: Mapping[str, str] | None = None) -> Any:
     values = os.environ if env is None else env
     provider = (values.get("MODEL_PROVIDER") or "claude").strip().lower()
     if provider in ("", "claude", "anthropic", "claude-code"):
-        return Claude(model=(values.get("MODEL_NAME") or "opus").strip())
+        return Claude(model=(values.get("MODEL_NAME") or MODEL).strip())
     if provider not in ("openai", "openai-compatible", "deepseek"):
         raise BrainStopped(
             f"MODEL_PROVIDER is {provider!r}; it must be 'claude' or 'openai'."
@@ -384,6 +395,6 @@ def brain_description(env: Mapping[str, str] | None = None) -> str:
     values = os.environ if env is None else env
     provider = (values.get("MODEL_PROVIDER") or "claude").strip().lower()
     if provider in ("", "claude", "anthropic", "claude-code"):
-        return f"claude -p, model {(values.get('MODEL_NAME') or 'opus').strip()}, no tools"
+        return f"claude -p, model {(values.get('MODEL_NAME') or MODEL).strip()}, no tools"
     host = (values.get("MODEL_BASE_URL") or "?").strip().rstrip("/")
     return f"chat api at {host}, model {(values.get('MODEL_NAME') or '?').strip()}"
