@@ -146,8 +146,10 @@ class Basket:
     edge_t: float | None
     years: tuple[dict[str, Any], ...]
     # Share of calendar years the reading beat holding. "Consistently" is a
-    # claim about years, not about one average.
-    years_positive_pct: float = 0.0
+    # claim about years, not about one average. Named years_positive_pct until
+    # 26 Sep 2026, which read as "years that made money" - Opus was told 11%
+    # for a strategy that made money in five years of nine.
+    years_beating_holding_pct: float = 0.0
     # Account readings only (research.account): how many positions at once,
     # how much of that slot-time was used, and how many signals were skipped
     # because every slot was taken.
@@ -197,7 +199,7 @@ class Basket:
             "avg_excess_active_pct": self.avg_excess_active_pct,
             "worst_dip_pct": self.worst_dip_pct,
             "sleeve_use_pct": self.sleeve_use_pct,
-            "years_positive_pct": self.years_positive_pct,
+            "years_beating_holding_pct": self.years_beating_holding_pct,
             "edge_t": self.edge_t,
             "luck_check": luck_label(self.edge_t),
             "years": list(self.years),
@@ -328,7 +330,7 @@ def summarise(
         sleeve_use_pct=round(100 * trading_months / stock_months, 2) if stock_months else 0.0,
         edge_t=edge_t,
         years=years,
-        years_positive_pct=round(100 * years_up / len(years), 2) if years else 0.0,
+        years_beating_holding_pct=round(100 * years_up / len(years), 2) if years else 0.0,
         **extra,
     )
 

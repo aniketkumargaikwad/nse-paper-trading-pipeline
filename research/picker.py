@@ -20,11 +20,27 @@ did best per month in training, provided the account:
 * made money on average (avg month > 0), and
 * either traded at least MIN_TRADES_PER_MONTH times a month or averaged the
   owner's target month. The floor is SOFT by his instruction: "if we are
-  meeting the monthly minimum, I am good with any number of trades".
+  meeting the monthly minimum, I am good with any number of trades",
+* beat holding in at least MIN_YEARS_BEATING_HOLDING_PCT of its years, and
+* led holding by more than luck explains (edge_t >= LUCK_STRONG_T).
+
+The last two were added on 26 Sep 2026, by the owner's choice, after asking
+why every training winner failed the locked year. Of 322 accounts tested
+16-25 Sep, three passed the first five rules. All three earned their lead in
+the 2020-24 boom and lost it in every flat stretch (2017-19, early 2025); all
+three had a NEGATIVE edge_t; the locked year Aug 2025-Jul 2026 was flat
+(NIFTY 50 -0.7%), and they failed it as they had failed those years. The
+average hid the pattern and the gate did not read the figures that showed
+it. Not a scoring bug: training and the locked year use the same
+build_account, and a re-run of the 19 Sep pick reproduced it exactly.
+
+Both new figures compare with holding FULL-TIME, deliberately: in this
+account idle cash earns nothing, so a rule that does not beat holding
+outright leaves the owner worse off than holding, however well each rupee it
+did invest was used.
 
 Ranked by average month rather than by excess: the goal is stated as a
-return, and the excess gate already refuses beta - a strategy in the market
-a third of the time cannot beat full-time holding by beta alone.
+return, and the excess gates already refuse beta.
 """
 
 from __future__ import annotations
@@ -33,13 +49,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from research.account import build_account
-from research.portfolio import Basket, build_basket
+from research.portfolio import LUCK_STRONG_T, Basket, build_basket
 from research.segment import TARGET_MONTHLY_MIN
 from research.sweep import ComboResult
 
 MIN_MONTHS = 24
 MIN_TRADES_PER_MONTH = 10.0
 MAX_DIP_PCT = 30.0
+MIN_YEARS_BEATING_HOLDING_PCT = 50.0
 
 
 @dataclass(frozen=True)
@@ -66,6 +83,18 @@ def disqualified(reading: Basket) -> str | None:
             and reading.avg_month_pct < TARGET_MONTHLY_MIN):
         return (f"too slow: {reading.trades_per_month:.1f} trades a month (needs "
                 f"{MIN_TRADES_PER_MONTH:.0f}, or {TARGET_MONTHLY_MIN:.0f}% a month to excuse it)")
+    if reading.years_beating_holding_pct < MIN_YEARS_BEATING_HOLDING_PCT:
+        ahead = sum(1 for y in reading.years if y["strategy_pct"] > y["holding_pct"])
+        return (f"beat holding in only {ahead} of {len(reading.years)} years - a lead from "
+                f"one stretch of the market, not a lasting one (needs "
+                f"{MIN_YEARS_BEATING_HOLDING_PCT:.0f}% of years)")
+    # edge_t is None only when every month led holding by the same amount: a
+    # zero spread, so the lead is certain rather than unknown.
+    luck_passes = (reading.avg_excess_pct > 0 if reading.edge_t is None
+                   else reading.edge_t >= LUCK_STRONG_T)
+    if not luck_passes:
+        t = "n/a" if reading.edge_t is None else f"{reading.edge_t:+.2f}"
+        return f"its lead over holding could be luck: t = {t} (needs {LUCK_STRONG_T:.0f})"
     return None
 
 

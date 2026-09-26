@@ -105,10 +105,15 @@ What this strategy is being designed to achieve:
   when every slot is busy, measured month by month on the whole Rs 10,00,000.
   The timeframe whose account earns the most per month is picked - but only
   if it never fell more than 30% from a high, beat holding the same stocks
-  on average, and either traded 10+ times a month or averaged the target.
-  An account failing any of those is DISCARDED however good its best stock
-  looks. A selective rule is fine: ten slots mean a signal on 5% of stocks
-  still keeps the account busy.
+  on average, either traded 10+ times a month or averaged the target, beat
+  holding in at least HALF of its years, and led holding by more than luck
+  explains (luck check t of 2 or more). An account failing any of those is
+  DISCARDED however good its best stock looks. A selective rule is fine: ten
+  slots mean a signal on 5% of stocks still keeps the account busy.
+- the training years hold one exceptional boom, 2020-24. Every account that
+  passed the older rules made its lead there and lost it in the flat years
+  (2017-19, early 2025). A lead that exists only in the boom is now
+  discarded, so design for the flat years as much as the boom.
 - one stock's spectacular result counts for nothing on its own; the best of
   ~{_COMBOS:,} combinations is nearly always luck. Design for the average stock.
 
@@ -227,7 +232,7 @@ def review_prompt(*, summary: TrainingSummary, version: int, versions_left: int)
         "version is picked and how it will be examined - the timeframe whose "
         "account has the best avg_month_pct among those with `qualifies` true "
         "(why_not says what failed). Read months_positive_pct, worst_month_pct, "
-        "worst_dip_pct, years_positive_pct, the year-by-year rows, "
+        "worst_dip_pct, years_beating_holding_pct, the year-by-year rows, "
         "signals_skipped_pct and luck_check before believing an average. "
         "avg_excess_active_pct is the average month minus what holding the same "
         "stocks made over the time the money was actually at work (slot_use_pct); "

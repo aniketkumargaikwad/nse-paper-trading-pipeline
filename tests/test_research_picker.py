@@ -99,13 +99,20 @@ def test_an_account_that_fell_too_far_is_not_picked():
 
 def test_an_account_that_lost_to_holding_while_invested_is_not_picked():
     """Same-day trades keep the money at work about 5% of the time, so holding
-    is scaled to that 5%: +2% a month of holding is a +0.1% bar, which +1% clears;
-    +40% a month of holding is a +2% bar, which it does not."""
-    edge = ten(pct=1.0, hold=2.0)
-    assert disqualified(accounts_by_timeframe(edge)["day"]) is None
+    is scaled to that 5%: +40% a month of holding is a +2% bar, which +1% does
+    not clear."""
     beta = ten(pct=1.0, hold=40.0)
     assert "did not beat holding while invested" in disqualified(accounts_by_timeframe(beta)["day"])
     assert pick_timeframe(beta) is None
+
+
+def test_clearing_the_scaled_bar_is_not_enough_if_holding_won_every_year():
+    """+1% a month clears the scaled +0.1% bar, and until 26 Sep 2026 that was a
+    pass. But holding made +2% every month: the owner's account, whose idle
+    cash earns nothing, would have done better holding in every year."""
+    edge = ten(pct=1.0, hold=2.0)
+    assert "beat holding in only 0 of 2 years" in disqualified(accounts_by_timeframe(edge)["day"])
+    assert pick_timeframe(edge) is None
 
 
 def test_an_account_that_beat_holding_but_lost_money_is_not_picked():
@@ -143,3 +150,68 @@ def test_a_versions_score_is_its_picks_average_month_or_nothing():
 def test_nothing_tested_picks_nothing():
     assert pick_timeframe([]) is None
     assert pick_timeframe([ComboResult("A", "day", False, (), "no candles in window")]) is None
+
+
+# ---- Consistency and luck (2026-09-26) ----
+#
+# Of 322 accounts tested 16-25 Sep 2026, three passed the old gate. All three
+# earned their lead in the 2020-24 boom and lost it in every flat stretch -
+# 2017-19, early 2025 - and all three then failed the flat locked year. The
+# figures that said so (years beating holding, the luck check) were computed
+# and shown, but the gate never read them.
+
+from research.portfolio import summarise  # noqa: E402
+
+
+def account_of(rows, *, slot_use_pct=30.0):
+    """An account reading built straight from (year, strategy_pct, holding_pct) months."""
+    months = [{"month": f"{y}-{m:02d}", "strategy_pct": s, "holding_pct": h,
+               "trades": 12, "wins": 6, "stocks": 200}
+              for y, s, h in rows for m in range(1, 13)]
+    return summarise("day", 200, months, stock_months=len(months) * 200,
+                     trading_months=len(months) * 60, slot_use_pct=slot_use_pct)
+
+
+def test_a_lead_earned_in_one_boom_is_not_picked():
+    """The shape of the 19 Sep pick: well ahead in 2020-21, behind in every other year."""
+    boom = [(y, 8.0, 2.0) for y in (2020, 2021)]
+    flat = [(y, -0.5, 1.0) for y in (2017, 2018, 2019, 2022, 2023, 2024, 2025)]
+    reading = account_of(sorted(boom + flat))
+    assert reading.avg_excess_active_pct > 0          # the old gate let this through
+    assert reading.years_beating_holding_pct == pytest.approx(100 * 2 / 9, abs=0.01)
+    why = disqualified(reading)
+    assert why is not None and "2 of 9 years" in why
+
+
+def test_a_lead_that_could_be_luck_is_not_picked():
+    """Ahead of holding in every year, but by a whisker against wild months."""
+    months = []
+    for y in range(2017, 2026):
+        for m in range(1, 13):
+            months.append({"month": f"{y}-{m:02d}", "strategy_pct": 6.0 if m % 2 else -3.8,
+                           "holding_pct": 1.0, "trades": 12, "wins": 6, "stocks": 200})
+    reading = summarise("day", 200, months, stock_months=len(months) * 200,
+                        trading_months=len(months) * 60, slot_use_pct=30.0)
+    assert reading.years_beating_holding_pct == 100.0
+    assert reading.edge_t < 2
+    why = disqualified(reading)
+    assert why is not None and "could be luck" in why
+
+
+def test_a_steady_significant_lead_is_still_picked():
+    months = []
+    for y in range(2017, 2026):
+        for m in range(1, 13):
+            months.append({"month": f"{y}-{m:02d}", "strategy_pct": 2.5 if m % 2 else 1.5,
+                           "holding_pct": 1.0, "trades": 12, "wins": 6, "stocks": 200})
+    reading = summarise("day", 200, months, stock_months=len(months) * 200,
+                        trading_months=len(months) * 60, slot_use_pct=30.0)
+    assert reading.edge_t >= 2 and reading.years_beating_holding_pct == 100.0
+    assert disqualified(reading) is None
+
+
+def test_the_same_lead_every_month_is_certain_not_unknown():
+    """Zero spread leaves edge_t empty (a divide by zero), not doubtful."""
+    reading = account_of([(y, 2.0, 1.0) for y in range(2017, 2026)])
+    assert reading.edge_t is None
+    assert disqualified(reading) is None
