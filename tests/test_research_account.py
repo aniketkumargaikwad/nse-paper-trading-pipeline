@@ -109,8 +109,8 @@ def test_account_weight_is_the_trade_over_the_whole_capital():
     assert weight(t(1, pct=1.0)) == pytest.approx(0.001)        # +1,000 on 10 lakh
 
 
-def test_years_positive_counts_years_that_beat_holding():
+def test_years_beating_holding_counts_years_that_beat_holding():
     trades = [t(1, pct=1.0, month=m, year=2023 + (m > 6)) for m in range(1, 13)]
     months = tuple((f"{2023 + (m > 6)}-{m:02d}", 100.0, 100.0) for m in range(1, 13))
     account = build_account([sleeve("A", trades, months)], timeframe="day", slots=1)
-    assert account.years_positive_pct == pytest.approx(100.0)
+    assert account.years_beating_holding_pct == pytest.approx(100.0)
