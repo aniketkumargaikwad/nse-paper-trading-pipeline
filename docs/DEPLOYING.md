@@ -10,7 +10,7 @@ click.
 | **Daily research run** | GitHub Actions, 09:03 IST | free (public repo) | Part 1 |
 | **Dashboard** | Streamlit Community Cloud | free | Part 2 |
 | **Database + price backup** | Supabase | free tier | already done |
-| **The thinking** | Claude Pro, via `claude -p` | already paid | Part 1 |
+| **The thinking** | Claude Pro via `claude -p`, or any OpenAI-compatible API | already paid, or per-token | Part 1 |
 | **Paper trading engine** | nothing, at present | — | Part 3, optional |
 
 Nothing here needs your laptop switched on except the occasional maintenance
@@ -67,6 +67,7 @@ in any public repository.
 | `SUPABASE_URL` | your `.env` |
 | `SUPABASE_SERVICE_ROLE_KEY` | your `.env` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` in a terminal — **not** an interactive login, which cannot refresh on a runner |
+| `MODEL_API_KEY` | only if you are using a non-Anthropic model — see "Using a different model" below |
 | `TELEGRAM_BOT_TOKEN` | @BotFather |
 | `TELEGRAM_CHAT_ID` | `python scripts/telegram_chat_id.py` |
 | `GMAIL_USER` / `GMAIL_APP_PASSWORD` / `NOTIFY_EMAIL` | optional, only for email as well as Telegram |
@@ -77,6 +78,7 @@ in any public repository.
 |---|---|
 | `DATA_END` | No longer read by anything (since 25 Sep 2026). It used to name the candle cache; the cache now rolls weekly on its own — see below. Safe to leave or delete. |
 | `CLAUDE_TOKEN_CREATED` | the day you ran `claude setup-token`. A token lasts a year, and this is the only thing that knows when the clock started. |
+| `MODEL_PROVIDER` / `MODEL_BASE_URL` / `MODEL_NAME` | only if you are using a non-Anthropic model — see "Using a different model" below |
 | `DASHBOARD_URL` | the Streamlit address from Part 2, so the message can link to it |
 
 ### Setting up Telegram from scratch
@@ -110,6 +112,56 @@ merged there to take effect.
 
 Actions → research → **Run workflow**. Set **max_versions** to `1` for a cheap
 check: two Opus calls, about 25 minutes.
+
+### Using a different model (DeepSeek, OpenAI, anything OpenAI-compatible)
+
+The default is the Claude Code CLI on your Pro plan, and nothing below is
+needed to keep it. But the two asks the day makes — propose a strategy,
+review the result — are single-turn, send no tools and fit in about 25 KB of
+prompt, so any OpenAI-shaped `/chat/completions` endpoint can serve them.
+
+Set these and the run posts to that endpoint instead. `MODEL_API_KEY` is a
+**secret**; the other three are **variables**.
+
+| Setting | DeepSeek | OpenAI |
+|---|---|---|
+| `MODEL_PROVIDER` | `openai` | `openai` |
+| `MODEL_BASE_URL` | `https://api.deepseek.com/v1` | `https://api.openai.com/v1` |
+| `MODEL_NAME` | `deepseek-reasoner` | whichever model you are paying for |
+| `MODEL_API_KEY` | from the DeepSeek console | from the OpenAI dashboard |
+
+Two optional ones:
+
+* `MODEL_JSON_MODE` — set to `1` on an endpoint that supports
+  `response_format: json_object` (DeepSeek and OpenAI both do). Off by
+  default, because it is not universal and the reply is parsed either way.
+* `MODEL_MAX_TOKENS` — how long a reply may be, default 8000. A strategy
+  document plus its explanation fits comfortably; raise it if replies come
+  back cut off.
+
+Locally the same four go in `.env`.
+
+**Switching back:** clear `MODEL_PROVIDER` — and clear `MODEL_NAME` with it.
+That one is read on both paths, so a DeepSeek model name left behind would be
+handed to the Claude CLI, which does not know it. Cleared, the Claude path
+uses `research.brain.MODEL`, as it always has.
+
+What changes when you switch:
+
+* The `Install Claude Code` step in the workflow skips itself, so the run
+  starts a minute or two sooner.
+* `CLAUDE_CODE_OAUTH_TOKEN` is no longer read. Clear the
+  `CLAUDE_TOKEN_CREATED` variable too, or every message will keep warning
+  about a token that is no longer used.
+* The run header prints which endpoint and model it is asking, so the log
+  says plainly what produced the day.
+* The day now costs per token rather than coming out of a flat plan. Six
+  calls a day at roughly 25 KB in and 4 KB out is small, but it is not zero.
+
+What does **not** change: the prompts, the schemas, the checker, the sweep,
+the pick rule and the locked-year examination are all untouched. Only the
+transport differs. Whether a cheaper model designs *good* strategies is a
+separate question, and the journal is where you would see the answer.
 
 ### The atlas — run it once, and again only after a price top-up
 

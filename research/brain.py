@@ -1,4 +1,9 @@
-"""Ask Opus, with no tools and a fixed answer shape.
+"""Ask the model, with no tools and a fixed answer shape.
+
+Two transports live here and the loop cannot tell them apart: `Claude`
+shells out to the Claude Code CLI on the Pro plan (the default, described
+below), and `ChatApi` posts to any OpenAI-compatible `/chat/completions`
+endpoint. `make_brain` picks between them from MODEL_PROVIDER.
 
 Every call is one non-interactive `claude -p` with EVERY tool removed, so
 Claude cannot read a file, run a command or reach the network. That is what
@@ -46,7 +51,7 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 TIMEOUT_SECONDS = 900
@@ -210,3 +215,186 @@ class Claude:
                 f" ({envelope.get('subtype') or envelope.get('terminal_reason') or 'no reason given'})"
             )
         return read_answer(said, schema)
+
+
+# ---------------------------------------------------------------------------
+# The other way to ask: a plain HTTP chat-completions endpoint
+# ---------------------------------------------------------------------------
+#
+# Nothing above this line is Anthropic-specific except the transport. The two
+# asks the loop makes (propose, review) are single-turn, send no tools, need
+# no prompt caching, and fit in about 25 KB of prompt - so any OpenAI-shaped
+# `/chat/completions` endpoint can serve them: DeepSeek, OpenAI, Together,
+# OpenRouter, a local server. The answer shape is already asked for in words
+# and parsed by `read_answer`, which is what makes the swap this small.
+
+DEFAULT_MAX_TOKENS = 8000
+
+API_AUTH_HELP = (
+    "The model endpoint refused the credential. Check MODEL_API_KEY and "
+    "MODEL_BASE_URL (in .env locally, or as GitHub secrets/variables)."
+)
+
+
+def completions_url(base_url: str) -> str:
+    """The chat endpoint for a base like `https://api.deepseek.com/v1`.
+
+    A base that already names the path is left alone, so either spelling of
+    the setting works.
+    """
+    base = base_url.strip().rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    return f"{base}/chat/completions"
+
+
+def chat_payload(
+    instruction: str, request: str, *, model: str, max_tokens: int, json_mode: bool
+) -> dict[str, Any]:
+    """The request body. `instruction` is the system turn, `request` the user one.
+
+    That split mirrors the CLI call above, where the instruction rides on `-p`
+    and the context and schema ride on stdin.
+    """
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": request},
+        ],
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    if json_mode:
+        # Supported by OpenAI and DeepSeek; NOT universal, which is why it is
+        # off unless MODEL_JSON_MODE says otherwise. `read_answer` copes
+        # without it, so the default path is the one already proven.
+        body["response_format"] = {"type": "json_object"}
+    return body
+
+
+def _api_said(body: dict[str, Any]) -> str:
+    """The assistant's words, from an OpenAI-shaped response body."""
+    choices = body.get("choices") or []
+    if not choices:
+        return ""
+    message = (choices[0] or {}).get("message") or {}
+    return str(message.get("content") or "").strip()
+
+
+class ChatApi:
+    """One HTTP call per ask, against an OpenAI-compatible endpoint.
+
+    Same surface as `Claude` - `ask(prompt, schema, instruction=...)` - so the
+    loop cannot tell which one it is holding.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        json_mode: bool = False,
+        poster: Callable[..., Any] | None = None,
+        timeout: int = TIMEOUT_SECONDS,
+    ) -> None:
+        self._url = completions_url(base_url)
+        self._key, self._model = api_key, model
+        self._max_tokens, self._json_mode = max_tokens, json_mode
+        self._timeout = timeout
+        self._poster = poster
+
+    def _post(self, *args: Any, **kwargs: Any) -> Any:
+        if self._poster is not None:
+            return self._poster(*args, **kwargs)
+        import requests      # imported late: the CLI path does not need it
+
+        return requests.post(*args, **kwargs)
+
+    def ask(
+        self, prompt: str, schema: dict[str, Any], *, instruction: str = "Follow the input."
+    ) -> dict[str, Any]:
+        """Send the prompt and schema, return the structured reply as a dict."""
+        payload = chat_payload(
+            instruction, answer_request(prompt, schema),
+            model=self._model, max_tokens=self._max_tokens, json_mode=self._json_mode,
+        )
+        try:
+            response = self._post(
+                self._url,
+                headers={"Authorization": f"Bearer {self._key}",
+                         "Content-Type": "application/json"},
+                json=payload,
+                timeout=self._timeout,
+            )
+        except Exception as exc:        # noqa: BLE001 - any transport failure is retryable
+            raise BrainError(f"the model endpoint could not be reached: {exc}") from exc
+
+        status = int(getattr(response, "status_code", 0) or 0)
+        text = (getattr(response, "text", "") or "").strip()
+
+        # A dead key or an empty balance cannot be fixed by trying again, so
+        # it ends the day rather than burning the two retries above it.
+        if status in (401, 402, 403):
+            raise BrainStopped(f"{text[:400] or f'HTTP {status}'}\n{API_AUTH_HELP}")
+        if any(marker in text.lower() for marker in _STOP_MARKERS):
+            raise BrainStopped(text[:400])
+        if status >= 400:
+            raise BrainError(f"the model endpoint returned {status}: {text[:400]}")
+
+        try:
+            body = response.json()
+        except Exception as exc:        # noqa: BLE001 - a proxy error page, usually
+            raise BrainError(f"the reply was not JSON: {text[:400]}") from exc
+
+        said = _api_said(body if isinstance(body, dict) else {})
+        if not said:
+            raise BrainError(f"the model returned nothing: {text[:400]}")
+        return read_answer(said, schema)
+
+
+def make_brain(env: Mapping[str, str] | None = None) -> Any:
+    """The client the day should use, chosen by MODEL_PROVIDER.
+
+    Unset or "claude" keeps the Claude Code CLI on the Pro plan, which is what
+    has always run. "openai" sends the same two asks to any OpenAI-compatible
+    endpoint instead.
+    """
+    values = os.environ if env is None else env
+    provider = (values.get("MODEL_PROVIDER") or "claude").strip().lower()
+    if provider in ("", "claude", "anthropic", "claude-code"):
+        return Claude(model=(values.get("MODEL_NAME") or MODEL).strip())
+    if provider not in ("openai", "openai-compatible", "deepseek"):
+        raise BrainStopped(
+            f"MODEL_PROVIDER is {provider!r}; it must be 'claude' or 'openai'."
+        )
+
+    base_url = (values.get("MODEL_BASE_URL") or "").strip()
+    api_key = (values.get("MODEL_API_KEY") or "").strip()
+    model = (values.get("MODEL_NAME") or "").strip()
+    missing = [name for name, value in
+               (("MODEL_BASE_URL", base_url), ("MODEL_API_KEY", api_key),
+                ("MODEL_NAME", model)) if not value]
+    if missing:
+        raise BrainStopped(
+            f"MODEL_PROVIDER is {provider!r} but {', '.join(missing)} "
+            "is not set. See docs/DEPLOYING.md."
+        )
+    return ChatApi(
+        base_url=base_url, api_key=api_key, model=model,
+        max_tokens=int(values.get("MODEL_MAX_TOKENS") or DEFAULT_MAX_TOKENS),
+        json_mode=(values.get("MODEL_JSON_MODE") or "").strip().lower()
+        in ("1", "true", "yes", "on"),
+    )
+
+
+def brain_description(env: Mapping[str, str] | None = None) -> str:
+    """One line for the run header saying which model is being asked."""
+    values = os.environ if env is None else env
+    provider = (values.get("MODEL_PROVIDER") or "claude").strip().lower()
+    if provider in ("", "claude", "anthropic", "claude-code"):
+        return f"claude -p, model {(values.get('MODEL_NAME') or MODEL).strip()}, no tools"
+    host = (values.get("MODEL_BASE_URL") or "?").strip().rstrip("/")
+    return f"chat api at {host}, model {(values.get('MODEL_NAME') or '?').strip()}"
