@@ -175,8 +175,10 @@ never appears.
 - **Checks on every write:** minutes missing inside a session; contracts
   with no trade; a contract's last minute close against NSE's daily close for
   that contract (beyond a tolerance, flagged); lot size in the file against
-  `lot_sizes.yaml`. Flags go to the existing `data_quality_flags` table.
-  Nothing is filled in or invented.
+  `lot_sizes.yaml`. Issues go to a report beside the data,
+  `data/fno/quality/<YEAR>.csv`: `data_quality_flags` requires a stock or
+  index `instrument_id` and allows only three flag types, so it cannot hold
+  a contract. Nothing is filled in or invented.
 
 ### 2.7 Stocks, as a side effect
 
@@ -388,10 +390,11 @@ Each step is finished, tested and checked against real data before the next,
 and each gets its own implementation plan in `docs/superpowers/plans/`.
 
 1. **Daily data:** NSE files (both formats) for all five indexes since 2016,
-   lot-size history, VIX, participant OI, charges and rates tables. Needs
+   lot-size history, VIX, participant OI. Needs
    nothing from the owner; built locally first, published to R2 when the
    bucket exists.
-2. **Engine + atlas on daily data:** pricing, chain, features, strategy
+2. **Engine + atlas on daily data:** charges and rates tables (with the
+   code that reads them), pricing, chain, features, strategy
    format, costs, margin, engine, account, reports; the options atlas for
    positional strategies since 2016.
 3. **Minute data:** Upstox and Dhan connections, backfill, daily top-up;

@@ -30,6 +30,8 @@ Thumbs.db
 # Parquet candle files are DATA, not source. They are regenerable from the
 # provider and can reach gigabytes; the repo is not the place for them.
 data/candles/
+# The F&O store (design 2026-10-02 §2.2): data, regenerable from NSE.
+data/fno/
 
 # Claude Code tooling, not part of the app
 .agents/
