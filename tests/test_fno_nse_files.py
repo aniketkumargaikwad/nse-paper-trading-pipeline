@@ -24,3 +24,49 @@ def test_days_from_8_july_2024_use_udiff():
     assert nse_files.file_url(date(2024, 7, 8)) == (
         "https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_20240708_F_0000.csv.zip"
     )
+
+
+# Real rows from fo04JAN2016bhav.csv, trimmed. NIFTYIT and the stock option
+# are there to be filtered out; the trailing comma is NSE's.
+OLD = """INSTRUMENT,SYMBOL,EXPIRY_DT,STRIKE_PR,OPTION_TYP,OPEN,HIGH,LOW,CLOSE,SETTLE_PR,CONTRACTS,VAL_INLAKH,OPEN_INT,CHG_IN_OI,TIMESTAMP,
+FUTIDX,NIFTY,28-Jan-2016,0,XX,7934.9,7947.75,7792.6,7809.8,7809.8,217442,1281367.25,20242200,804525,04-JAN-2016,
+OPTIDX,NIFTY,28-Jan-2016,6350,CE,0,0,0,1533.9,1471.3,0,0,0,0,04-JAN-2016,
+OPTIDX,NIFTY,28-Jan-2016,7800,PE,95.5,120,90.1,112.35,112.35,52000,302000.5,3100000,200000,04-JAN-2016,
+FUTIDX,NIFTYIT,28-Jan-2016,0,XX,11300,11320,11200,11250,11250,10,28.1,500,0,04-JAN-2016,
+OPTSTK,RELIANCE,28-Jan-2016,1000,CE,10,11,9,10.5,10.5,100,500,1000,0,04-JAN-2016,
+"""
+
+
+def test_old_format_keeps_index_futures_and_options_of_our_underlyings():
+    frame = nse_files.parse(OLD, date(2016, 1, 4))
+    assert list(frame.columns) == list(nse_files.COLUMNS)
+    assert len(frame) == 3
+    assert set(frame["underlying"]) == {"NIFTY"}
+
+
+def test_old_format_future_row_is_normalised():
+    frame = nse_files.parse(OLD, date(2016, 1, 4))
+    fut = frame[frame["instrument"] == "FUT"].iloc[0]
+    assert fut["trade_date"] == date(2016, 1, 4)
+    assert fut["expiry"] == date(2016, 1, 28)
+    assert fut["strike"] != fut["strike"]                 # NaN: a future has no strike
+    assert fut["option_type"] != fut["option_type"]       # NaN, not "XX"
+    assert fut["close"] == 7809.8
+    assert fut["volume_contracts"] == 217442
+    assert fut["oi_units"] == 20242200
+    assert fut["turnover_inr"] == pytest.approx(1281367.25 * 100_000)
+    assert fut["lot_size"] != fut["lot_size"]             # the old format has none
+
+
+def test_old_format_untraded_option_keeps_its_published_close_and_zero_volume():
+    frame = nse_files.parse(OLD, date(2016, 1, 4))
+    idle = frame[(frame["instrument"] == "OPT") & (frame["strike"] == 6350)].iloc[0]
+    assert idle["option_type"] == "CE"
+    assert idle["volume_contracts"] == 0
+    assert idle["close"] == 1533.9
+    assert idle["settle"] == 1471.3
+
+
+def test_a_file_for_another_day_is_refused():
+    with pytest.raises(nse_files.NseFileError, match="2016-01-05"):
+        nse_files.parse(OLD, date(2016, 1, 5))
