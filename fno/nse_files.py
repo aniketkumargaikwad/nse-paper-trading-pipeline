@@ -12,7 +12,9 @@ contract traded is read from volume, never from its close.
 from __future__ import annotations
 
 import io
+import zipfile
 from datetime import date
+from typing import Any
 
 import pandas as pd
 
@@ -127,3 +129,30 @@ def parse(text: str, day: date) -> pd.DataFrame:
             f"asked for {day}, the file is for {wrong['trade_date'].iloc[0]}: "
             "refusing to store one day's prices under another")
     return out[list(COLUMNS)]
+
+
+# Browser-like headers: NSE's archive host rejects default client user agents
+# (the same finding as universes.py).
+HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"),
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/",
+}
+TIMEOUT_SECONDS = 60
+
+
+def download(day: date, session: Any) -> str | None:
+    """`day`'s file as CSV text, or None when NSE has none (no session that day).
+
+    Only a 404 means "no session". A blocked client is answered with 200 and
+    an HTML page, and that must not be recorded as a holiday.
+    """
+    r = session.get(file_url(day), headers=HEADERS, timeout=TIMEOUT_SECONDS)
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200 or r.content[:2] != b"PK":
+        raise NseFileError(f"{day}: HTTP {r.status_code}, {len(r.content)} bytes, not a zip")
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        return z.read(z.namelist()[0]).decode("utf-8")

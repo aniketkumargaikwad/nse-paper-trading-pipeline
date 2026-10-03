@@ -112,3 +112,46 @@ def test_udiff_option_row_is_normalised():
     assert idle["close"] == 2.35
     assert idle["settle"] == 6.67
     assert idle["expiry"] == date(2026, 11, 3)
+
+
+import io  # noqa: E402
+import zipfile  # noqa: E402
+
+
+class FakeResponse:
+    def __init__(self, status, content):
+        self.status_code, self.content = status, content
+
+
+class FakeSession:
+    def __init__(self, response):
+        self.response, self.urls = response, []
+
+    def get(self, url, **kwargs):
+        self.urls.append(url)
+        return self.response
+
+
+def zipped(text: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("fo04JAN2016bhav.csv", text)
+    return buf.getvalue()
+
+
+def test_download_returns_the_csv_text_from_the_zip():
+    session = FakeSession(FakeResponse(200, zipped(OLD)))
+    assert nse_files.download(date(2016, 1, 4), session) == OLD
+    assert session.urls == [nse_files.file_url(date(2016, 1, 4))]
+
+
+def test_no_file_means_no_session_that_day():
+    assert nse_files.download(date(2024, 1, 26), FakeSession(FakeResponse(404, b""))) is None
+
+
+def test_anything_else_is_an_error_not_a_holiday():
+    """NSE answers a blocked client with 200 and an HTML page, not a zip."""
+    with pytest.raises(nse_files.NseFileError, match="HTTP 200"):
+        nse_files.download(date(2016, 1, 4), FakeSession(FakeResponse(200, b"<html>")))
+    with pytest.raises(nse_files.NseFileError, match="HTTP 403"):
+        nse_files.download(date(2016, 1, 4), FakeSession(FakeResponse(403, b"")))
