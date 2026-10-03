@@ -82,12 +82,42 @@ def _parse_old(raw: pd.DataFrame) -> pd.DataFrame:
     })
 
 
+def _parse_udiff(raw: pd.DataFrame) -> pd.DataFrame:
+    kind = raw["FinInstrmTp"].str.strip()
+    r = raw[kind.isin(("IDO", "IDF"))]
+    is_opt = r["FinInstrmTp"].str.strip() == "IDO"
+    # The ACTUAL expiry, which moves when the scheduled day is a holiday.
+    actual = r["FininstrmActlXpryDt"].str.strip()
+    expiry = actual.mask(actual == "", r["XpryDt"].str.strip())
+    return pd.DataFrame({
+        "trade_date": _dates(r["TradDt"], "%Y-%m-%d"),
+        "underlying": r["TckrSymb"].str.strip(),
+        "instrument": is_opt.map({True: "OPT", False: "FUT"}),
+        "expiry": _dates(expiry, "%Y-%m-%d"),
+        "strike": _num(r["StrkPric"]).where(is_opt),
+        "option_type": r["OptnTp"].str.strip().where(is_opt),
+        "open": _num(r["OpnPric"]),
+        "high": _num(r["HghPric"]),
+        "low": _num(r["LwPric"]),
+        "close": _num(r["ClsPric"]),
+        "settle": _num(r["SttlmPric"]),
+        "volume_contracts": _num(r["TtlTradgVol"]).astype("int64"),
+        "oi_units": _num(r["OpnIntrst"]).astype("int64"),
+        "oi_change_units": _num(r["ChngInOpnIntrst"]).astype("int64"),
+        "turnover_inr": _num(r["TtlTrfVal"]),
+        "lot_size": _num(r["NewBrdLotQty"]),
+        "underlying_price": _num(r["UndrlygPric"]),
+    })
+
+
 def parse(text: str, day: date) -> pd.DataFrame:
     """`day`'s file as COLUMNS: index futures and options of INDEX_UNDERLYINGS only."""
     raw = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
     raw.columns = [c.strip() for c in raw.columns]
     if "INSTRUMENT" in raw.columns:
         out = _parse_old(raw)
+    elif "TckrSymb" in raw.columns:
+        out = _parse_udiff(raw)
     else:
         raise NseFileError(f"{day}: unrecognised header {list(raw.columns)[:5]}")
     out = out[out["underlying"].isin(INDEX_UNDERLYINGS)].reset_index(drop=True)

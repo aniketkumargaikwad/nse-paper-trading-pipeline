@@ -70,3 +70,45 @@ def test_old_format_untraded_option_keeps_its_published_close_and_zero_volume():
 def test_a_file_for_another_day_is_refused():
     with pytest.raises(nse_files.NseFileError, match="2016-01-05"):
         nse_files.parse(OLD, date(2016, 1, 5))
+
+
+UDIFF_HEADER = ("TradDt,BizDt,Sgmt,Src,FinInstrmTp,FinInstrmId,ISIN,TckrSymb,SctySrs,XpryDt,"
+                "FininstrmActlXpryDt,StrkPric,OptnTp,FinInstrmNm,OpnPric,HghPric,LwPric,ClsPric,"
+                "LastPric,PrvsClsgPric,UndrlygPric,SttlmPric,OpnIntrst,ChngInOpnIntrst,TtlTradgVol,"
+                "TtlTrfVal,TtlNbOfTxsExctd,SsnId,NewBrdLotQty,Rmks,Rsvd1,Rsvd2,Rsvd3,Rsvd4")
+# Real rows from BhavCopy_NSE_FO_0_0_0_20260930_F_0000.csv, plus a stock
+# option (STO) that must be filtered out.
+UDIFF = UDIFF_HEADER + """
+2026-09-30,2026-09-30,FO,NSE,IDF,58875,,NIFTY,,2026-12-29,2026-12-29,,,NIFTY26DECFUT,23054.00,23185.00,22955.00,22973.40,22955.00,23054.00,22620.45,22973.40,89050,89050,1933,2898870338.00,1709,F1,65,,,,,
+2026-09-30,2026-09-30,FO,NSE,IDO,53339,,NIFTY,,2026-11-03,2026-11-03,20550.00,PE,NIFTY26N0320550PE,0.00,0.00,0.00,2.35,0.00,2.35,22620.45,6.67,0,0,0,0.00,0,F1,65,,,,,
+2026-09-30,2026-09-30,FO,NSE,IDO,67782,,NIFTY,,2028-12-26,2028-12-26,24000.00,CE,NIFTY28DEC24000CE,3064.95,3065.00,3064.95,3065.00,3065.00,3015.00,22620.45,3078.16,2665,-65,2,3518446.75,2,F1,65,,,,,
+2026-09-30,2026-09-30,FO,NSE,STO,99999,,RELIANCE,,2026-10-27,2026-10-27,1400.00,CE,RELIANCE26OCT1400CE,10.00,11.00,9.00,10.50,10.50,10.00,1395.00,10.50,1000,0,5,100.00,5,F1,500,,,,,
+"""
+
+
+def test_udiff_keeps_index_futures_and_options_of_our_underlyings():
+    frame = nse_files.parse(UDIFF, date(2026, 9, 30))
+    assert list(frame.columns) == list(nse_files.COLUMNS)
+    assert len(frame) == 3
+    assert set(frame["instrument"]) == {"FUT", "OPT"}
+
+
+def test_udiff_carries_lot_size_and_the_index_level():
+    frame = nse_files.parse(UDIFF, date(2026, 9, 30))
+    fut = frame[frame["instrument"] == "FUT"].iloc[0]
+    assert fut["lot_size"] == 65
+    assert fut["underlying_price"] == 22620.45
+    assert fut["expiry"] == date(2026, 12, 29)
+    assert fut["volume_contracts"] == 1933
+    assert fut["oi_units"] == 89050
+    assert fut["strike"] != fut["strike"]
+
+
+def test_udiff_option_row_is_normalised():
+    frame = nse_files.parse(UDIFF, date(2026, 9, 30))
+    idle = frame[(frame["instrument"] == "OPT") & (frame["strike"] == 20550)].iloc[0]
+    assert idle["option_type"] == "PE"
+    assert idle["volume_contracts"] == 0
+    assert idle["close"] == 2.35
+    assert idle["settle"] == 6.67
+    assert idle["expiry"] == date(2026, 11, 3)
