@@ -354,7 +354,9 @@ def test_an_atm_call_at_zero_rate_matches_the_textbook_value():
     """F = K = 100, T = 1, sigma = 20%, r = 0: 100 x (2N(0.1) - 1) = 7.9656."""
     price = pricing.black76(np.array([100.0]), np.array([100.0]), np.array([1.0]),
                             np.array([0.2]), 0.0, np.array([True]))
-    assert price[0] == pytest.approx(7.965567, abs=1e-5)
+    # The erf approximation is good to 1.5e-7, i.e. 1.5e-5 on F = 100 (a third
+    # of a paisa on NIFTY): the tolerance is the method's stated accuracy.
+    assert price[0] == pytest.approx(7.965567, abs=2e-5)
 
 
 def test_put_call_parity_holds():
