@@ -1,0 +1,16 @@
+# Approximate yearly average 91-day Treasury-bill yields, as fractions.
+# Used ONLY to discount option prices; the forward comes from futures or
+# put-call parity. A one-point error moves a 30-day ATM option by under 0.1%,
+# so approximate yearly values are adequate. Refine from RBI's DBIE series if
+# a finer figure is ever needed.
+2016: 0.065
+2017: 0.062
+2018: 0.066
+2019: 0.060
+2020: 0.037
+2021: 0.034
+2022: 0.055
+2023: 0.068
+2024: 0.068
+2025: 0.058
+2026: 0.054
