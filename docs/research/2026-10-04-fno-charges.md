@@ -14,8 +14,9 @@ stated. "Premium" means price × quantity of the option traded.
 | **2026-04-01** | **0.15%** | **0.05%** | **0.15%** |
 
 The 2026 rise is Finance Bill 2026, clause 143 (amending s.98 of the Finance
-(No. 2) Act 2004), for transactions on or after 1 Apr 2026 — 13 days before
-the locked year of 14 Apr 2026 runs began. Sources:
+(No. 2) Act 2004), for transactions on or after 1 Apr 2026 — inside the
+current locked year (25 Sep 2025 – 24 Sep 2026), so roughly half of that
+year's option sales pay the new rate. Sources:
 [Outlook Money](https://www.outlookmoney.com/invest/stt-hike-from-april-1-2026-budget-what-it-means-for-futures-and-options-traders),
 [Business Today](https://www.businesstoday.in/personal-finance/tax/story/budget-2026-income-tax-act-from-april-1-higher-fpi-limits-stt-hike-headline-fms-reform-express-514075-2026-02-02),
 [Prabhudas Lilladher](https://www.plindia.com/news/stt-hike-on-fo-in-april-2026-what-can-traders-expect/).
