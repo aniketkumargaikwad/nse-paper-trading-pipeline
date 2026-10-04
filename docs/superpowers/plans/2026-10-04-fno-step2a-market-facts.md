@@ -84,9 +84,9 @@ def test_one_sold_nifty_lot_on_30_sep_2026_worked_by_hand():
     """65 units at Rs 100: turnover 6,500.
     brokerage 20; exchange 6500 x 0.0003553 = 2.30945; SEBI 0.0065;
     STT 6500 x 0.0015 = 9.75; no stamp on a sale;
-    GST 18% of (20 + 2.30945 + 0.0065) = 4.016919."""
+    GST 18% of (20 + 2.30945 + 0.0065) = 4.016871."""
     got = CHARGES.fill(Fill(date(2026, 9, 30), "OPT", "sell", 100.0, 65))
-    assert got == pytest.approx(20 + 2.30945 + 0.0065 + 9.75 + 4.016919, abs=1e-6)
+    assert got == pytest.approx(20 + 2.30945 + 0.0065 + 9.75 + 4.016871, abs=1e-6)
 
 
 def test_buying_pays_stamp_and_no_stt():
