@@ -44,6 +44,17 @@ COLUMNS: tuple[str, ...] = (
 )
 
 
+# One dtype per column whichever format a day came from: a UDiFF lot size
+# parses as an integer and an old-format one is NaN, so without this a
+# year's file would change type depending on which days were saved together.
+DTYPES = {
+    "strike": "float64", "open": "float64", "high": "float64", "low": "float64",
+    "close": "float64", "settle": "float64", "turnover_inr": "float64",
+    "lot_size": "float64", "underlying_price": "float64",
+    "volume_contracts": "int64", "oi_units": "int64", "oi_change_units": "int64",
+}
+
+
 class NseFileError(RuntimeError):
     """A file NSE served that cannot be trusted as the day's F&O data."""
 
@@ -128,7 +139,7 @@ def parse(text: str, day: date) -> pd.DataFrame:
         raise NseFileError(
             f"asked for {day}, the file is for {wrong['trade_date'].iloc[0]}: "
             "refusing to store one day's prices under another")
-    return out[list(COLUMNS)]
+    return out[list(COLUMNS)].astype(DTYPES)
 
 
 # Browser-like headers: NSE's archive host rejects default client user agents

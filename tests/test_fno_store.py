@@ -55,3 +55,25 @@ def test_the_ledger_remembers_each_day_and_its_outcome(tmp_path):
 def test_no_temporary_file_is_left_behind(tmp_path):
     store.write_day(tmp_path, nse_files.parse(OLD, DAY), DAY)
     assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_writing_several_days_at_once_matches_writing_them_one_by_one(tmp_path):
+    """The backfill saves in batches: one file rewrite per underlying-year,
+    not one per day. The result must be identical."""
+    sep30 = date(2026, 9, 30)
+    days = [(DAY, nse_files.parse(OLD, DAY)), (sep30, nse_files.parse(UDIFF, sep30))]
+    one_by_one, batched = tmp_path / "a", tmp_path / "b"
+    for day, frame in days:
+        store.write_day(one_by_one, frame, day)
+    store.write_days(batched, days)
+    for year in (2016, 2026):
+        a = store.read_daily(one_by_one, "NIFTY", date(year, 1, 1), date(year, 12, 31))
+        b = store.read_daily(batched, "NIFTY", date(year, 1, 1), date(year, 12, 31))
+        assert a.equals(b)
+
+
+def test_a_batch_replaces_days_already_stored(tmp_path):
+    frame = nse_files.parse(OLD, DAY)
+    store.write_day(tmp_path, frame, DAY)
+    store.write_days(tmp_path, [(DAY, frame)])
+    assert len(store.read_daily(tmp_path, "NIFTY", DAY, DAY)) == 3

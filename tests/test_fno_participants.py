@@ -51,3 +51,11 @@ def test_a_day_is_stored_and_replaced(tmp_path):
     participants.write_day(tmp_path, frame, DAY)
     back = participants.read(tmp_path, DAY, DAY)
     assert len(back) == 5
+
+
+def test_a_file_without_the_title_line_is_read_too():
+    """13 Jun 2018: NSE published the header as the first line, no title."""
+    no_title = FILE.split("\r\n", 1)[1]
+    frame = participants.parse(no_title, DAY)
+    assert list(frame["client_type"]) == ["Client", "DII", "FII", "Pro", "TOTAL"]
+    assert frame[frame["client_type"] == "FII"].iloc[0]["future_index_long"] == 29394

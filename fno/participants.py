@@ -48,7 +48,14 @@ def _snake(name: str) -> str:
 
 
 def parse(text: str, day: date) -> pd.DataFrame:
-    raw = pd.read_csv(io.StringIO(text), skiprows=1, dtype=str, keep_default_na=False)
+    # Usually a title line comes first, but not always (13 Jun 2018 has none):
+    # start at whichever line is the header.
+    lines = text.splitlines()
+    header_at = next((i for i, line in enumerate(lines)
+                      if line.strip().strip('"').startswith("Client Type")), None)
+    if header_at is None:
+        raise ParticipantFileError(f"{day}: no 'Client Type' header line")
+    raw = pd.read_csv(io.StringIO(text), skiprows=header_at, dtype=str, keep_default_na=False)
     raw.columns = [_snake(c) for c in raw.columns]
     missing = [c for c in ("client_type", *NUMBERS) if c not in raw.columns]
     if missing:

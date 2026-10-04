@@ -28,6 +28,7 @@ START = date(2016, 1, 1)
 LATE_DAYS = 3            # NSE publishes in the evening, sometimes days late
 PAUSE_SECONDS = 0.4      # between days: be a polite client
 RETRIES = 3
+BATCH = 20               # sessions held in memory between saves (see store.write_days)
 
 
 def plan_days(start: date, end: date, ledger: dict[date, str]) -> list[date]:
@@ -75,29 +76,43 @@ def main(argv: list[str] | None = None) -> int:
 
     session = requests.Session()
     sessions = rows = 0
+    pending: list[tuple[date, object]] = []
+
+    def flush() -> None:
+        # A day enters the ledger only once it is saved: a run stopped with
+        # days still pending simply fetches them again.
+        store.write_days(root, pending)
+        for d, f in pending:
+            store.record_session(root, d, "ok", len(f))
+        pending.clear()
+
     for i, day in enumerate(days, 1):
         try:
+            if pending and pending[-1][0].year != day.year:
+                flush()
             text = _retrying(lambda: nse_files.download(day, session), day)
             if text is None:
                 if settled(day, today):
                     store.record_session(root, day, "no_session", 0)
                 continue
             frame = nse_files.parse(text, day)
-            store.write_day(root, frame, day)
             quality.write_issues(root, quality.check_day(frame, day))
             if not args.skip_participants:
                 ptext = _retrying(lambda: participants.download(day, session), day)
                 if ptext is not None:
                     participants.write_day(root, participants.parse(ptext, day), day)
+            pending.append((day, frame))
+            if len(pending) >= BATCH:
+                flush()
         except Exception as exc:                       # noqa: BLE001 - report and stop
             print(f"STOPPED at {day}: {exc}\nRun again to resume from there.", file=sys.stderr)
             return 1
-        store.record_session(root, day, "ok", len(frame))
         sessions += 1
         rows += len(frame)
         if i % 25 == 0:
             print(f"  {day}: {sessions} session(s), {rows:,} rows so far", flush=True)
         time.sleep(PAUSE_SECONDS)
+    flush()
 
     if not args.skip_vix:
         frame = vix.fetch_daily()
