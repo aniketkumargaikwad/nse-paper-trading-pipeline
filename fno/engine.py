@@ -15,6 +15,13 @@ ONE SESSION, IN THIS ORDER
   5. Flat with nothing pending, and the entry condition true: choose expiry
      and strikes from today's chain, size by margin, fill at the next open.
 
+ONE MOMENT FOR ALL LEGS. Each leg's opening price is its own first trade, and
+on a gap day a thin strike's first trade can come long after (or before) the
+others': 23 Sep 2019 printed a 150-point call spread at 226. Legs filled
+together must make a price the position could actually have, so when they
+break its no-arbitrage limits (the least and most it can pay at expiry) the
+least-traded leg is moved to the limit, and the leg says so.
+
 NO PHANTOM FILLS. An entry leg whose contract did not trade in the fill
 session skips the whole entry, recorded with the reason. An EXIT cannot be
 skipped - the position has to be closed - so an untraded leg closes at its
@@ -47,6 +54,7 @@ NO_STRIKE = "no strike"
 NO_CAPITAL = "not enough capital"
 NO_TRADE = "leg did not trade"
 
+LIMIT_NOTE = "opening prints broke the position's no-arbitrage limit: moved to it"
 MOVED_EXPIRY_DAYS = 3      # weekly expiries are 7 days apart, a holiday move 1-2
 
 NOTES = (
@@ -150,6 +158,35 @@ def _flag(value: Any) -> bool:
     return bool(value) if value == value else False
 
 
+def _payoff_limits(legs: list[tuple[int, str, float]]) -> tuple[float, float]:
+    """The least and most a position (weight, type, strike per leg) can be worth at
+    expiry: today's value must lie between them. Unbounded sides are infinite."""
+    def payoff(level: float) -> float:
+        return sum(w * (max(level - k, 0.0) if typ == "CE" else max(k - level, 0.0))
+                   for w, typ, k in legs)
+
+    points = [payoff(level) for level in (0.0, *sorted({k for _, _, k in legs}))]
+    slope_above = sum(w for w, typ, _ in legs if typ == "CE")       # beyond the top strike
+    low = min(points) if slope_above >= 0 else -np.inf
+    high = max(points) if slope_above <= 0 else np.inf
+    return low, high
+
+
+def _within_limits(weights: list[int], types: list[str], strikes: list[float],
+                   prices: list[float], volumes: list[int]) -> tuple[list[float], int | None]:
+    """Prices moved, if they must, so the legs together respect the position's limits;
+    returns the prices and which leg moved (None if none did)."""
+    low, high = _payoff_limits(list(zip(weights, types, strikes)))
+    value = sum(w * p for w, p in zip(weights, prices))
+    gap = low - value if value < low else high - value if value > high else 0.0
+    if gap == 0.0 or len(prices) < 2:
+        return prices, None
+    j = min(range(len(prices)), key=lambda i: volumes[i])
+    moved = list(prices)
+    moved[j] = max(prices[j] + gap / weights[j], 0.0)
+    return moved, j
+
+
 def _plan(strategy: OptionsStrategy, market: MarketData, rows: pd.DataFrame,
           day: date, equity: float) -> _Plan | Skip:
     expiry = pick_expiry(rows, day, strategy.cycle, strategy.which)
@@ -186,18 +223,26 @@ def _plan(strategy: OptionsStrategy, market: MarketData, rows: pd.DataFrame,
 
 def _open(strategy: OptionsStrategy, plan: _Plan, underlying: str, rows: pd.DataFrame,
           day: date, charges: FnoCharges) -> Trade | Skip:
-    legs, premium, fees = [], 0.0, 0.0
+    found = []
     for leg, strike in zip(strategy.legs, plan.strikes):
         row = _contract(rows, plan.expiry, leg.type, strike)
         if not _traded(row):
             return Skip(day, NO_TRADE, f"{leg.type} {strike:g} expiring {plan.expiry} "
                                        f"did not trade on {day}")
-        units = leg.lots * plan.lot_size * plan.sets
-        price = fills.fill_price(float(row["open"]), leg.side, int(row["volume_contracts"]))
-        fee = charges.fill(Fill(day, "OPT", leg.side, price, units))
-        premium -= leg.sign * price * units
+        found.append(row)
+    units = [leg.lots * plan.lot_size * plan.sets for leg in strategy.legs]
+    volumes = [int(row["volume_contracts"]) for row in found]
+    opens, moved = _within_limits([leg.sign * u for leg, u in zip(strategy.legs, units)],
+                                  [leg.type for leg in strategy.legs], list(plan.strikes),
+                                  [float(row["open"]) for row in found], volumes)
+    legs, premium, fees = [], 0.0, 0.0
+    for i, (leg, strike) in enumerate(zip(strategy.legs, plan.strikes)):
+        price = fills.fill_price(opens[i], leg.side, volumes[i])
+        fee = charges.fill(Fill(day, "OPT", leg.side, price, units[i]))
+        premium -= leg.sign * price * units[i]
         fees += fee
-        legs.append(TradeLeg(leg.type, leg.side, strike, units, price, price))
+        note = LIMIT_NOTE if i == moved else ""
+        legs.append(TradeLeg(leg.type, leg.side, strike, units[i], price, price, note=note))
     return Trade(underlying, plan.expiry, plan.decided, day, plan.sets, plan.lot_size,
                  plan.margin_per_set, plan.equity, plan.facts, legs, premium, premium - fees, fees)
 
@@ -220,10 +265,19 @@ def _follow_moved_expiry(trade: Trade, rows: pd.DataFrame) -> None:
 
 
 def _mark(trade: Trade, rows: pd.DataFrame) -> None:
+    """The day's settlement prices - each a closing price, and a thin strike's can be
+    hours old - held to the position's no-arbitrage limits like a fill."""
+    volumes = []
     for leg in trade.legs:
         row = _contract(rows, trade.expiry, leg.type, leg.strike)
         if row is not None and row["settle"] > 0:
             leg.mark = float(row["settle"])
+        volumes.append(int(row["volume_contracts"]) if row is not None else 0)
+    marks, _ = _within_limits([leg.sign * leg.units for leg in trade.legs],
+                              [leg.type for leg in trade.legs], [leg.strike for leg in trade.legs],
+                              [leg.mark for leg in trade.legs], volumes)
+    for leg, mark in zip(trade.legs, marks):
+        leg.mark = mark
 
 
 def _exit_reason(strategy: OptionsStrategy, trade: Trade, day: date, condition: bool) -> str | None:
@@ -248,16 +302,25 @@ def _book(trade: Trade, flow: float, day: date, reason: str) -> float:
 
 
 def _close(trade: Trade, rows: pd.DataFrame, day: date, reason: str, charges: FnoCharges) -> float:
-    flow = 0.0
+    references, volumes = [], []
     for leg in trade.legs:
         row = _contract(rows, trade.expiry, leg.type, leg.strike)
-        side = "sell" if leg.side == "buy" else "buy"
         if _traded(row):
-            price = fills.fill_price(float(row["open"]), side, int(row["volume_contracts"]))
+            references.append(float(row["open"]))
+            volumes.append(int(row["volume_contracts"]))
         else:
-            reference = float(row["settle"]) if row is not None and row["settle"] > 0 else leg.mark
-            price = fills.fill_price(reference, side, 0)
+            references.append(float(row["settle"]) if row is not None and row["settle"] > 0 else leg.mark)
+            volumes.append(0)
             leg.note = "no trade at the open: closed at the settlement price, thin-market spread"
+    references, moved = _within_limits([leg.sign * leg.units for leg in trade.legs],
+                                       [leg.type for leg in trade.legs],
+                                       [leg.strike for leg in trade.legs], references, volumes)
+    flow = 0.0
+    for i, leg in enumerate(trade.legs):
+        side = "sell" if leg.side == "buy" else "buy"
+        price = fills.fill_price(references[i], side, volumes[i])
+        if i == moved:
+            leg.note = (leg.note + "; " if leg.note else "") + LIMIT_NOTE
         fee = charges.fill(Fill(day, "OPT", side, price, leg.units))
         flow += leg.sign * price * leg.units - fee
         trade.charges += fee

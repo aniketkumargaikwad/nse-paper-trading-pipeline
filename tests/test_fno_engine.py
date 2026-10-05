@@ -217,3 +217,54 @@ def test_a_held_contract_follows_nse_when_a_holiday_moves_its_expiry():
     charges = CH.fill(Fill(D2, "OPT", "sell", 99.50, units)) + CH.fill(Fill(D2, "OPT", "sell", 89.55, units))
     assert t.pnl == pytest.approx((99.50 + 89.55 - 60.0) * units - charges)
     assert "moved" in t.note
+
+
+def test_opening_prints_that_break_a_spread_s_limits_are_pulled_back_to_them():
+    """23 Sep 2019: a 150-point bear call spread was closed at the legs' first prints,
+    676 and 450 - a spread worth 226, more than its width can ever be. The least-traded
+    leg is moved to the limit: here the thin sold leg to 21,700 - 21,500 = 200 above
+    the other leg's 100, i.e. 300, then pays its (thin) spread."""
+    spread = parse("""
+version: options/1
+name: test-bear-call
+underlying: NIFTY
+mode: positional
+expiry: {cycle: weekly, which: 0}
+legs:
+  - {side: sell, type: CE, strike: {atm: 0}, lots: 1}
+  - {side: buy, type: CE, strike: {atm: 2}, lots: 1}
+exit: {stop_pct: 100}
+""")
+    gap = {(D2, E1, ATM, "CE"): {"open": 100.0, "settle": 260.0},
+           (D2, E1, 21700.0, "CE"): {"open": 30.0, "settle": 90.0},
+           (D3, E1, ATM, "CE"): {"open": 450.0, "volume_contracts": 50},
+           (D3, E1, 21700.0, "CE"): {"open": 100.0}}
+    [t] = run(spread, market(overrides=gap), start=D1, end=D4).trades
+    assert (t.exited, t.exit_reason) == (D3, "stop")
+    sold, bought = t.legs
+    assert sold.exit_price == pytest.approx(300.0 + 2 * 1.5)
+    assert bought.exit_price == pytest.approx(100.0 - 0.5)
+    assert "limit" in sold.note
+    units = t.sets * LOT
+    assert -t.premium + (sold.exit_price - bought.exit_price) * units <= 200 * units + 4 * units
+
+
+def test_a_stale_close_cannot_mark_a_spread_beyond_its_width():
+    """Marks are closing prices, and a thin strike's last trade can be hours old: a 200-point
+    call spread marked at 500 against 50 would show a loss no such spread can have."""
+    spread = parse("""
+version: options/1
+name: test-bear-call
+underlying: NIFTY
+mode: positional
+expiry: {cycle: weekly, which: 0}
+legs:
+  - {side: sell, type: CE, strike: {atm: 0}, lots: 1}
+  - {side: buy, type: CE, strike: {atm: 2}, lots: 1}
+""")
+    stale = {(D2, E1, ATM, "CE"): {"open": 100.0, "settle": 500.0, "volume_contracts": 40},
+             (D2, E1, 21700.0, "CE"): {"open": 30.0, "settle": 50.0}}
+    result = run(spread, market(overrides=stale), start=D1, end=D3)
+    [t] = result.trades
+    units = t.sets * LOT
+    assert result.equity[D2] >= CAPITAL + t.premium - t.charges - 200 * units - 1e-6
