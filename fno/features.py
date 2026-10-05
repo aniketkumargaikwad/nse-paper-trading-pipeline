@@ -74,7 +74,8 @@ def daily_table(facts: list[dict[str, Any]], *, vix: dict[date, float],
     """Facts per day plus VIX, IV rank, weekday, events and FII index-future positioning."""
     table = pd.DataFrame(facts).sort_values("trade_date").reset_index(drop=True)
     table["vix"] = table["trade_date"].map(vix)
-    table["vix_chg_pct"] = 100 * table["vix"].pct_change()
+    # Over the last known VIX when a day is missing (pandas' old default, made explicit).
+    table["vix_chg_pct"] = 100 * table["vix"].ffill().pct_change()
     table["iv_rank"], table["iv_pctile"] = iv_rank(table["atm_iv"])
     table["weekday"] = [d.weekday() for d in table["trade_date"]]
     table["event_today"] = [bool(events_on(d)) for d in table["trade_date"]]

@@ -410,3 +410,21 @@ needed code: 13 Jun 2018's participant file has no title line, and 12 Dec
 - `ohlc_invalid`, 7 rows: far-month futures on FINNIFTY, MIDCPNIFTY and
   NIFTYNXT50 that never traded. Harmless.
 - `missing_underlying`: none. NIFTY and BANKNIFTY are present every session.
+
+**Market facts:** `features/<UNDERLYING>.parquet`, one row per session, built
+by `python scripts/fno_features.py` (about 25 minutes for everything). Each
+row is computed from that day's file and earlier data only, for the nearest
+expiry with at least a day to run: `expiry`, `dte`, `spot`, `forward`,
+`atm_strike`, `atm_iv`, `straddle`, `expected_move_pct`, `pcr_oi`, `pcr_vol`,
+`max_pain`, `skew_25d`, `max_oi_call_strike`, `max_oi_put_strike`,
+`basis_pct`, `spot_source`, `vix`, `vix_chg_pct`, `iv_rank`, `iv_pctile`,
+`weekday`, `event_today`, `fii_index_fut_net`. Implied volatility comes from
+each contract's settlement price by Black-76; delta is the forward delta.
+Spot is Yahoo's daily close for NIFTY, BANKNIFTY and NIFTYNXT50, NSE's
+`underlying_price` (from 8 Jul 2024) for FINNIFTY and MIDCPNIFTY.
+
+Checked on the first build (5 Oct 2026): ATM IV against India VIX correlates
+0.909 for NIFTY and 0.918 for BANKNIFTY; max pain sits a median 0.37% from
+the index; PCR by open interest is 0.78-1.17 on half of all days; puts carry
+more volatility than calls (positive 25-delta skew) on 94% of NIFTY days and
+90% of BANKNIFTY days; ATM IV peaks at 134% (NIFTY) on 23 Mar 2020.
