@@ -366,3 +366,47 @@ ISO week, so Monday's research day misses, takes the newest `candles-*` entry
 `DATA_END` repository variable that used to name that cache is no longer read
 by anything. It never decided where a run's prices end: `research.windows`
 measures that from the candles.
+
+---
+
+## 9. F&O data
+
+Design: `docs/superpowers/specs/2026-10-02-fno-options-design.md`.
+
+**Where:** `data/fno/` locally (`FNO_ROOT` to move it), git-ignored. Step 3
+publishes the same layout to a private Cloudflare R2 bucket.
+
+| Path | What |
+|---|---|
+| `daily/<UNDERLYING>/<YEAR>.parquet` | every index option and future, end of day |
+| `daily/_sessions.csv` | the ledger: each day fetched, `ok` or `no_session` |
+| `participants/<YEAR>.parquet` | FII / DII / Pro / Client open interest |
+| `vix/daily.parquet` | India VIX from 2008 |
+| `quality/<YEAR>.csv` | issues found, never repaired |
+
+**Underlyings:** NIFTY, BANKNIFTY (since 2016); FINNIFTY (2021),
+MIDCPNIFTY (2022), NIFTYNXT50 (2024).
+
+**Fill or top up:** `python scripts/fno_daily.py` — resumable; re-run after
+any stop. A day NSE has no file for is recorded as `no_session` only once it
+is more than three days old, because NSE sometimes publishes late.
+
+**Units:** volume in contracts, open interest in units. An untraded contract
+still shows a close (the previous one): whether it traded comes from volume.
+
+**Lot sizes:** `fno/lot_sizes.yaml`, derived from futures turnover before
+8 Jul 2024 and checked against NSE circulars; NSE's own column after. The
+derivation agreed with NSE's own lot on all 2,780 days where both exist.
+
+**The first fill (5 Oct 2026):** 2,663 sessions from 1 Jan 2016 to 1 Oct
+2026, 12.5 million rows (NIFTY 5.7 M, BANKNIFTY 3.5 M). Two NSE file quirks
+needed code: 13 Jun 2018's participant file has no title line, and 12 Dec
+2019's writes the FII row Indian-style ("10,02,064.00"). The quality report:
+
+- `settle_missing`, ~80,000 contracts over the decade: almost all are options
+  on their own expiry day, which the old-format file gives a settlement price
+  of 0. Expiry pay-outs therefore come from the expiring future's settlement
+  or the index close, never from the option row.
+- `ohlc_invalid`, 7 rows: far-month futures on FINNIFTY, MIDCPNIFTY and
+  NIFTYNXT50 that never traded. Harmless.
+- `missing_underlying`: none. NIFTY and BANKNIFTY are present every session.
