@@ -170,3 +170,23 @@ exit: {time: "15:15"}
 """)
     with pytest.raises(StrategyError, match="minute data"):
         run(s, market(), start=D1, end=D4)
+
+
+def test_the_lot_is_the_traded_expiry_s_own_when_expiries_differ():
+    """Dec 2024: new weeklies carried NIFTY's new lot of 75 while older contracts kept 25.
+    The lot must come from the expiry traded, not from whichever lot most rows carry."""
+    from datetime import date
+
+    from fno.contracts import LotSizes
+    from fno.events import Events
+    from fno.market import MarketData
+    from fno_synthetic import daily, spot
+
+    rows = daily(FILL)
+    rows.loc[rows["expiry"] == E1, "lot_size"] = 75.0
+    rows.loc[rows["expiry"] != E1, "lot_size"] = 25.0        # E2 and the monthly: the majority
+    m = MarketData.from_frames("NIFTY", daily=rows, facts=facts(), spot=spot(),
+                               lots=LotSizes({"NIFTY": ((date(2016, 1, 1), 50),)}), events=Events(()))
+    [t] = run(straddle(), m, start=D1, end=D4).trades
+    assert t.lot_size == 75
+    assert all(leg.units == t.sets * 75 for leg in t.legs)

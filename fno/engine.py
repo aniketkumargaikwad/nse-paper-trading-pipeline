@@ -158,7 +158,8 @@ def _plan(strategy: OptionsStrategy, market: MarketData, rows: pd.DataFrame,
         strikes = pick_strikes(snap, strategy.legs)
     except NoStrike as exc:
         return Skip(day, NO_STRIKE, str(exc))
-    lot = market.lot_size(day, rows)
+    # The traded expiry's own lot: while a revision rolls in, expiries differ.
+    lot = market.lot_size(day, rows[rows["expiry"] == expiry])
     known_iv = snap.rows["iv"].dropna()
     fallback_iv = float(np.median(known_iv)) if len(known_iv) else 0.2
     legs = []
