@@ -59,3 +59,21 @@ def test_a_file_without_the_title_line_is_read_too():
     frame = participants.parse(no_title, DAY)
     assert list(frame["client_type"]) == ["Client", "DII", "FII", "Pro", "TOTAL"]
     assert frame[frame["client_type"] == "FII"].iloc[0]["future_index_long"] == 29394
+
+
+def test_indian_comma_grouping_is_read_as_a_whole_number():
+    """12 Dec 2019: the FII row came as "10,02,064.00" while the others were plain."""
+    fii = "FII,29394,312264,3360170,2870621,466513,1032048,932096,363923,92210,198506,179833,71258,5178842,4729996"
+    grouped = ('FII,"29,394.00","3,12,264.00","33,60,170.00",2870621,466513,1032048,932096,363923,'
+               "92210,198506,179833,71258,5178842,4729996")
+    frame = participants.parse(FILE.replace(fii, grouped), DAY)
+    row = frame[frame["client_type"] == "FII"].iloc[0]
+    assert row["future_index_long"] == 29394
+    assert row["future_index_short"] == 312264
+    assert row["future_stock_long"] == 3360170
+
+
+def test_a_fractional_contract_count_is_refused():
+    fii = "FII,29394,"
+    with pytest.raises(participants.ParticipantFileError, match="whole"):
+        participants.parse(FILE.replace(fii, 'FII,"29,394.50",'), DAY)

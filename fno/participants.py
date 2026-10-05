@@ -64,8 +64,16 @@ def parse(text: str, day: date) -> pd.DataFrame:
     rows = raw[raw["client_type"].isin(CLIENT_TYPES)].reset_index(drop=True)
     out = pd.DataFrame({"trade_date": [day] * len(rows), "client_type": rows["client_type"]})
     for col in NUMBERS:
-        out[col] = pd.to_numeric(rows[col].str.strip(), errors="raise").astype("int64")
+        out[col] = _count(rows[col], day, col)
     return out
+
+
+def _count(col: pd.Series, day: date, name: str) -> pd.Series:
+    """Contract counts, sometimes written Indian-style ("10,02,064.00", 12 Dec 2019)."""
+    values = pd.to_numeric(col.str.strip().str.replace(",", "", regex=False), errors="raise")
+    if (values % 1 != 0).any():
+        raise ParticipantFileError(f"{day}: {name} is not a whole number of contracts")
+    return values.astype("int64")
 
 
 def path_for(root: Path, year: int) -> Path:
