@@ -54,3 +54,25 @@ def test_a_naked_straddle_blocks_scan_loss_plus_exposure_more_when_vix_is_high()
     # +-6% is 1,290 points: one leg is that far in the money, both premiums were collected
     assert calm - exposure == pytest.approx((0.06 * F - premium) * 50, rel=0.05)
     assert fearful > calm
+
+
+def test_a_sold_option_more_than_10pct_out_of_the_money_pays_3pct_exposure():
+    from fno.margin import scan_loss
+
+    for strike, pct in ((21000, 0.02), (19000, 0.03)):           # 2.3% and 11.6% below
+        legs = [leg(-1, "PE", strike)]
+        scan = scan_loss(legs, forward=F, years=T, rate=R, vix=14.0)
+        assert margin(legs) == pytest.approx(scan + pct * F * 50)
+
+
+def test_expiry_day_adds_2pct_on_sold_options_from_20_nov_2024():
+    from datetime import date
+
+    legs = [leg(-1, "CE", 21500), leg(-1, "PE", 21500)]
+    plain = estimate(legs, forward=F, years=T, rate=R, vix=14.0)
+    on_expiry = estimate(legs, forward=F, years=T, rate=R, vix=14.0,
+                         fill_day=date(2024, 11, 21), expiry=date(2024, 11, 21))
+    before_rule = estimate(legs, forward=F, years=T, rate=R, vix=14.0,
+                           fill_day=date(2024, 11, 14), expiry=date(2024, 11, 14))
+    assert on_expiry - plain == pytest.approx(0.02 * F * 100)
+    assert before_rule == pytest.approx(plain)

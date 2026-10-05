@@ -172,7 +172,8 @@ def _plan(strategy: OptionsStrategy, market: MarketData, rows: pd.DataFrame,
         legs.append(margin.MarginLeg(leg.sign, leg.type == "CE", strike, leg.lots * lot, iv,
                                      float(row["settle"])))
     vix = float(market.fact(day, "vix"))
-    per_set = margin.estimate(legs, forward=snap.forward, years=snap.dte / 365, rate=snap.rate, vix=vix)
+    per_set = margin.estimate(legs, forward=snap.forward, years=snap.dte / 365, rate=snap.rate, vix=vix,
+                              fill_day=market.next_session(day), expiry=expiry)
     sets = account.sets_affordable(equity, per_set, strategy.max_margin_pct)
     if sets == 0:
         return Skip(day, NO_CAPITAL, f"one set needs Rs {per_set:,.0f} of margin; Rs {equity:,.0f} "
