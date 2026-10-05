@@ -86,7 +86,9 @@ class MarketData:
         self._position = {d: i for i, d in enumerate(self.sessions_all)}
         self._facts_by_day = self.facts.set_index("trade_date")
         self.spot = spot.sort_values("trade_date").reset_index(drop=True)
-        self._closes = dict(zip(self.spot["trade_date"], self.spot["close"].astype(float)))
+        # To the paisa: Yahoo serves single precision (17610.40 arrives as 17610.400390625)
+        # and a weekly expiry pays out on this number.
+        self._closes = dict(zip(self.spot["trade_date"], self.spot["close"].astype(float).round(2)))
         self.lots = lots
         self.calendar = calendar
         self.events = events

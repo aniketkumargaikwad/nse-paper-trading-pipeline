@@ -91,3 +91,11 @@ def test_the_training_window_seals_the_last_365_days():
     start, end = training_window(sessions)
     assert start == date(2016, 1, 1)
     assert end == sessions[-1] - timedelta(days=365)
+
+
+def test_index_closes_are_to_the_paisa():
+    """Yahoo serves 17610.40 as 17610.400390625 (single precision); a pay-out reads the index."""
+    noisy = spot().assign(close=[21500.0, 21500.0, 21500.0, 17610.400390625, 21500.0, 21500.0])
+    m = market(spot_frame=noisy)
+    assert m.spot_close(D4) == 17610.40
+    assert m.final_settlement(D4, m.rows(D4)) == 17610.40
