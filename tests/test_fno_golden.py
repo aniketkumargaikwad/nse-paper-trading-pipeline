@@ -29,7 +29,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fno import atlas  # noqa: E402
 from fno.contracts import LotSizes  # noqa: E402
 from fno.engine import run  # noqa: E402
 from fno.events import Events  # noqa: E402
@@ -37,6 +36,20 @@ from fno.market import MarketData  # noqa: E402
 from fno.strategy import parse  # noqa: E402
 
 HERE = Path(__file__).resolve().parent / "fixtures" / "fno_golden"
+# The atlas's short straddle as it stood when this was worked by hand: all the
+# balance in margin. Spelt out so a change to the atlas cannot move it.
+GOLDEN = """
+version: options/1
+name: golden-short-straddle
+underlying: NIFTY
+mode: positional
+expiry: {cycle: weekly, which: 0}
+legs:
+  - {side: sell, type: CE, strike: {atm: 0}, lots: 1}
+  - {side: sell, type: PE, strike: {atm: 0}, lots: 1}
+exit: {target_pct: 50, stop_pct: 100}
+sizing: {max_margin_pct: 100}
+"""
 
 
 def golden():
@@ -44,7 +57,7 @@ def golden():
         "NIFTY", daily=pd.read_parquet(HERE / "daily.parquet"),
         facts=pd.read_parquet(HERE / "facts.parquet"), spot=pd.read_parquet(HERE / "spot.parquet"),
         lots=LotSizes({"NIFTY": ((date(2016, 1, 1), 50),)}), events=Events(()))
-    strategy = parse(atlas.document("short-straddle", "NIFTY"))
+    strategy = parse(GOLDEN)
     return run(strategy, market, start=date(2023, 2, 1), end=date(2023, 3, 31))
 
 
