@@ -190,3 +190,30 @@ def test_the_lot_is_the_traded_expiry_s_own_when_expiries_differ():
     [t] = run(straddle(), m, start=D1, end=D4).trades
     assert t.lot_size == 75
     assert all(leg.units == t.sets * 75 for leg in t.legs)
+
+
+def test_a_held_contract_follows_nse_when_a_holiday_moves_its_expiry():
+    """29 Jun 2023 was a holiday: NSE relabelled every contract expiring then as 28 Jun
+    from 28 Jun on. Here the 4 Jan weekly is relabelled 3 Jan from D3 - the position
+    must follow it and settle on D3 at that day's index close, 21,560."""
+    from datetime import date
+
+    from fno.contracts import LotSizes
+    from fno.events import Events
+    from fno.market import MarketData
+    from fno_synthetic import daily, spot
+
+    rows = daily(FILL)
+    moved = (rows["trade_date"] >= D3) & (rows["expiry"] == E1)
+    rows.loc[moved, "expiry"] = D3
+    rows.loc[moved & (rows["trade_date"] == D3), "settle"] = 0.0
+    rows = rows[~((rows["trade_date"] == D4) & (rows["expiry"] == D3))]
+    closes = spot().assign(close=[21500.0, 21500.0, 21560.0, 21500.0, 21500.0, 21500.0])
+    m = MarketData.from_frames("NIFTY", daily=rows, facts=facts(), spot=closes,
+                               lots=LotSizes({"NIFTY": ((date(2016, 1, 1), LOT),)}), events=Events(()))
+    [t] = run(straddle(), m, start=D1, end=D3).trades
+    assert (t.expiry, t.exited, t.exit_reason) == (D3, D3, "expiry")
+    units = t.sets * LOT
+    charges = CH.fill(Fill(D2, "OPT", "sell", 99.50, units)) + CH.fill(Fill(D2, "OPT", "sell", 89.55, units))
+    assert t.pnl == pytest.approx((99.50 + 89.55 - 60.0) * units - charges)
+    assert "moved" in t.note

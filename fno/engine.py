@@ -47,6 +47,8 @@ NO_STRIKE = "no strike"
 NO_CAPITAL = "not enough capital"
 NO_TRADE = "leg did not trade"
 
+MOVED_EXPIRY_DAYS = 3      # weekly expiries are 7 days apart, a holiday move 1-2
+
 NOTES = (
     "Daily data: decisions at the close, fills at the next session's open. Stops and "
     "targets are checked on closing prices only - a move through a stop inside a day "
@@ -92,6 +94,7 @@ class Trade:
     exited: date | None = None
     exit_reason: str = "open at end"
     pnl: float = 0.0
+    note: str = ""
 
     def value(self) -> float:
         """The open legs at their marks: + what bought legs are worth, - what sold ones cost back."""
@@ -198,6 +201,23 @@ def _open(strategy: OptionsStrategy, plan: _Plan, underlying: str, rows: pd.Data
                  plan.margin_per_set, plan.equity, plan.facts, legs, premium, premium - fees, fees)
 
 
+def _follow_moved_expiry(trade: Trade, rows: pd.DataFrame) -> None:
+    """When an expiry falls on a holiday NSE moves it, and from some day on its file
+    lists the same contracts under the new date (NIFTY 29 Jun 2023 became 28 Jun from
+    28 Jun; ten such moves on NIFTY and BANKNIFTY since 2016). A held position follows:
+    if its expiry is no longer listed but one expiry within MOVED_EXPIRY_DAYS is, and it
+    lists the position's contracts, that is the same expiry under its new date."""
+    options = rows[rows["instrument"] == "OPT"]
+    listed = set(options["expiry"])
+    if not listed or trade.expiry in listed:
+        return
+    near = [e for e in listed if 0 < abs((e - trade.expiry).days) <= MOVED_EXPIRY_DAYS]
+    if len(near) != 1 or any(_contract(rows, near[0], leg.type, leg.strike) is None for leg in trade.legs):
+        return
+    trade.note = f"expiry moved by NSE from {trade.expiry} to {near[0]}"
+    trade.expiry = near[0]
+
+
 def _mark(trade: Trade, rows: pd.DataFrame) -> None:
     for leg in trade.legs:
         row = _contract(rows, trade.expiry, leg.type, leg.strike)
@@ -278,6 +298,8 @@ def run(strategy: OptionsStrategy, market: MarketData, *, start: date, end: date
     equity: dict[date, float] = {}
     for i, day in enumerate(sessions):
         rows = market.rows(day)
+        if trade is not None:
+            _follow_moved_expiry(trade, rows)
         if pending is not None:
             kind, payload = pending
             pending = None
