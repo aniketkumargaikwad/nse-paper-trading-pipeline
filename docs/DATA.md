@@ -428,3 +428,16 @@ Checked on the first build (5 Oct 2026): ATM IV against India VIX correlates
 the index; PCR by open interest is 0.78-1.17 on half of all days; puts carry
 more volatility than calls (positive 25-delta skew) on 94% of NIFTY days and
 90% of BANKNIFTY days; ATM IV peaks at 134% (NIFTY) on 23 Mar 2020.
+
+**Options backtests:** `python scripts/fno_backtest.py strategy.yaml` runs one
+strategy (format: `fno/strategy.py`, design §3) on the daily data and prints
+its report; `--json` saves it. `python scripts/fno_atlas.py` measures the
+eight classic strategies on NIFTY and BANKNIFTY and writes
+`data/fno/atlas/results.json` (results: `docs/research/2026-10-06-fno-atlas.md`).
+Both run the training years by default: the last 365 days (the exam year)
+are cut out at load and never read. Daily timing: decide at the close, fill
+at the next open, stops seen on closing prices only. Margin is a SPAN-style
+estimate from NSE's rules (`fno/margin.py`), not yet checked against a
+broker. Legs filled or marked together are held to the position's
+no-arbitrage limits, because a thin strike's opening or closing trade can be
+far from the others' moment (23 Sep 2019).
