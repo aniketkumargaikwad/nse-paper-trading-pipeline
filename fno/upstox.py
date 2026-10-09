@@ -113,7 +113,9 @@ class UpstoxClient:
                 payload = response.json()
             except ValueError:
                 payload = {}
-            errors = payload.get("errors") or [] if isinstance(payload, dict) else []
+            if not isinstance(payload, dict):
+                payload = {}
+            errors = payload.get("errors") or []
             codes = {e.get("errorCode") for e in errors if isinstance(e, dict)}
             if PLUS_REQUIRED in codes:
                 raise UpstoxPlusRequired(f"Upstox says {doing} needs an Upstox Plus subscription "
