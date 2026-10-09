@@ -60,9 +60,9 @@ write those steps then. Nothing to do about it now.
 3. Subscribe (₹499 + GST a month; Dhan waives it in months with 25 or more
    trades, which this tool will not make).
 4. Nothing new to save. The tool already uses your existing Dhan details from
-   your `.env` file (`DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET`). If you
-   have changed your Dhan PIN or reset its authenticator since August, tell
-   me and we will update them.
+   your `.env` file (`DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET`).
+   Checked on 9 Oct 2026: your Dhan login still works; Dhan refused the data
+   only because the plan is "FREE" — so subscribing is the only step here.
 
 ---
 
@@ -155,11 +155,37 @@ one viewing the public repository can see them.
 
 ## 5. Then tell me "setup done"
 
-I will run a check that tries each connection and prints only "works" or
-"fails, and why" — never the values. Then I start building step 3: the
-Upstox and Dhan connections, the minute-data download, and the daily top-up.
+Everything that needs no key is already built. When you say "setup done" I
+will, in this order:
 
-### Once a year, or when something changes
+1. Run `python scripts/fno_check_setup.py`. It tries each connection and
+   prints only "works" or "fails, and why" — never a value. The Upstox line
+   also answers the open question in 1b.
+2. Copy the F&O data already on your PC (about 300 MB, 2016 to now) into the
+   R2 folder: `python scripts/fno_r2.py push`.
+3. Run the first minute download from your PC: `python scripts/fno_minute.py`.
+   It prints how far back Upstox serves expired options (its own page says
+   six months; we will know for certain) and fills the NIFTY, BANKNIFTY and
+   India VIX minutes from Dhan back to April 2017. Then push again.
+4. Tell you what it found, and plan step 3b — testing intraday strategies —
+   around how much option history there really is.
+
+## 6. Switching on the daily GitHub job
+
+GitHub runs scheduled jobs only from the `main` branch, and all the F&O work
+is still on its own branch (`feat/fno-options`). When you are ready, tell me
+**"merge the F&O branch"** and I will open the pull request and merge it.
+From then on:
+
+- **fno-daily** runs every weekday at about 7 pm: the day's NSE file, any
+  option expiry that has just ended (it must be saved within Upstox's
+  window or it is gone), the index minutes, all published to R2. Nothing to
+  do; GitHub emails you if a run fails.
+- **fno-backfill** runs only when you start it: GitHub → **Actions** →
+  **fno-backfill** → **Run workflow**. You will not normally need it — the
+  first fill runs from your PC in step 5.
+
+## 7. Once a year, or when something changes
 
 - **Upstox token** expires a year after you made it. Make a new one
   (section 1b), then replace `UPSTOX_ANALYTICS_TOKEN` in `.env` and on GitHub
@@ -168,7 +194,7 @@ Upstox and Dhan connections, the minute-data download, and the daily top-up.
 - **Cloudflare** needs nothing. If you ever want to be emailed about charges,
   Cloudflare's **Notifications** page can send a usage-based billing alert.
 
-### If something goes wrong
+## 8. If something goes wrong
 
 - *Upstox Plus not visible*: Plus may be offered only on some account types;
   tell me what the app shows and we will look at it together.

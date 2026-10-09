@@ -441,3 +441,28 @@ estimate from NSE's rules (`fno/margin.py`), not yet checked against a
 broker. Legs filled or marked together are held to the position's
 no-arbitrage limits, because a thin strike's opening or closing trade can be
 far from the others' moment (23 Sep 2019).
+
+**Minute data (step 3a, built 9 Oct 2026, first fill waits on the owner's
+keys - `docs/FNO_SETUP.md`):**
+
+| Path | What |
+|---|---|
+| `minute/<UNDERLYING>/<EXPIRY>.parquet` | expired NIFTY / BANKNIFTY options, 1-minute, from Upstox |
+| `minute/_expiries.csv` | the ledger: each expiry fetched and what it held |
+| `index_minute/<NAME>/<YEAR>.parquet` | NIFTY, BANKNIFTY, INDIAVIX, 1-minute, from Dhan, from 3 Apr 2017 |
+
+Which options: every strike within 5% of the index's close on any of the
+expiry's final 10 sessions (weekly) or 20 (monthly), for those sessions.
+Fetched once an expiry has ended, through Upstox's expired-instrument API
+(Upstox Plus). Upstox's page says it serves "up to six months of historical
+expiries"; the first fill prints what it really serves. If it is six months,
+history builds forward from the first fill, one expiry at a time - which is
+why the daily job must keep running. Checked on each write: a contract's
+last minute close against NSE's close that day (beyond Rs 1 or 2%), and a
+contract NSE says traded with no minutes; both go to `quality/<YEAR>.csv`.
+
+**R2:** the whole store mirrors to a private Cloudflare R2 bucket under
+`fno/` - `python scripts/fno_r2.py push` / `pull`, compared by size and MD5,
+never deleting. **Jobs:** `fno-daily` (weekdays 19:07 IST: NSE file, new
+expiries, index minutes, publish) and `fno-backfill` (by hand). Both run only
+from `main`. **Keys:** `python scripts/fno_check_setup.py` says which work.
