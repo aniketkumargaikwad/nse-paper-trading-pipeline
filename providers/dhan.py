@@ -196,13 +196,24 @@ class DhanProvider:
                 "resampling and must not be fetched."
             )
 
-        security_id, segment, instrument_type = self._instruments.resolve(symbol)
-        endpoint = HISTORICAL_ENDPOINT if timeframe == "day" else INTRADAY_ENDPOINT
+        interval = None if timeframe == "day" else TIMEFRAME_TO_DHAN_INTERVAL[timeframe]
+        return self._fetch_paged(symbol, timeframe, interval, from_utc, to_utc)
 
-        page_days = (
-            MAX_DAYS_PER_DAILY_REQUEST if timeframe == "day"
-            else MAX_DAYS_PER_REQUEST
-        )
+    def fetch_minutes(self, symbol: str, from_utc: datetime, to_utc: datetime) -> pd.DataFrame:
+        """1-minute candles for [from_utc, to_utc], paged at 90 days.
+
+        For the F&O engine's index series only (fno.index_minutes). The stock
+        store never asks for these: it stores 5-minute and derives the rest.
+        """
+        return self._fetch_paged(symbol, "1m", TIMEFRAME_TO_DHAN_INTERVAL["1m"], from_utc, to_utc)
+
+    def _fetch_paged(self, symbol: str, label: str, interval: str | None,
+                     from_utc: datetime, to_utc: datetime) -> pd.DataFrame:
+        """Daily candles when `interval` is None, intraday otherwise, paged and joined."""
+        security_id, segment, instrument_type = self._instruments.resolve(symbol)
+        daily = interval is None
+        endpoint = HISTORICAL_ENDPOINT if daily else INTRADAY_ENDPOINT
+        page_days = MAX_DAYS_PER_DAILY_REQUEST if daily else MAX_DAYS_PER_REQUEST
 
         frames: list[pd.DataFrame] = []
         for i, (window_from, window_to) in enumerate(
@@ -218,18 +229,18 @@ class DhanProvider:
                 # never use it, but the API expects the field.
                 "oi": False,
             }
-            if timeframe == "day":
+            if daily:
                 body["expiryCode"] = 0
                 body["fromDate"] = window_from.astimezone(IST).strftime("%Y-%m-%d")
                 body["toDate"] = window_to.astimezone(IST).strftime("%Y-%m-%d")
             else:
-                body["interval"] = TIMEFRAME_TO_DHAN_INTERVAL[timeframe]
+                body["interval"] = interval
                 # Intraday windows are datetime-precise, unlike daily.
                 body["fromDate"] = window_from.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
                 body["toDate"] = window_to.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
 
             payload = self._post(
-                endpoint, body, f"fetching {timeframe} candles for {symbol}"
+                endpoint, body, f"fetching {label} candles for {symbol}"
             )
             frames.append(parse_candle_payload(payload))
 
