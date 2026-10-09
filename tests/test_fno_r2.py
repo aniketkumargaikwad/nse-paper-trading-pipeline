@@ -79,9 +79,11 @@ def test_pull_fetches_missing_and_changed_files_within_the_prefixes(tmp_path):
     assert r2.pull(s3, "b", tmp_path, ["daily/_sessions.csv", "vix/"]) == []
 
 
-def test_the_daily_job_reads_this_year_and_last_year_only_in_january():
+def test_the_daily_job_reads_this_year_and_last_year_only_in_january_and_february():
     june = r2.daily_job_prefixes(date(2026, 6, 15))
     assert "daily/NIFTY/2026.parquet" in june and "daily/NIFTY/2025.parquet" not in june
     assert {"daily/_sessions.csv", "minute/_expiries.csv", "vix/", "spot/",
             "index_minute/INDIAVIX/2026.parquet"} <= set(june)
     assert "participants/2025.parquet" in r2.daily_job_prefixes(date(2026, 1, 5))
+    assert "daily/BANKNIFTY/2025.parquet" in r2.daily_job_prefixes(date(2026, 2, 20))
+    assert "daily/BANKNIFTY/2025.parquet" not in r2.daily_job_prefixes(date(2026, 3, 2))

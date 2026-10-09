@@ -1,0 +1,67 @@
+# The F&O store's weekday top-up, on GitHub's machines, with the laptop off.
+#
+# Triggers are `schedule` and `workflow_dispatch` ONLY. Never add
+# pull_request or pull_request_target: this repository is public, and those
+# would let an outside contribution run with the secrets.
+#
+# Every weekday evening: fetch what the run reads from R2, add the day's NSE
+# file / participant OI / India VIX, every expired option expiry not yet
+# stored (Upstox serves about six months - an expiry not saved in time is
+# gone), the index minutes, then publish back to R2. Design 2026-10-02 sec 2.6.
+name: fno-daily
+
+on:
+  schedule:
+    # 13:37 UTC = 19:07 IST, after NSE publishes. Off the hour on purpose:
+    # GitHub's scheduler delays or drops the busy minutes (see research.yml).
+    - cron: "37 13 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: fno-data           # shared with fno-backfill: one writer at a time
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  day:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      FNO_ROOT: data/fno
+      UPSTOX_ANALYTICS_TOKEN: ${{ secrets.UPSTOX_ANALYTICS_TOKEN }}
+      DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+      DHAN_PIN: ${{ secrets.DHAN_PIN }}
+      DHAN_TOTP_SECRET: ${{ secrets.DHAN_TOTP_SECRET }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Fetch what today's run reads
+        run: python scripts/fno_r2.py pull --daily-job
+
+      - name: NSE files, participant OI, India VIX (the last two weeks, missing days only)
+        run: python scripts/fno_daily.py --from "$(date -u -d '14 days ago' +%F)"
+
+      - name: Minute data - expired options and the indexes
+        run: python scripts/fno_minute.py
+
+      # Publish whatever the run got, even if a later step failed: a day's NSE
+      # file is worth keeping when Upstox was down.
+      - name: Publish to R2
+        if: always()
+        run: python scripts/fno_r2.py push

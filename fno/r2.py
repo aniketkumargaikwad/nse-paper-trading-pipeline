@@ -129,9 +129,10 @@ def pull(s3: Any, bucket: str, root: Path, prefixes: Iterable[str] = ("",)) -> l
 
 def daily_job_prefixes(today: date) -> list[str]:
     """What the weekday job reads and appends to: this year's files (and last year's
-    in January, when NSE's late files and the minute window can reach back), the
-    ledgers, VIX and the index closes - not the whole 3 GB store."""
-    years = [today.year - 1, today.year] if today.month == 1 else [today.year]
+    in January and February - a monthly expiry's 20-session window and its 45-day
+    check can reach back into December), the ledgers, VIX and the index closes -
+    not the whole 3 GB store."""
+    years = [today.year - 1, today.year] if today.month <= 2 else [today.year]
     out = ["daily/_sessions.csv", "minute/_expiries.csv", "vix/", "spot/"]
     for y in years:
         out += [f"daily/{u}/{y}.parquet" for u in INDEX_UNDERLYINGS]
