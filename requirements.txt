@@ -31,6 +31,10 @@ pyotp==2.9.0
 # crafted redirects — a real risk for a client that carries API credentials.
 requests==2.32.4
 
+# Cloudflare R2 (the F&O store, design 2026-10-02 sec 2.2) speaks Amazon's S3
+# protocol; boto3 is the standard client for it.
+boto3==1.43.110
+
 # Supabase Python client — the only persistent state store.
 supabase==2.15.0
 
