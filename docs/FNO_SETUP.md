@@ -15,6 +15,16 @@ email or a file in this repository: the repository is public.
 Keep a note open (a password manager is best) to collect five values as you
 go. Each is marked **► save this**.
 
+**Status, 14 Oct 2026:**
+
+| Part | Status |
+|---|---|
+| 1. Upstox | **Waiting** — Upstox still shows "account opening in progress" (see 1a) |
+| 2. Dhan | **Done** — data plan renewed; index minutes downloaded (2017 / 2021 onward) |
+| 3. Cloudflare R2 | **Done** — bucket works; the F&O store (about 160 MB) is in it |
+| 4a. `.env` | **Done** for R2; `UPSTOX_ANALYTICS_TOKEN` comes later |
+| 4b. GitHub secrets | R2 **done**; still to add: `DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET`, and later `UPSTOX_ANALYTICS_TOKEN` |
+
 ---
 
 ## 1. Upstox
@@ -27,6 +37,15 @@ go. Each is marked **► save this**.
    profile/account menu and look for **Upstox Plus** or **Plans**, then
    activate it. The expired-options data is only available on Plus.
    - You do not have to trade on Upstox. The tool only reads prices.
+
+**If it says "account opening in progress" for days** (it did for you, 5+
+days in Oct 2026): Upstox says verification takes up to 4 working days. When
+it takes longer, the usual causes are an unfinished form step (e-sign, bank
+proof, nominee) or a rejected document — most often a name or signature that
+differs between PAN, Aadhaar and bank. Check your email and spam for a
+request from Upstox; then raise a ticket at
+[help.upstox.com/support/tickets/new](https://help.upstox.com/support/tickets/new)
+and keep the ticket ID.
 
 ### 1b. The analytics token (a one-year read-only key)
 

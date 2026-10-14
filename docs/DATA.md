@@ -449,7 +449,7 @@ keys - `docs/FNO_SETUP.md`):**
 |---|---|
 | `minute/<UNDERLYING>/<EXPIRY>.parquet` | expired NIFTY / BANKNIFTY options, 1-minute, from Upstox |
 | `minute/_expiries.csv` | the ledger: each expiry fetched and what it held |
-| `index_minute/<NAME>/<YEAR>.parquet` | NIFTY, BANKNIFTY, INDIAVIX, 1-minute, from Dhan, from 3 Apr 2017 |
+| `index_minute/<NAME>/<YEAR>.parquet` | NIFTY (from 3 Apr 2017), BANKNIFTY and INDIAVIX (from 4 Aug 2021), 1-minute, from Dhan |
 
 Which options: every strike within 5% of the index's close on any of the
 expiry's final 10 sessions (weekly) or 20 (monthly), for those sessions.
@@ -460,6 +460,8 @@ history builds forward from the first fill, one expiry at a time - which is
 why the daily job must keep running. Checked on each write: a contract's
 last minute close against NSE's close that day (beyond Rs 1 or 2%), and a
 contract NSE says traded with no minutes; both go to `quality/<YEAR>.csv`.
+
+**First index fill (14 Oct 2026):** NIFTY 881,552 minutes on 2,354 sessions, BANKNIFTY 476,393 and INDIA VIX 476,826 on 1,284; 2,338 / 1,240 / 1,227 of those days are a full 375 minutes. Dhan's older days needed cleaning, and the fill drops: candles outside 09:15-15:29 (2021-22 days run 05:40-18:45 with the previous close repeated before the open, the pre-open auction and the close repeated after), candles off the whole minute (Aug 2021), and candles on days NSE had no session (Saturday mock-trading sessions, 8 Jan 2022 and others). Diwali Muhurat sessions are dropped with them. Timestamps verified: a full session reads 09:15 to 15:29 IST.
 
 **R2:** the whole store mirrors to a private Cloudflare R2 bucket under
 `fno/` - `python scripts/fno_r2.py push` / `pull`, compared by size and MD5,
