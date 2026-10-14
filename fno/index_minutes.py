@@ -1,18 +1,18 @@
 """NIFTY, BANKNIFTY and India VIX minute by minute, from Dhan (design §2.1).
 
 Dhan's ids from its scrip master (checked 9 Oct 2026): NIFTY 13, BANKNIFTY 25,
-INDIA VIX 21, all on the IDX_I segment. Dhan's intraday archive starts on
-3 Apr 2017 (measured for stocks on 22 Aug 2026; the first index fill states
-what it found).
+INDIA VIX 21, all on the IDX_I segment. Measured 14 Oct 2026: NIFTY minutes
+go back to 2017 (Dhan's intraday archive starts 3 Apr 2017), BANKNIFTY and
+INDIA VIX only to 4 Aug 2021. A fill walks forward from 2017 either way; the
+empty years cost one request per 90 days.
 
 Stored as data/fno/index_minute/<NAME>/<YEAR>.parquet with columns ts (IST),
 open, high, low, close, volume. Each 90-day chunk is stored as it arrives, so
 a stopped fill carries on; a later fill starts again from the last stored
 day, because a run during market hours stores a partial day.
 
-Dhan's timestamps are read as true UTC instants (providers/dhan.py says why
-that is unverified); the first fill prints the first and last minute of a day
-so 09:15 and 15:29 can be checked by eye.
+Dhan's timestamps are true UTC instants: verified 14 Oct 2026, a full session
+reads 09:15 to 15:29 IST, 375 minutes, on NIFTY and INDIA VIX.
 """
 
 from __future__ import annotations
@@ -33,6 +33,8 @@ INDEXES = {"NIFTY": ("13", "IDX_I", "INDEX"), "BANKNIFTY": ("25", "IDX_I", "INDE
 COLUMNS = ("ts", "open", "high", "low", "close", "volume")
 ARCHIVE_BEGINS = date(2017, 4, 3)
 CHUNK_DAYS = 90
+SESSION_FIRST_MINUTE = time(9, 15)
+SESSION_LAST_MINUTE = time(15, 29)
 
 
 class IndexResolver:
@@ -70,10 +72,20 @@ def read(root: Path, name: str, start: date, end: date) -> pd.DataFrame:
 
 
 def _to_frame(canonical: pd.DataFrame) -> pd.DataFrame:
+    """Dhan's candles as stored: IST timestamps, the trading session only.
+
+    Some days (2021-22, at least) come back 05:40 to 18:45 - the previous close
+    repeated before the open, the 09:00 pre-open auction, the close repeated
+    after (checked on NIFTY 1 Oct 2021: the 375 session minutes match the day's
+    high and low, the rest is filler). Left in, they would fake moves and stops.
+    A Muhurat evening session falls outside too and is dropped with them.
+    """
     frame = canonical.reset_index()
     frame = frame.rename(columns={frame.columns[0]: "ts"})
     frame["ts"] = pd.to_datetime(frame["ts"], utc=True).dt.tz_convert(IST)
-    return frame[list(COLUMNS)]
+    clock = frame["ts"].dt.time
+    frame = frame[(clock >= SESSION_FIRST_MINUTE) & (clock <= SESSION_LAST_MINUTE)]
+    return frame[list(COLUMNS)].reset_index(drop=True)
 
 
 def _store(root: Path, name: str, frame: pd.DataFrame) -> None:

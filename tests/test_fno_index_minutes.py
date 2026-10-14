@@ -86,3 +86,20 @@ def test_an_unknown_index_is_refused():
     from providers.base import ProviderError
     with pytest.raises(ProviderError, match="FINNIFTY"):
         index_minutes.IndexResolver().resolve("FINNIFTY")
+
+
+def test_only_the_trading_session_is_kept(tmp_path):
+    """Dhan's 2021-22 index days run 05:40-18:45 (785 candles): the previous close
+    repeated before the open, the 09:00 pre-open auction, the close repeated after.
+    Only 09:15-15:29 is the market."""
+    stamps = ["05:40", "09:00", "09:14", "09:15", "12:00", "15:29", "15:30", "18:45"]
+    idx = pd.DatetimeIndex([pd.Timestamp(f"2021-10-01 {s}", tz=index_minutes.IST) for s in stamps]).tz_convert("UTC")
+    canonical = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 0}, index=idx)
+
+    class Provider:
+        def fetch_minutes(self, symbol, from_utc, to_utc):
+            return canonical
+
+    index_minutes.fill(Provider(), tmp_path, "NIFTY", today=date(2017, 4, 3), log=lambda *a, **k: None)
+    got = index_minutes.read(tmp_path, "NIFTY", date(2021, 10, 1), date(2021, 10, 1))
+    assert [t.strftime("%H:%M") for t in got["ts"]] == ["09:15", "12:00", "15:29"]
