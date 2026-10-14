@@ -53,8 +53,9 @@ def options(root: Path, underlyings: list[str], today) -> int:
 
 def indexes(root: Path, today) -> int:
     provider = index_minutes.create_provider()
+    sessions = {d for d, status in store.load_ledger(root).items() if status == "ok"}
     for name in index_minutes.INDEXES:
-        n = index_minutes.fill(provider, root, name, today=today)
+        n = index_minutes.fill(provider, root, name, today=today, sessions=sessions)
         print(f"{name}: {n:,} minutes fetched", flush=True)
     return 0
 

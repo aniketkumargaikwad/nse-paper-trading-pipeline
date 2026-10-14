@@ -78,13 +78,15 @@ def _to_frame(canonical: pd.DataFrame) -> pd.DataFrame:
     repeated before the open, the 09:00 pre-open auction, the close repeated
     after (checked on NIFTY 1 Oct 2021: the 375 session minutes match the day's
     high and low, the rest is filler). Left in, they would fake moves and stops.
-    A Muhurat evening session falls outside too and is dropped with them.
+    A Muhurat evening session falls outside too and is dropped with them. Aug
+    2021 also carries candles off the minute (09:15:30): dropped.
     """
     frame = canonical.reset_index()
     frame = frame.rename(columns={frame.columns[0]: "ts"})
     frame["ts"] = pd.to_datetime(frame["ts"], utc=True).dt.tz_convert(IST)
     clock = frame["ts"].dt.time
-    frame = frame[(clock >= SESSION_FIRST_MINUTE) & (clock <= SESSION_LAST_MINUTE)]
+    whole_minute = (frame["ts"].dt.second == 0) & (frame["ts"].dt.microsecond == 0)
+    frame = frame[(clock >= SESSION_FIRST_MINUTE) & (clock <= SESSION_LAST_MINUTE) & whole_minute]
     return frame[list(COLUMNS)].reset_index(drop=True)
 
 
@@ -98,8 +100,14 @@ def _store(root: Path, name: str, frame: pd.DataFrame) -> None:
 
 
 def fill(provider: Any, root: Path, name: str, *, today: date,
-         log: Callable[..., None] = print) -> int:
-    """Fetch from the last stored day (or the archive start) to `today`; rows stored."""
+         sessions: set[date] | None = None, log: Callable[..., None] = print) -> int:
+    """Fetch from the last stored day (or the archive start) to `today`; rows stored.
+
+    `sessions` (NSE's trading days, from the daily ledger) drops candles on any
+    other day - Dhan carries NSE's Saturday mock-trading sessions (8 Jan 2022
+    and others). A day NSE has not published yet is dropped too, and fetched
+    again next time, because a fill always restarts from the last stored day.
+    """
     day = last_stored(root, name) or ARCHIVE_BEGINS
     total = 0
     while day <= today:
@@ -109,6 +117,8 @@ def fill(provider: Any, root: Path, name: str, *, today: date,
             datetime.combine(last, time(23, 59), IST).astimezone(UTC))
         if not canonical.empty:
             frame = _to_frame(canonical)
+            if sessions is not None:
+                frame = frame[frame["ts"].dt.date.isin(sessions)]
             _store(root, name, frame)
             total += len(frame)
         log(f"  {name} {day} -> {last}: {total:,} minutes so far", flush=True)

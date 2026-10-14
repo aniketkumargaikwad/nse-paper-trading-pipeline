@@ -103,3 +103,20 @@ def test_only_the_trading_session_is_kept(tmp_path):
     index_minutes.fill(Provider(), tmp_path, "NIFTY", today=date(2017, 4, 3), log=lambda *a, **k: None)
     got = index_minutes.read(tmp_path, "NIFTY", date(2021, 10, 1), date(2021, 10, 1))
     assert [t.strftime("%H:%M") for t in got["ts"]] == ["09:15", "12:00", "15:29"]
+
+
+def test_off_minute_candles_and_non_session_days_are_dropped(tmp_path):
+    """Aug 2021 carries candles at 09:15:30 and the like; Saturdays such as 8 Jan 2022
+    carry NSE's mock-trading sessions. Neither is the market."""
+    stamps = ["2022-01-07 09:15:00", "2022-01-07 09:15:30", "2022-01-08 09:15:00"]
+    idx = pd.DatetimeIndex([pd.Timestamp(s, tz=index_minutes.IST) for s in stamps]).tz_convert("UTC")
+    canonical = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 0}, index=idx)
+
+    class Provider:
+        def fetch_minutes(self, symbol, from_utc, to_utc):
+            return canonical
+
+    index_minutes.fill(Provider(), tmp_path, "NIFTY", today=date(2017, 4, 3), sessions={date(2022, 1, 7)},
+                       log=lambda *a, **k: None)
+    got = index_minutes.read(tmp_path, "NIFTY", date(2022, 1, 1), date(2022, 1, 31))
+    assert [t.strftime("%Y-%m-%d %H:%M:%S") for t in got["ts"]] == ["2022-01-07 09:15:00"]
