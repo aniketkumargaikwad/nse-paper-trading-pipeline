@@ -454,12 +454,17 @@ keys - `docs/FNO_SETUP.md`):**
 Which options: every strike within 5% of the index's close on any of the
 expiry's final 10 sessions (weekly) or 20 (monthly), for those sessions.
 Fetched once an expiry has ended, through Upstox's expired-instrument API
-(Upstox Plus). Upstox's page says it serves "up to six months of historical
-expiries"; the first fill prints what it really serves. If it is six months,
-history builds forward from the first fill, one expiry at a time - which is
-why the daily job must keep running. Checked on each write: a contract's
-last minute close against NSE's close that day (beyond Rs 1 or 2%), and a
-contract NSE says traded with no minutes; both go to `quality/<YEAR>.csv`.
+(Upstox Plus), with the one-year analytics token. Upstox's page says it serves
+"up to six months of historical expiries"; on 14 Oct 2026 it served two years
+(NIFTY back to 3 Oct 2024, 107 expiries). Older expiries drop off as time
+passes, so the daily job must keep running for history to keep growing. The
+minutes are genuine (first candle = NSE's open; summed volume = NSE's daily
+volume exactly) and run 09:15-15:39 from 3 Aug 2026, when NSE moved the F&O
+close to 15:40 (circular NSE/FAOP/74467); 09:15-15:29 before. NSE's daily
+close for an option is the volume-weighted average of the last 30 minutes
+(15:10-15:40 now, 15:00-15:30 before), and that is what the check compares. Checked on each write: that
+30-minute average from the minutes against NSE's close (beyond Rs 2 or 3%),
+and a contract NSE says traded with no minutes; both go to `quality/<YEAR>.csv`.
 
 **First index fill (14 Oct 2026):** NIFTY 881,552 minutes on 2,354 sessions, BANKNIFTY 476,393 and INDIA VIX 476,826 on 1,284; 2,338 / 1,240 / 1,227 of those days are a full 375 minutes. Dhan's older days needed cleaning, and the fill drops: candles outside 09:15-15:29 (2021-22 days run 05:40-18:45 with the previous close repeated before the open, the pre-open auction and the close repeated after), candles off the whole minute (Aug 2021), and candles on days NSE had no session (Saturday mock-trading sessions, 8 Jan 2022 and others). Diwali Muhurat sessions are dropped with them. Timestamps verified: a full session reads 09:15 to 15:29 IST.
 

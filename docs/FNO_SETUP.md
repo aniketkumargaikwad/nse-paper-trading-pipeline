@@ -19,11 +19,12 @@ go. Each is marked **► save this**.
 
 | Part | Status |
 |---|---|
-| 1. Upstox | **Waiting** — Upstox still shows "account opening in progress" (see 1a) |
+| 1. Upstox | **Done** (14 Oct) — the one-year key works for expired options; Upstox serves two years of them |
 | 2. Dhan | **Done** — data plan renewed; index minutes downloaded (2017 / 2021 onward) |
 | 3. Cloudflare R2 | **Done** — bucket works; the F&O store (about 160 MB) is in it |
-| 4a. `.env` | **Done** for R2; `UPSTOX_ANALYTICS_TOKEN` comes later |
-| 4b. GitHub secrets | R2 **done**; still to add: `DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET`, and later `UPSTOX_ANALYTICS_TOKEN` |
+| 4a. `.env` | **Done** |
+| 4b. GitHub secrets | **Done** — all nine F&O secrets are on GitHub |
+| 6. Daily GitHub job | **Waiting on you** — say "merge the F&O branch" |
 
 ---
 
@@ -63,12 +64,10 @@ About this token:
   today to make a new one (section 5).
 - You can only have one at a time; making a new one replaces the old.
 
-**One open question.** Upstox's documents say this token covers "market data",
-but do not say clearly whether that includes *expired* contracts. I will test
-it the first time I use it. If Upstox refuses it, I will tell you, and you
-will make an ordinary Upstox app instead. That needs a quick login once a
-day only while the history is being downloaded (about a week), and I will
-write those steps then. Nothing to do about it now.
+**The open question, answered 14 Oct 2026:** Upstox's documents did not say
+whether this token covers *expired* contracts. It does — no daily login is
+needed. And Upstox serves two years of expired options (back to 3 Oct 2024),
+not the six months its page says.
 
 ---
 

@@ -7,13 +7,16 @@ Three endpoints, all GET, all on Upstox Plus (design §2.1):
     /v2/expired-instruments/historical-candle/{key}/1minute/{to}/{from}
 
 There is no order code here and none may be added. The token is the owner's
-one-year analytics token (docs/FNO_SETUP.md 1b). Whether Upstox accepts that
-token for EXPIRED contracts is not stated in its documents; a 401 says so and
-points there. Messages name the fix, never the token.
+one-year analytics token (docs/FNO_SETUP.md 1b) - which, measured 14 Oct 2026,
+Upstox DOES accept for expired contracts, though its documents never say so.
+Messages name the fix, never the token.
 
 How far back: Upstox's page says "up to six months of historical expiries";
-users report more. The first fill measures it (scripts/fno_minute.py prints
-the oldest expiry served).
+on 14 Oct 2026 it served 107 NIFTY expiries back to 3 Oct 2024 - two years.
+The minutes are genuine: each day's first candle opens at NSE's official open
+and the minutes' volume adds up to NSE's daily volume exactly. From 3 Aug 2026
+they run 09:15-15:39, because NSE moved the F&O close to 15:40 (circular
+NSE/FAOP/74467); before that 09:15-15:29.
 
 Candles arrive newest first as [timestamp(+05:30), open, high, low, close,
 volume, open interest]; they are returned oldest first, timestamps in IST.
