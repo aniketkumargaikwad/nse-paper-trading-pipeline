@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fno.nse_files import COLUMNS
+from fno.nse_files import COLUMNS, DTYPES
 
 DEFAULT_ROOT = "data/fno"
 LEDGER = Path("daily") / "_sessions.csv"
@@ -81,7 +81,8 @@ def read_daily(root: Path, underlying: str, start: date, end: date) -> pd.DataFr
     frames = [pd.read_parquet(p) for year in range(start.year, end.year + 1)
               if (p := daily_path(root, underlying, year)).exists()]
     if not frames:
-        return pd.DataFrame(columns=list(COLUMNS))
+        # Typed even when empty: an untyped strike column breaks a later merge.
+        return pd.DataFrame(columns=list(COLUMNS)).astype(DTYPES)
     out = pd.concat(frames, ignore_index=True)
     keep = (out["trade_date"] >= start) & (out["trade_date"] <= end)
     return out[keep].reset_index(drop=True)[list(COLUMNS)]

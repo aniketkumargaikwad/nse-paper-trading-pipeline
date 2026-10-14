@@ -11,16 +11,21 @@ written whole; minute/_expiries.csv records each expiry fetched and what it
 held, so a stopped fill carries on and nothing is asked for twice.
 
 CHECKED (written to quality/<YEAR>.csv like the daily checks, never repaired):
-a contract's last minute close against NSE's close that day, beyond the larger
-of Rs 1 and 2%; and a contract NSE says traded on a window day with no
-minutes at all.
+NSE's close for an option is the volume-weighted average of the last 30
+minutes of trading, so that is what the minutes are checked against - the
+average of the minute closes over 15:00-15:30, or 15:10-15:40 from 3 Aug 2026
+when NSE moved the F&O close to 15:40 (circular NSE/FAOP/74467). Beyond the
+larger of Rs 2 and 3% it is flagged (minute closes only approximate the trades,
+so the tolerance is a little wider than the ~1% seen on real Feb 2025 and Oct
+2026 minutes). Also flagged: a contract NSE says traded on a window day with
+no minutes at all.
 """
 
 from __future__ import annotations
 
 import csv
 from collections.abc import Iterable, Mapping
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +42,9 @@ BAND_PCT = 5.0
 COLUMNS = ("ts", "strike", "option_type", "open", "high", "low", "close", "volume", "oi")
 LEDGER = Path("minute") / "_expiries.csv"
 LEDGER_COLUMNS = ("underlying", "expiry", "status", "contracts", "rows", "first_day", "fetched_on")
-CLOSE_TOLERANCE_RS = 1.0
-CLOSE_TOLERANCE_PCT = 2.0
+CLOSE_TOLERANCE_RS = 2.0
+CLOSE_TOLERANCE_PCT = 3.0
+CLOSE_MOVED_ON = date(2026, 8, 3)       # F&O close 15:30 -> 15:40
 
 
 def window(expiry: date, sessions: list[date], *, weekly: bool) -> list[date]:
@@ -87,6 +93,11 @@ def due(underlying: str, served: Iterable[date], ledger: Mapping[tuple[str, date
     return sorted(e for e in served if e < today and (underlying, e) not in ledger)
 
 
+def closing_window(day: date) -> tuple[time, time]:
+    """The 30 minutes NSE averages for an option's close that day: [start, end)."""
+    return (time(15, 10), time(15, 40)) if day >= CLOSE_MOVED_ON else (time(15, 0), time(15, 30))
+
+
 def check_expiry(underlying: str, expiry: date, minutes: pd.DataFrame, daily: pd.DataFrame,
                  days: list[date], fetched: set[tuple[float, str]]) -> list[dict[str, Any]]:
     nse = daily[(daily["instrument"] == "OPT") & (daily["expiry"] == expiry)
@@ -95,24 +106,33 @@ def check_expiry(underlying: str, expiry: date, minutes: pd.DataFrame, daily: pd
     nse = nse.loc[np.array([(s, t) in fetched for s, t in zip(nse["strike"], nse["option_type"])],
                            dtype=bool)]
     if minutes.empty:
-        last = pd.DataFrame(columns=["day", "strike", "option_type", "close"])
+        days_seen = pd.DataFrame(columns=["day", "strike", "option_type"])
+        closing = pd.DataFrame(columns=["day", "strike", "option_type", "close"])
     else:
-        m = minutes.assign(day=minutes["ts"].dt.date).sort_values("ts")
-        last = m.groupby(["day", "strike", "option_type"], as_index=False).tail(1)
+        m = minutes.assign(day=minutes["ts"].dt.date, clock=minutes["ts"].dt.time)
+        days_seen = m[["day", "strike", "option_type"]].drop_duplicates()
+        in_window = np.array([closing_window(d)[0] <= c < closing_window(d)[1]
+                              for d, c in zip(m["day"], m["clock"])], dtype=bool)
+        w = m.loc[in_window & (m["volume"] > 0)]
+        w = w.assign(value=w["close"] * w["volume"])
+        sums = w.groupby(["day", "strike", "option_type"], as_index=False)[["value", "volume"]].sum()
+        closing = sums.assign(close=sums["value"] / sums["volume"])[["day", "strike", "option_type", "close"]]
+    # Typed even when empty, or the merge below refuses an object column against a float one.
+    closing = closing.astype({"strike": "float64", "close": "float64"})
     issues: list[dict[str, Any]] = []
 
-    merged = last.merge(nse, left_on=["day", "strike", "option_type"],
-                        right_on=["trade_date", "strike", "option_type"], suffixes=("_min", "_nse"))
-    limit = np.maximum(CLOSE_TOLERANCE_RS, merged["close_nse"] * CLOSE_TOLERANCE_PCT / 100) \
-        if len(merged) else pd.Series(dtype=float)
+    merged = closing.merge(nse, left_on=["day", "strike", "option_type"],
+                           right_on=["trade_date", "strike", "option_type"], suffixes=("_min", "_nse"))
+    limit = np.maximum(CLOSE_TOLERANCE_RS, merged["close_nse"] * CLOSE_TOLERANCE_PCT / 100)         if len(merged) else pd.Series(dtype=float)
     bad = merged[(merged["close_min"] - merged["close_nse"]).abs() > limit] if len(merged) else merged
     for day, rows in bad.groupby("day"):
         r = rows.iloc[0]
         issues.append({"trade_date": day, "underlying": underlying, "check": "minute_close_mismatch",
                        "count": len(rows), "example": f"OPT {expiry} {r['strike']} {r['option_type']} "
-                                                      f"minute {r['close_min']} vs NSE {r['close_nse']}"})
+                                                      f"last-30-min average {r['close_min']:.2f} "
+                                                      f"vs NSE {r['close_nse']}"})
 
-    have = set(zip(last["day"], last["strike"], last["option_type"]))
+    have = set(zip(days_seen["day"], days_seen["strike"], days_seen["option_type"]))
     missing = nse.loc[np.array([(d, s, t) not in have for d, s, t in
                                 zip(nse["trade_date"], nse["strike"], nse["option_type"])], dtype=bool)]
     for day, rows in missing.groupby("trade_date"):

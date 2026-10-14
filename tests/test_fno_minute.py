@@ -86,15 +86,38 @@ def test_due_is_every_served_expired_expiry_not_yet_in_the_ledger():
     assert minute.due("NIFTY", served, ledger, today=date(2025, 4, 20)) == [date(2025, 4, 17)]
 
 
-def test_minute_closes_are_checked_against_nse_s_daily_close():
-    mins = candles(EXPIRY, [10.0, 12.0]).assign(strike=22000.0, option_type="CE")
-    daily = nse_rows([(EXPIRY, 22000.0, "CE", 12.1, 500),      # agrees within tolerance
-                      (EXPIRY, 22000.0, "PE", 40.0, 500)])     # traded, but no minutes fetched
-    issues = minute.check_expiry("NIFTY", EXPIRY, mins, daily, [EXPIRY], {(22000.0, "CE"), (22000.0, "PE")})
+def closing(day, start, closes, volumes):
+    """Minutes from `start` (HH:MM), one per close, with the given volumes."""
+    ts = [pd.Timestamp(f"{day} {start}", tz=IST) + pd.Timedelta(minutes=i) for i in range(len(closes))]
+    return pd.DataFrame({"ts": ts, "open": closes, "high": closes, "low": closes, "close": closes,
+                         "volume": volumes, "oi": 100, "strike": 22000.0, "option_type": "CE"})
+
+
+def test_nse_s_close_is_checked_against_the_last_half_hour_s_average():
+    """NSE's daily close for an option is the volume-weighted average of the last 30
+    minutes (15:00-15:30), not the last trade: checked on real Feb 2025 minutes, it
+    agrees to about 1%, where the last minute can be 20% away on an expiry day."""
+    mins = pd.concat([closing(EXPIRY, "14:00", [99.0], [1000]),                # before the window
+                      closing(EXPIRY, "15:00", [10.0, 12.0], [100, 300]),
+                      closing(EXPIRY, "15:29", [30.0], [1])])                   # a thin last trade
+    # average 11.55; the last minute alone (30) would look like a mismatch
+    ok = nse_rows([(EXPIRY, 22000.0, "CE", 11.5, 500), (EXPIRY, 22000.0, "PE", 40.0, 500)])
+    issues = minute.check_expiry("NIFTY", EXPIRY, mins, ok, [EXPIRY], {(22000.0, "CE"), (22000.0, "PE")})
     assert [(i["check"], i["count"]) for i in issues] == [("minute_day_missing", 1)]
-    worse = nse_rows([(EXPIRY, 22000.0, "CE", 20.0, 500)])
-    issues = minute.check_expiry("NIFTY", EXPIRY, mins, worse, [EXPIRY], {(22000.0, "CE")})
+    off = nse_rows([(EXPIRY, 22000.0, "CE", 20.0, 500)])
+    issues = minute.check_expiry("NIFTY", EXPIRY, mins, off, [EXPIRY], {(22000.0, "CE")})
     assert [(i["check"], i["count"]) for i in issues] == [("minute_close_mismatch", 1)]
+
+
+def test_from_3_aug_2026_the_half_hour_ends_at_15_40():
+    """NSE moved the F&O close to 15:40 from 3 Aug 2026 (circular NSE/FAOP/74467)."""
+    day = date(2026, 10, 13)
+    mins = pd.concat([closing(day, "15:00", [50.0] * 10, [100] * 10),             # outside 15:10-15:40
+                      closing(day, "15:10", [20.0] * 29, [100] * 29),
+                      closing(day, "15:39", [35.0], [1])])                       # thin last trade
+    # The 15:10-15:40 average is ~20; the old 15:00-15:30 window would mix in the 50s.
+    nse = nse_rows([(day, 22000.0, "CE", 20.0, 500)]).assign(expiry=day)
+    assert minute.check_expiry("NIFTY", day, mins, nse, [day], {(22000.0, "CE")}) == []
 
 
 def test_no_minutes_at_all_for_a_traded_contract_is_reported_not_crashed():
