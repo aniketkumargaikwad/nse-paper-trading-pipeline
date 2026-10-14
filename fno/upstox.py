@@ -41,8 +41,13 @@ BASE = "https://api.upstox.com/v2"
 UNDERLYING_KEYS = {"NIFTY": "NSE_INDEX|Nifty 50", "BANKNIFTY": "NSE_INDEX|Nifty Bank"}
 CANDLE_COLUMNS = ("ts", "open", "high", "low", "close", "volume", "oi")
 MAX_DAYS_PER_REQUEST = 30
-PAUSE_SECONDS = 0.25          # Upstox allows 50 a second; stay far below
-ATTEMPTS = 4
+# Upstox's limits: 50 a second, 500 a minute, 2,000 per 30 minutes. The last is
+# the one that binds - just over one a second - and the first fill (14 Oct 2026)
+# hit it at four a second. So: one a second, and a refusal is waited out in
+# minutes, since Upstox says only that access "might be temporarily suspended".
+PAUSE_SECONDS = 1.0
+RATE_LIMIT_WAITS = (60, 180, 600, 1200)      # seconds after each HTTP 429: 34 min, past one window
+ATTEMPTS = len(RATE_LIMIT_WAITS) + 1
 TIMEOUT_SECONDS = 30
 TOKEN_ENV = "UPSTOX_ANALYTICS_TOKEN"
 PLUS_REQUIRED = "UDAPI1149"
@@ -104,8 +109,14 @@ class UpstoxClient:
     def _get(self, path: str, params: dict[str, str] | None, doing: str) -> Any:
         headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
         last = ""
+        limited = 0
         for attempt in range(1, ATTEMPTS + 1):
-            self._sleep(PAUSE_SECONDS if attempt == 1 else 2 ** attempt)
+            if attempt == 1:
+                self._sleep(PAUSE_SECONDS)
+            elif last == "HTTP 429":
+                self._sleep(RATE_LIMIT_WAITS[limited - 1])
+            else:
+                self._sleep(2 ** attempt)
             try:
                 response = self._http.get(BASE + path, headers=headers, params=params,
                                           timeout=TIMEOUT_SECONDS)
@@ -126,11 +137,11 @@ class UpstoxClient:
             status = response.status_code
             if status == 401:
                 raise UpstoxAuthError(
-                    f"Upstox refused the token (HTTP 401) while {doing}. If {TOKEN_ENV} is new, "
-                    "Upstox may not accept the analytics token for expired contracts - see "
-                    "'One open question' in docs/FNO_SETUP.md; otherwise make a new token (1b).")
+                    f"Upstox refused the token (HTTP 401) while {doing}: it has expired or been "
+                    f"revoked - make a new one and replace {TOKEN_ENV} (docs/FNO_SETUP.md 1b).")
             if status == 429 or status >= 500:
                 last = f"HTTP {status}"
+                limited += status == 429
                 continue
             if status >= 400 or payload.get("status") != "success":
                 message = "; ".join(f"{e.get('errorCode')}: {e.get('message')}" for e in errors)

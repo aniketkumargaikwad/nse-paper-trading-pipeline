@@ -111,3 +111,18 @@ def test_the_token_comes_from_the_environment_or_a_clear_error():
     assert upstox.token_from_env({"UPSTOX_ANALYTICS_TOKEN": " t "}) == "t"
     with pytest.raises(upstox.UpstoxAuthError, match="UPSTOX_ANALYTICS_TOKEN"):
         upstox.token_from_env({})
+
+
+def test_requests_are_paced_under_upstox_s_2000_per_30_minutes():
+    assert upstox.PAUSE_SECONDS * 2000 >= 30 * 60
+
+
+def test_a_rate_limit_is_waited_out_in_minutes_not_seconds():
+    """14 Oct 2026: the first fill hit Upstox's 2,000-per-30-minutes limit; waits of
+    4-16 s could not outlast it and the run stopped."""
+    waits = []
+    http = Http(Resp({}, 429), Resp({}, 429), Resp({"status": "success", "data": ["2025-04-17"]}))
+    c = upstox.UpstoxClient(TOKEN, http=http, sleep=waits.append)
+    assert c.expiries("NIFTY") == [date(2025, 4, 17)]
+    assert waits == [upstox.PAUSE_SECONDS, *upstox.RATE_LIMIT_WAITS[:2]]
+    assert upstox.RATE_LIMIT_WAITS[0] >= 60 and sum(upstox.RATE_LIMIT_WAITS) >= 30 * 60
