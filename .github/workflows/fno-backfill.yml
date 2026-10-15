@@ -51,9 +51,9 @@ jobs:
       - name: Fill
         run: |
           case "${{ github.event.inputs.what }}" in
-            options) python scripts/fno_minute.py --options-only ;;
+            options) python scripts/fno_minute.py --options-only --budget-minutes 290 ;;
             indexes) python scripts/fno_minute.py --indexes-only ;;
-            *)       python scripts/fno_minute.py ;;
+            *)       python scripts/fno_minute.py --budget-minutes 290 ;;
           esac
 
       - name: Publish to R2

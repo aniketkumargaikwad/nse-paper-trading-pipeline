@@ -57,8 +57,11 @@ jobs:
       - name: NSE files, participant OI, India VIX (the last two weeks, missing days only)
         run: python scripts/fno_daily.py --from "$(date -u -d '14 days ago' +%F)"
 
+      # The budget stops the option fetch cleanly well inside the job's 120
+      # minutes, so the publish step below always runs; anything left over is
+      # fetched by the next run.
       - name: Minute data - expired options and the indexes
-        run: python scripts/fno_minute.py
+        run: python scripts/fno_minute.py --budget-minutes 75
 
       # Publish whatever the run got, even if a later step failed: a day's NSE
       # file is worth keeping when Upstox was down.
