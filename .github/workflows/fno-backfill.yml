@@ -1,0 +1,61 @@
+# The minute-data backfill, started by hand (Actions -> fno-backfill -> Run
+# workflow). Resumable: run it again after a stop and it carries on.
+#
+# Triggers are workflow_dispatch ONLY (see fno-daily.yml).
+name: fno-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      what:
+        description: "options, indexes or both"
+        default: "both"
+
+concurrency:
+  group: fno-data
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      FNO_ROOT: data/fno
+      UPSTOX_ANALYTICS_TOKEN: ${{ secrets.UPSTOX_ANALYTICS_TOKEN }}
+      DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+      DHAN_PIN: ${{ secrets.DHAN_PIN }}
+      DHAN_TOTP_SECRET: ${{ secrets.DHAN_TOTP_SECRET }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Fetch the store
+        run: python scripts/fno_r2.py pull
+
+      - name: Fill
+        run: |
+          case "${{ github.event.inputs.what }}" in
+            options) python scripts/fno_minute.py --options-only --budget-minutes 290 ;;
+            indexes) python scripts/fno_minute.py --indexes-only ;;
+            *)       python scripts/fno_minute.py --budget-minutes 290 ;;
+          esac
+
+      - name: Publish to R2
+        if: always()
+        run: python scripts/fno_r2.py push

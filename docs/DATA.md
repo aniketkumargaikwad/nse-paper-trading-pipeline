@@ -366,3 +366,110 @@ ISO week, so Monday's research day misses, takes the newest `candles-*` entry
 `DATA_END` repository variable that used to name that cache is no longer read
 by anything. It never decided where a run's prices end: `research.windows`
 measures that from the candles.
+
+---
+
+## 9. F&O data
+
+Design: `docs/superpowers/specs/2026-10-02-fno-options-design.md`.
+
+**Where:** `data/fno/` locally (`FNO_ROOT` to move it), git-ignored. Step 3
+publishes the same layout to a private Cloudflare R2 bucket.
+
+| Path | What |
+|---|---|
+| `daily/<UNDERLYING>/<YEAR>.parquet` | every index option and future, end of day |
+| `daily/_sessions.csv` | the ledger: each day fetched, `ok` or `no_session` |
+| `participants/<YEAR>.parquet` | FII / DII / Pro / Client open interest |
+| `vix/daily.parquet` | India VIX from 2008 |
+| `quality/<YEAR>.csv` | issues found, never repaired |
+
+**Underlyings:** NIFTY, BANKNIFTY (since 2016); FINNIFTY (2021),
+MIDCPNIFTY (2022), NIFTYNXT50 (2024).
+
+**Fill or top up:** `python scripts/fno_daily.py` — resumable; re-run after
+any stop. A day NSE has no file for is recorded as `no_session` only once it
+is more than three days old, because NSE sometimes publishes late.
+
+**Units:** volume in contracts, open interest in units. An untraded contract
+still shows a close (the previous one): whether it traded comes from volume.
+
+**Lot sizes:** `fno/lot_sizes.yaml`, derived from futures turnover before
+8 Jul 2024 and checked against NSE circulars; NSE's own column after. The
+derivation agreed with NSE's own lot on all 2,780 days where both exist.
+
+**The first fill (5 Oct 2026):** 2,663 sessions from 1 Jan 2016 to 1 Oct
+2026, 12.5 million rows (NIFTY 5.7 M, BANKNIFTY 3.5 M). Two NSE file quirks
+needed code: 13 Jun 2018's participant file has no title line, and 12 Dec
+2019's writes the FII row Indian-style ("10,02,064.00"). The quality report:
+
+- `settle_missing`, ~80,000 contracts over the decade: almost all are options
+  on their own expiry day, which the old-format file gives a settlement price
+  of 0. Expiry pay-outs therefore come from the expiring future's settlement
+  or the index close, never from the option row.
+- `ohlc_invalid`, 7 rows: far-month futures on FINNIFTY, MIDCPNIFTY and
+  NIFTYNXT50 that never traded. Harmless.
+- `missing_underlying`: none. NIFTY and BANKNIFTY are present every session.
+
+**Market facts:** `features/<UNDERLYING>.parquet`, one row per session, built
+by `python scripts/fno_features.py` (about 25 minutes for everything). Each
+row is computed from that day's file and earlier data only, for the nearest
+expiry with at least a day to run: `expiry`, `dte`, `spot`, `forward`,
+`atm_strike`, `atm_iv`, `straddle`, `expected_move_pct`, `pcr_oi`, `pcr_vol`,
+`max_pain`, `skew_25d`, `max_oi_call_strike`, `max_oi_put_strike`,
+`basis_pct`, `spot_source`, `vix`, `vix_chg_pct`, `iv_rank`, `iv_pctile`,
+`weekday`, `event_today`, `fii_index_fut_net`. Implied volatility comes from
+each contract's settlement price by Black-76; delta is the forward delta.
+Spot is Yahoo's daily close for NIFTY, BANKNIFTY and NIFTYNXT50, NSE's
+`underlying_price` (from 8 Jul 2024) for FINNIFTY and MIDCPNIFTY.
+
+Checked on the first build (5 Oct 2026): ATM IV against India VIX correlates
+0.909 for NIFTY and 0.918 for BANKNIFTY; max pain sits a median 0.37% from
+the index; PCR by open interest is 0.78-1.17 on half of all days; puts carry
+more volatility than calls (positive 25-delta skew) on 94% of NIFTY days and
+90% of BANKNIFTY days; ATM IV peaks at 134% (NIFTY) on 23 Mar 2020.
+
+**Options backtests:** `python scripts/fno_backtest.py strategy.yaml` runs one
+strategy (format: `fno/strategy.py`, design §3) on the daily data and prints
+its report; `--json` saves it. `python scripts/fno_atlas.py` measures the
+eight classic strategies on NIFTY and BANKNIFTY and writes
+`data/fno/atlas/results.json` (results: `docs/research/2026-10-06-fno-atlas.md`).
+Both run the training years by default: the last 365 days (the exam year)
+are cut out at load and never read. Daily timing: decide at the close, fill
+at the next open, stops seen on closing prices only. Margin is a SPAN-style
+estimate from NSE's rules (`fno/margin.py`), not yet checked against a
+broker. Legs filled or marked together are held to the position's
+no-arbitrage limits, because a thin strike's opening or closing trade can be
+far from the others' moment (23 Sep 2019).
+
+**Minute data (step 3a, built 9 Oct 2026, first fill waits on the owner's
+keys - `docs/FNO_SETUP.md`):**
+
+| Path | What |
+|---|---|
+| `minute/<UNDERLYING>/<EXPIRY>.parquet` | expired NIFTY / BANKNIFTY options, 1-minute, from Upstox |
+| `minute/_expiries.csv` | the ledger: each expiry fetched and what it held |
+| `index_minute/<NAME>/<YEAR>.parquet` | NIFTY (from 3 Apr 2017), BANKNIFTY and INDIAVIX (from 4 Aug 2021), 1-minute, from Dhan |
+
+Which options: every strike within 5% of the index's close on any of the
+expiry's final 10 sessions (weekly) or 20 (monthly), for those sessions.
+Fetched once an expiry has ended, through Upstox's expired-instrument API
+(Upstox Plus), with the one-year analytics token. Upstox's page says it serves
+"up to six months of historical expiries"; on 14 Oct 2026 it served two years
+(NIFTY back to 3 Oct 2024, 107 expiries). Older expiries drop off as time
+passes, so the daily job must keep running for history to keep growing. The
+minutes are genuine (first candle = NSE's open; summed volume = NSE's daily
+volume exactly) and run 09:15-15:39 from 3 Aug 2026, when NSE moved the F&O
+close to 15:40 (circular NSE/FAOP/74467); 09:15-15:29 before. NSE's daily
+close for an option is the volume-weighted average of the last 30 minutes
+(15:10-15:40 now, 15:00-15:30 before), and that is what the check compares. Checked on each write: that
+30-minute average from the minutes against NSE's close (beyond Rs 2 or 3%),
+and a contract NSE says traded with no minutes; both go to `quality/<YEAR>.csv`.
+
+**First index fill (14 Oct 2026):** NIFTY 881,552 minutes on 2,354 sessions, BANKNIFTY 476,393 and INDIA VIX 476,826 on 1,284; 2,338 / 1,240 / 1,227 of those days are a full 375 minutes. Dhan's older days needed cleaning, and the fill drops: candles outside 09:15-15:29 (2021-22 days run 05:40-18:45 with the previous close repeated before the open, the pre-open auction and the close repeated after), candles off the whole minute (Aug 2021), and candles on days NSE had no session (Saturday mock-trading sessions, 8 Jan 2022 and others). Diwali Muhurat sessions are dropped with them. Timestamps verified: a full session reads 09:15 to 15:29 IST.
+
+**R2:** the whole store mirrors to a private Cloudflare R2 bucket under
+`fno/` - `python scripts/fno_r2.py push` / `pull`, compared by size and MD5,
+never deleting. **Jobs:** `fno-daily` (weekdays 19:07 IST: NSE file, new
+expiries, index minutes, publish) and `fno-backfill` (by hand). Both run only
+from `main`. **Keys:** `python scripts/fno_check_setup.py` says which work.

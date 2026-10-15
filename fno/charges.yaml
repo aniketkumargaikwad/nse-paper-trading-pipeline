@@ -1,0 +1,16 @@
+# NSE F&O charges by effective date, as fractions. Each row applies from its
+# date until the next. Sources and notes: docs/research/2026-10-04-fno-charges.md
+stt:
+  - {from: 2016-01-01, option_sell_premium: 0.0005, future_sell: 0.0001, option_exercise: 0.00125}
+  - {from: 2023-04-01, option_sell_premium: 0.000625, future_sell: 0.000125, option_exercise: 0.00125}
+  - {from: 2024-10-01, option_sell_premium: 0.001, future_sell: 0.0002, option_exercise: 0.00125}
+  - {from: 2026-04-01, option_sell_premium: 0.0015, future_sell: 0.0005, option_exercise: 0.0015}
+exchange:   # transaction charge + NSE IPFT, both sides
+  - {from: 2016-01-01, option_premium: 0.0005, future: 0.000019}
+  - {from: 2024-10-01, option_premium: 0.0003553, future: 0.0000183}
+gst:
+  - {from: 2016-01-01, rate: 0.15}
+  - {from: 2017-07-01, rate: 0.18}
+sebi: 0.000001
+stamp_buy: {option_premium: 0.00003, future: 0.00002}
+brokerage_per_order: 20.0
