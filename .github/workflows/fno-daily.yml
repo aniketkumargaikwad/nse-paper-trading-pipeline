@@ -5,9 +5,16 @@
 # would let an outside contribution run with the secrets.
 #
 # Every weekday evening: fetch what the run reads from R2, add the day's NSE
-# file / participant OI / India VIX, every expired option expiry not yet
-# stored (Upstox serves about six months - an expiry not saved in time is
-# gone), the index minutes, then publish back to R2. Design 2026-10-02 sec 2.6.
+# file / participant OI / India VIX and every expired option expiry not yet
+# stored (Upstox serves about two years - an expiry not saved in time is
+# gone), then publish back to R2. Design 2026-10-02 sec 2.6.
+#
+# NOT the Dhan index minutes. On 15 and 16 Oct 2026 Dhan answered this job's
+# TOTP login with an empty token both nights, while the same login worked from
+# the owner's PC in India. Dhan keeps years of index minutes, so nothing is
+# lost by filling them from the PC (`python scripts/fno_minute.py
+# --indexes-only`, then `python scripts/fno_r2.py push`) - only the option
+# expiries are time-critical.
 name: fno-daily
 
 on:
@@ -31,11 +38,6 @@ jobs:
     env:
       FNO_ROOT: data/fno
       UPSTOX_ANALYTICS_TOKEN: ${{ secrets.UPSTOX_ANALYTICS_TOKEN }}
-      DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
-      DHAN_PIN: ${{ secrets.DHAN_PIN }}
-      DHAN_TOTP_SECRET: ${{ secrets.DHAN_TOTP_SECRET }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -60,8 +62,8 @@ jobs:
       # The budget stops the option fetch cleanly well inside the job's 120
       # minutes, so the publish step below always runs; anything left over is
       # fetched by the next run.
-      - name: Minute data - expired options and the indexes
-        run: python scripts/fno_minute.py --budget-minutes 75
+      - name: Minute data - expired options
+        run: python scripts/fno_minute.py --options-only --budget-minutes 75
 
       # Publish whatever the run got, even if a later step failed: a day's NSE
       # file is worth keeping when Upstox was down.
