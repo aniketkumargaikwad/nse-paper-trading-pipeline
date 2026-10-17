@@ -195,10 +195,14 @@ is still on its own branch (`feat/fno-options`). When you are ready, tell me
 **"merge the F&O branch"** and I will open the pull request and merge it.
 From then on:
 
-- **fno-daily** runs every weekday at about 7 pm: the day's NSE file, any
+- **fno-daily** runs every weekday at about 7 pm: the day's NSE file and any
   option expiry that has just ended (it must be saved within Upstox's
-  window or it is gone), the index minutes, all published to R2. Nothing to
-  do; GitHub emails you if a run fails.
+  window or it is gone), published to R2. Nothing to do; GitHub emails you
+  if a run fails.
+- **Index minutes (Dhan) are not in the daily job.** Dhan refused this job's
+  login from GitHub's servers on 15 and 16 Oct 2026 while the same login
+  worked from your PC. Dhan keeps years of index minutes, so they are filled
+  from your PC when research needs them — I do that.
 - **fno-backfill** runs only when you start it: GitHub → **Actions** →
   **fno-backfill** → **Run workflow**. You will not normally need it — the
   first fill runs from your PC in step 5.
