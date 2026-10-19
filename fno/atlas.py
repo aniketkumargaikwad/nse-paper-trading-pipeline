@@ -67,3 +67,42 @@ def document(name: str, underlying: str) -> str:
 
 def documents() -> list[str]:
     return [document(name, u) for u in UNDERLYINGS for name in ATLAS]
+
+
+# The intraday half (design 2026-10-19 §6): the classic same-day option trades.
+EXIT_TIME = "15:15"
+INTRADAY: dict[str, dict[str, Any]] = {
+    "straddle-0920": {"window": ("09:20", "09:21"),
+                      "legs": [_leg("sell", "CE", {"atm": 0}), _leg("sell", "PE", {"atm": 0})],
+                      "exit": {"stop_pct": 30, "target_pct": 50}},
+    "strangle-0930": {"window": ("09:30", "09:31"),
+                      "legs": [_leg("sell", "CE", {"delta": 0.20}), _leg("sell", "PE", {"delta": -0.20})],
+                      "exit": {"stop_pct": 50, "target_pct": 50}},
+    "expiry-day-straddle": {"window": ("09:20", "09:21"), "when": "expiry_dte == 0",
+                            "legs": [_leg("sell", "CE", {"atm": 0}), _leg("sell", "PE", {"atm": 0})],
+                            "exit": {"stop_pct": 30, "target_pct": 50}},
+    "iron-fly": {"window": ("09:20", "09:21"),
+                 "legs": [_leg("sell", "CE", {"atm": 0}), _leg("sell", "PE", {"atm": 0}),
+                          _leg("buy", "CE", {"otm_pct": 2.0}), _leg("buy", "PE", {"otm_pct": 2.0})],
+                 "exit": {"stop_pct": 50, "target_pct": 40}},
+    "orb-call": {"window": ("09:45", "13:00"), "when": "close > or_high",
+                 "legs": [_leg("buy", "CE", {"atm": 0})], "exit": {"stop_pct": 30, "target_pct": 60}},
+    "orb-put": {"window": ("09:45", "13:00"), "when": "close < or_low",
+                "legs": [_leg("buy", "PE", {"atm": 0})], "exit": {"stop_pct": 30, "target_pct": 60}},
+}
+
+
+def intraday_document(name: str, underlying: str) -> str:
+    spec = INTRADAY[name]
+    entry: dict[str, Any] = {"window": {"from": spec["window"][0], "to": spec["window"][1]}}
+    if "when" in spec:
+        entry["when"] = spec["when"]
+    doc = {"version": VERSION, "name": f"atlas-intraday-{name}-{underlying.lower()}",
+           "underlying": underlying, "mode": "intraday", "expiry": {"cycle": "weekly", "which": 0},
+           "entry": entry, "legs": [dict(leg) for leg in spec["legs"]],
+           "exit": {**spec["exit"], "time": EXIT_TIME}, "sizing": {"max_margin_pct": MARGIN_PCT}}
+    return yaml.safe_dump(doc, sort_keys=False)
+
+
+def intraday_documents() -> list[str]:
+    return [intraday_document(name, u) for u in UNDERLYINGS for name in INTRADAY]
