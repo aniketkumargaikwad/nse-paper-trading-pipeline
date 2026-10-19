@@ -76,3 +76,11 @@ def test_expiry_day_adds_2pct_on_sold_options_from_20_nov_2024():
                            fill_day=date(2024, 11, 14), expiry=date(2024, 11, 14))
     assert on_expiry - plain == pytest.approx(0.02 * F * 100)
     assert before_rule == pytest.approx(plain)
+
+
+def test_margin_is_never_less_than_the_net_premium_paid():
+    """A debit spread blocks at least what it costs; a credit spread's bought wing is
+    paid for out of the sold leg's premium, so its floor is zero."""
+    bought, sold = leg(1, "CE", 21500), leg(-1, "CE", 21800)
+    debit = (bought.price - sold.price) * 50
+    assert margin([bought, sold]) >= debit > 0

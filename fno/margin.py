@@ -118,7 +118,10 @@ def estimate(legs: Sequence[MarginLeg], *, forward: float, years: float, rate: f
     expiry_day = (fill_day is not None and fill_day == expiry and fill_day >= EXPIRY_DAY_FROM)
     extra = (EXPIRY_DAY_EXPOSURE_PCT / 100 * forward * sum(x.units for x in sold)) if expiry_day else 0.0
     worst = scan_loss(legs, forward=forward, years=years, rate=rate, vix=vix)
+    # A position that costs premium to open blocks at least that net premium,
+    # however the scan nets it out.
+    paid = max(0.0, sum(x.sign * x.price * x.units for x in legs))
     if _covered(legs):
-        return max(worst, max_loss(legs)) + extra
+        return max(worst, max_loss(legs), paid) + extra
     exposure = sum(_exposure_pct(x, forward) / 100 * forward * x.units for x in sold)
-    return worst + exposure + extra
+    return max(worst + exposure, paid) + extra

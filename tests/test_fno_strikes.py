@@ -68,3 +68,13 @@ def test_max_oi_and_a_wing_from_another_leg():
     rows = daily({(D1, E1, 21800.0, "CE"): {"oi_units": 999_999}})
     got = pick_strikes(snap(rows), [leg("CE", "max_oi", True), leg("CE", "from_leg", (0, 200.0), "buy")])
     assert got == [21800, 22000]
+
+
+def test_legs_that_cancel_each_other_are_refused():
+    """BANKNIFTY 28 Nov 2024 at 09:20: so few strikes traded that an iron fly's 2% wing
+    landed on its own sold strike - a position that is no position, margin ~0."""
+    rows = daily()
+    rows = rows[~((rows["trade_date"] == D1) & (rows["expiry"] == E1) & (rows["option_type"] == "CE")
+                  & (rows["strike"] > 21500))]                       # nothing above the money listed
+    with pytest.raises(NoStrike, match="cancel"):
+        pick_strikes(snap(rows), [leg("CE", "atm", 0), leg("CE", "otm_pct", 2.0, "buy")])
