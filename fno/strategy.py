@@ -31,13 +31,16 @@ VERSION = "options/1"
 
 # The day's market facts (fno.features) plus two the engine makes per
 # strategy and per day (fno.market): days to the strategy's own expiry, and
-# sessions until the next scheduled event (0 = today).
+# sessions until the next scheduled event (0 = today) - and three the intraday
+# engine makes from the day so far (fno.intraday): the index's 09:15 open, and
+# its 09:15-09:44 high and low, known from 09:45.
 FACT_NAMES = frozenset({
     "vix", "vix_chg_pct", "atm_iv", "iv_rank", "iv_pctile", "pcr_oi", "pcr_vol",
     "max_pain", "straddle", "expected_move_pct", "skew_25d", "dte", "weekday",
     "event_today", "basis_pct", "fii_index_fut_net", "spot", "forward",
     "atm_strike", "max_oi_call_strike", "max_oi_put_strike",
     "expiry_dte", "sessions_to_event",
+    "day_open", "or_high", "or_low",
 })
 CANDLE_NAMES = frozenset({"open", "high", "low", "close"})
 STRIKE_RULES = ("atm", "otm_pct", "delta", "premium", "max_oi", "from_leg")

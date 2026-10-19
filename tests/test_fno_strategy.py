@@ -114,3 +114,8 @@ def test_indicators_on_the_index_are_allowed():
 def test_not_yaml_is_refused():
     with pytest.raises(StrategyError, match="YAML"):
         parse("legs: [unclosed")
+
+
+def test_the_day_so_far_can_be_named_in_an_intraday_strategy():
+    s = parse(SPEC_EXAMPLE.replace("dte <= 4", "close > or_high and or_low > 0 and day_open > 0"))
+    assert s.entry_when is not None
