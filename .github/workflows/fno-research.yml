@@ -1,0 +1,92 @@
+# One options research day, on GitHub's machines, with the laptop off
+# (docs/superpowers/specs/2026-10-19-fno-ai-research-design.md).
+#
+# Triggers are `schedule` and `workflow_dispatch` ONLY. Never add
+# pull_request or pull_request_target: this repository is public, and those
+# would let an outside contribution run with the secrets.
+#
+# Monday, Wednesday and Friday; research.yml (stocks) runs Tuesday, Thursday
+# and Saturday - the owner's split (design 2026-10-02 sec 7). Research only:
+# nothing here can place an order.
+name: fno-research
+
+on:
+  schedule:
+    # 03:33 UTC = 09:03 IST, off the busy minutes (see research.yml).
+    - cron: "33 3 * * 1,3,5"
+  workflow_dispatch:
+    inputs:
+      max_versions:
+        description: "How many versions the day may try"
+        default: "5"
+      dry_run:
+        description: "No AI: one fixed atlas strategy, to prove the wiring"
+        type: boolean
+        default: false
+
+# Shared with research.yml: a stock day and an options day never run at once,
+# so they never draw on the Claude allowance together.
+concurrency:
+  group: research
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # the options notes are committed and pushed
+
+jobs:
+  day:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      FNO_ROOT: data/fno
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # The same pin as research.yml; read research/brain.py before bumping.
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.282
+
+      # The whole F&O store (about 1 GB; R2 charges nothing to read it out).
+      # fno-daily keeps it current every weekday evening.
+      - name: Fetch the F&O store from R2
+        run: python scripts/fno_r2.py pull
+
+      # The facts table is built from the daily files, which fno-daily appends
+      # to without rebuilding it.
+      - name: Rebuild the daily facts (NIFTY, BANKNIFTY)
+        run: |
+          python scripts/fno_features.py --only NIFTY
+          python scripts/fno_features.py --only BANKNIFTY
+
+      - name: Run the day
+        run: |
+          python -m fno.ai.day \
+            --max-versions "${{ inputs.max_versions || 5 }}" \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            --commit-journal --notify
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          CLAUDE_TOKEN_CREATED: ${{ vars.CLAUDE_TOKEN_CREATED }}
+
+      # Also what stops GitHub disabling this schedule: a public repository's
+      # scheduled workflows are turned off after 60 days without activity.
+      - name: Push the options notes
+        if: always()
+        run: git push || echo "nothing to push"
