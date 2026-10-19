@@ -9,12 +9,11 @@
 # stored (Upstox serves about two years - an expiry not saved in time is
 # gone), then publish back to R2. Design 2026-10-02 sec 2.6.
 #
-# NOT the Dhan index minutes. On 15 and 16 Oct 2026 Dhan answered this job's
-# TOTP login with an empty token both nights, while the same login worked from
-# the owner's PC in India. Dhan keeps years of index minutes, so nothing is
-# lost by filling them from the PC (`python scripts/fno_minute.py
-# --indexes-only`, then `python scripts/fno_r2.py push`) - only the option
-# expiries are time-critical.
+# The index and India VIX minutes come from Upstox, not Dhan: on 15 and 16 Oct
+# 2026 Dhan answered this job's TOTP login with an empty token both nights.
+# Upstox serves the same minutes on the analytics token (checked 19 Oct 2026
+# against stored Dhan days), and the options research's exam year needs them
+# fresh.
 name: fno-daily
 
 on:
@@ -64,6 +63,9 @@ jobs:
       # fetched by the next run.
       - name: Minute data - expired options
         run: python scripts/fno_minute.py --options-only --budget-minutes 75
+
+      - name: Minute data - NIFTY, BANKNIFTY, India VIX (from Upstox)
+        run: python scripts/fno_minute.py --indexes-only
 
       # Publish whatever the run got, even if a later step failed: a day's NSE
       # file is worth keeping when Upstox was down.

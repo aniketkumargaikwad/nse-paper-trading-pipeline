@@ -6,6 +6,11 @@ Three endpoints, all GET, all on Upstox Plus (design §2.1):
     /v2/expired-instruments/option/contract               an expiry's contracts
     /v2/expired-instruments/historical-candle/{key}/1minute/{to}/{from}
 
+and one for the indexes themselves (NIFTY, Nifty Bank, India VIX), which the
+same token reads - verified 19 Oct 2026 for days in 2022 and 2026:
+
+    /v3/historical-candle/{key}/minutes/1/{to}/{from}
+
 There is no order code here and none may be added. The token is the owner's
 one-year analytics token (docs/FNO_SETUP.md 1b) - which, measured 14 Oct 2026,
 Upstox DOES accept for expired contracts, though its documents never say so.
@@ -38,7 +43,9 @@ import requests
 from config import IST
 
 BASE = "https://api.upstox.com/v2"
+BASE_V3 = "https://api.upstox.com/v3"
 UNDERLYING_KEYS = {"NIFTY": "NSE_INDEX|Nifty 50", "BANKNIFTY": "NSE_INDEX|Nifty Bank"}
+INDEX_KEYS = {**UNDERLYING_KEYS, "INDIAVIX": "NSE_INDEX|India VIX"}
 CANDLE_COLUMNS = ("ts", "open", "high", "low", "close", "volume", "oi")
 MAX_DAYS_PER_REQUEST = 30
 # Upstox's limits: 50 a second, 500 a minute, 2,000 per 30 minutes. The last is
@@ -106,7 +113,7 @@ class UpstoxClient:
     def __repr__(self) -> str:
         return "UpstoxClient(token=<hidden>)"
 
-    def _get(self, path: str, params: dict[str, str] | None, doing: str) -> Any:
+    def _get(self, path: str, params: dict[str, str] | None, doing: str, *, base: str = BASE) -> Any:
         headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
         last = ""
         limited = 0
@@ -118,7 +125,7 @@ class UpstoxClient:
             else:
                 self._sleep(2 ** attempt)
             try:
-                response = self._http.get(BASE + path, headers=headers, params=params,
+                response = self._http.get(base + path, headers=headers, params=params,
                                           timeout=TIMEOUT_SECONDS)
             except requests.exceptions.RequestException as exc:
                 last = type(exc).__name__          # never the exception: it carries the request
@@ -172,6 +179,23 @@ class UpstoxClient:
             path = (f"/expired-instruments/historical-candle/{quote(key, safe='')}/1minute/"
                     f"{last.isoformat()}/{day.isoformat()}")
             data = self._get(path, None, f"fetching minutes of {key}") or {}
+            frames.append(_candles(data.get("candles") or []))
+            day = last + timedelta(days=1)
+        frames = [f for f in frames if not f.empty]
+        if not frames:
+            return pd.DataFrame(columns=list(CANDLE_COLUMNS))
+        out = pd.concat(frames).drop_duplicates("ts").sort_values("ts")
+        return out.reset_index(drop=True)
+
+    def index_minutes(self, name: str, start: date, end: date) -> pd.DataFrame:
+        """1-minute candles of NIFTY, BANKNIFTY or INDIAVIX, start..end inclusive, oldest first."""
+        key = INDEX_KEYS[name]
+        frames = []
+        day = start
+        while day <= end:
+            last = min(day + timedelta(days=MAX_DAYS_PER_REQUEST - 1), end)
+            path = f"/historical-candle/{quote(key, safe='')}/minutes/1/{last.isoformat()}/{day.isoformat()}"
+            data = self._get(path, None, f"fetching {name} minutes", base=BASE_V3) or {}
             frames.append(_candles(data.get("candles") or []))
             day = last + timedelta(days=1)
         frames = [f for f in frames if not f.empty]
