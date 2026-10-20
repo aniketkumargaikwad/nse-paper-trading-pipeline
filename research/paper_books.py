@@ -16,6 +16,8 @@ nothing in it can be edited after the fact:
   rotation   research.rotation.run, a fixed variant
   options    fno.intraday.run on the minute store; option minutes arrive only
              after each expiry, so the book says how far it is complete
+  index      an NSE total-return index held while NIFTY 50 is above its 200-day
+             average, cash (6% a year) otherwise - the momentum account's rule
 
 The strategies' rules are frozen in research/paper/*.json.
 """
@@ -53,6 +55,7 @@ class Book:
     rules: str | None = None          # file in research/paper/ (stock, options)
     variant: Variant | None = None    # rotation
     underlying: str | None = None     # options
+    index: str | None = None          # index: the NSE index name
 
 
 BOOKS = (
@@ -69,6 +72,12 @@ BOOKS = (
     Book("options-banknifty-condor", "options", "BANKNIFTY same-day iron condor (options AI, 19 Oct)", 500_000.0,
          "6.0% a month in training on only 33 trades, worst day -11%; failed the -10% day rule",
          rules="options-banknifty-condor.json", underlying="BANKNIFTY"),
+    # Added 21 Oct 2026 from the factor-index check (docs/research/2026-10-21-factor-indexes.md):
+    # the strongest evidence found, NSE's own index, no stock-list hindsight.
+    Book("index-midcap-momentum", "index", "Midcap150 Momentum 50 + the cash rule", 500_000.0,
+         "23.7% a year 2009-Oct 2025 with the cash rule (27.3% just holding, luck test t = 3.9), "
+         "worst fall 32%; 29.9% a year 2021-Oct 2025 - NSE's real index, its early years back-calculated",
+         index="NIFTY MIDCAP150 MOMENTUM 50"),
 )
 
 
@@ -205,6 +214,27 @@ def options_book(book: Book, root: Path, *, start: date = START) -> dict[str, An
             "closed": [{"day": t.entered.isoformat(), "pnl": round(t.pnl, 2), "why": t.exit_reason}
                        for t in result.trades][-50:],
             "skipped": {k: sum(1 for s in result.skips if s.kind == k) for k in {s.kind for s in result.skips}}}
+
+
+def index_book(book: Book, tri: pd.DataFrame, *, start: date = START) -> dict[str, Any]:
+    """`book.index` while NIFTY 50 is above its 200-day average, cash at 6% otherwise (NSE TRI levels)."""
+    from research.rotation import index_switch
+    nifty = tri["NIFTY 50"].dropna()
+    sessions = sorted(set(nifty.index) & set(tri[book.index].dropna().index))
+    if not sessions or sessions[-1] < start:
+        return _empty(book, start, sessions[-1] if sessions else None, "not started")
+    result = index_switch(tri[book.index], nifty, start=start, end=sessions[-1], cash_yield=0.06,
+                          cost_pct=ROTATION_COST_PCT, capital=book.capital)
+    hold, curve = _nifty_hold(nifty, start, book.capital)
+    held = [r for r in result.rebalances if r.filled <= sessions[-1]]
+    invested = bool(held and held[-1].holdings)
+    return {**_empty(book, start, sessions[-1], "running"), "complete_through": sessions[-1].isoformat(),
+            "value": round(float(result.equity.iloc[-1]), 2), "nifty_hold": hold,
+            "equity": [[d.isoformat(), round(v, 2), round(float(curve.get(d, float("nan"))), 2)]
+                       for d, v in result.equity.items()],
+            "open": [{"holding": book.index if invested else "cash (6% a year)"}],
+            "closed": [{"decided": r.decided.isoformat(), "filled": r.filled.isoformat(),
+                        "action": "buy the index" if r.holdings else "sell to cash"} for r in held]}
 
 
 def summary_line(b: Mapping[str, Any]) -> str:

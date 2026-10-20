@@ -44,13 +44,19 @@ def main(argv: list[str] | None = None) -> int:
     closes = closes_of(ohlcv)
     from costs import HoldingCostModel
     from fno import store
+    from nse_index_history import fetch as fetch_nse
+    indexes = {b.index for b in pb.BOOKS if b.kind == "index"}
+    tri = (fetch_nse(pb.START.year - 1, {i: i for i in [*indexes, "NIFTY 50"]}, log=lambda *a, **k: None)
+           if indexes else None)
     books, failed = [], False
     for book in pb.BOOKS:
         try:
             if book.kind == "stock":
-                b = pb.stock_book(book, ohlcv, slippage_pct=get_settings().slippage_pct, cost_model=HoldingCostModel())
+                b = pb.stock_book(book, ohlcv, slippage_pct=get_settings(require_supabase=False).slippage_pct, cost_model=HoldingCostModel())
             elif book.kind == "rotation":
                 b = pb.rotation_book(book, closes)
+            elif book.kind == "index":
+                b = pb.index_book(book, tri)
             else:
                 b = pb.options_book(book, store.root_dir())
         except Exception as exc:        # noqa: BLE001 - one book's failure must not stop the rest
