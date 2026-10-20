@@ -1,0 +1,71 @@
+{
+ "description": "Intraday. Near expiry (dte <= 3), a weekly option's remaining time value decays sharply within one session, so the theta is worth collecting the same day. Intraday also avoids the overnight gaps that broke the positional sellers. The defined-risk wings keep margin small, so 2025-26 sets can be bought, and they cap the worst minute.",
+ "document": {
+  "entry": {
+   "when": "dte <= 3 and not event_today and close > or_low and close < or_high and vix_chg_pct < 2 and vix < 20",
+   "window": {
+    "from": "09:45",
+    "to": "11:00"
+   }
+  },
+  "exit": {
+   "stop_pct": 150,
+   "target_pct": 60,
+   "time": "15:20",
+   "when": "vix_chg_pct > 8"
+  },
+  "expiry": {
+   "cycle": "weekly",
+   "which": 0
+  },
+  "legs": [
+   {
+    "lots": 1,
+    "side": "sell",
+    "strike": {
+     "delta": 0.2
+    },
+    "type": "CE"
+   },
+   {
+    "lots": 1,
+    "side": "buy",
+    "strike": {
+     "from_leg": 0,
+     "offset": 200
+    },
+    "type": "CE"
+   },
+   {
+    "lots": 1,
+    "side": "sell",
+    "strike": {
+     "delta": -0.2
+    },
+    "type": "PE"
+   },
+   {
+    "lots": 1,
+    "side": "buy",
+    "strike": {
+     "from_leg": 2,
+     "offset": -200
+    },
+    "type": "PE"
+   }
+  ],
+  "mode": "intraday",
+  "name": "O-20261019-near-expiry-inside-range-iron-condor-nif-v1",
+  "reentry": {
+   "max_per_day": 1
+  },
+  "sizing": {
+   "max_margin_pct": 30
+  },
+  "underlying": "NIFTY",
+  "version": "options/1"
+ },
+ "hypothesis": "Near expiry, NIFTY weekly premium decays fast inside a day. On days when the index stays inside its 09:15-09:44 range and VIX is not rising, realised movement tends to fall short of implied, so a 20-delta condor kept to the afternoon should earn its decay after costs. The textbook iron fly sat at the money and traded every day; this one avoids trend and vol-spike days. Honestly, 5-7% a month is unlikely: I expect roughly 1-3%. BANKNIFTY's monthly expiry will rarely qualify.",
+ "name": "O-20261019-near-expiry-inside-range-iron-condor-nif-v1",
+ "title": "Near-expiry inside-range iron condor (NIFTY weekly)"
+}

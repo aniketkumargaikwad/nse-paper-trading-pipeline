@@ -65,6 +65,13 @@ def render(ctx: AppContext) -> None:
         "Live simulated results. No real orders exist anywhere in this system.",
         ctx,
     )
+    # The 15-minute engine that fills this page has not been scheduled since 11 Aug 2026
+    # (moved off GitHub to Railway, which was never set up), and no strategy is switched
+    # on - so it has recorded no trade. Found 21 Oct 2026; strategies are paper-traded
+    # on the Paper books page instead.
+    st.warning("This page shows the 15-minute paper engine, which is not running - it has recorded "
+               "no trades. The chosen strategies are paper-traded on the **Paper books** and "
+               "**Momentum** pages, updated every weekday evening.")
 
     data = load_all(ctx)
     trades, positions = data["trades"], data["positions"]
