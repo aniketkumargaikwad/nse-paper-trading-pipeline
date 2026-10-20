@@ -164,3 +164,37 @@ def stats(result: Result, benchmark: pd.Series) -> dict:
         "yearly": {int(y): round(100 * v, 1) for y, v in yearly.items()},
         "bench_yearly": {int(y): round(100 * v, 1) for y, v in byearly.items()},
     }
+
+
+def index_switch(index: pd.Series, signal: pd.Series, *, start: date, end: date, cash_yield: float,
+                 cost_pct: float, capital: float = CAPITAL) -> Result:
+    """Hold `index` while `signal` closes at or above its 200-session average, cash otherwise.
+
+    Decided on each month's last session, switched at the next session's close
+    (paying `cost_pct` of the account); cash earns `cash_yield` a year. Both
+    series are close levels; days are the sessions both have.
+    """
+    days = sorted(set(index.dropna().index) & set(signal.dropna().index))
+    sig = signal.reindex(days)
+    average = sig.rolling(TREND_SESSIONS, min_periods=1).mean()
+    inside = [d for d in days if start <= d <= end]
+    decisions = set(month_ends(inside)) | ({inside[-1]} if inside else set())
+    equity, rebalances, invested, pending, value, prev = {}, [], False, None, capital, None
+    for d in inside:
+        if prev is not None:
+            if invested:
+                value *= index[d] / index[prev]
+            else:
+                value *= (1 + cash_yield) ** ((d - prev).days / 365.25)
+        if pending is not None:
+            if pending != invested:
+                cost = cost_pct / 100 * value
+                value -= cost
+                rebalances.append(Rebalance(prev, d, ("INDEX",) if pending else (), value, cost))
+            invested, pending = pending, None
+        equity[d] = value
+        if d in decisions:
+            pending = bool(sig[d] >= average[d])
+        prev = d
+    variant = Variant("index + trend", 0, 0, 1, True)
+    return Result(variant, capital, pd.Series(equity, dtype=float), rebalances)

@@ -95,3 +95,14 @@ def test_missing_index_days_do_not_blank_the_trend_filter():
     r = run(closes, Variant("t", lookback=6, skip=0, top=2, trend=True), start=date(2021, 1, 1),
             end=date(2022, 6, 1), cost_pct=0.0)
     assert all(rb.holdings for rb in r.rebalances)      # a rising index: always invested
+
+
+def test_the_index_switch_holds_the_index_in_an_uptrend_and_cash_in_a_downtrend():
+    from research.rotation import index_switch
+    idx = pd.bdate_range("2020-01-01", periods=600).date
+    up = pd.Series(100 * np.exp(0.001 * np.arange(600)), index=idx)
+    down = pd.Series(100 * np.exp(-0.001 * np.arange(600)), index=idx)
+    held = index_switch(up, up, start=date(2021, 1, 1), end=date(2022, 1, 1), cash_yield=0.0, cost_pct=0.0)
+    cash = index_switch(up, down, start=date(2021, 1, 1), end=date(2022, 1, 1), cash_yield=0.0, cost_pct=0.0)
+    assert held.equity.iloc[-1] > held.capital * 1.2
+    assert cash.equity.iloc[-1] == pytest.approx(cash.capital)
