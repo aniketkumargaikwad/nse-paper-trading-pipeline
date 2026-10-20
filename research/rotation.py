@@ -32,7 +32,13 @@ class Variant:
     lookback: int          # months
     skip: int              # most recent months left out of the return
     top: int               # stocks held
-    trend: bool            # cash while NIFTY 50 is below its 200-session average
+    trend: bool            # cash while NIFTY 50 is below its trend average
+    # The research AI's choices (20 Oct 2026); the defaults are the plain rule.
+    score: str = "return"            # or "return_over_volatility": return / daily-return stdev
+    above_sma: int | None = None     # only stocks closing above their own N-session average
+    max_volatility: float | None = None   # only stocks below this annualised volatility, %
+    weighting: str = "equal"         # or "inverse_volatility"
+    trend_sessions: int = 200        # the NIFTY 50 average the trend filter reads
 
 
 @dataclass(frozen=True)
@@ -70,11 +76,28 @@ def _months_back(day: date, months: int) -> date:
                                     31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]))
 
 
+SCORES = ("return", "return_over_volatility")
+WEIGHTINGS = ("equal", "inverse_volatility")
+YEAR_SESSIONS = 252
+
+
+def _volatility(s: pd.Series, since: date) -> float:
+    """Annualised volatility of daily returns since `since`, in %."""
+    r = s.loc[since:].pct_change().dropna()
+    return float(r.std() * YEAR_SESSIONS ** 0.5 * 100) if len(r) > 2 else float("nan")
+
+
 def ranking(closes: pd.DataFrame, day: date, variant: Variant) -> list[str]:
-    """The strongest stocks by return over the lookback, as known at `day`'s close."""
+    """The strongest stocks by the variant's score over the lookback, as known at `day`'s close."""
+    return [s for s, _ in scored(closes, day, variant)]
+
+
+def scored(closes: pd.DataFrame, day: date, variant: Variant) -> list[tuple[str, float]]:
+    """(symbol, volatility %) of the stocks the variant holds, strongest first."""
     known = closes.loc[closes.index <= day]
     since, until = _months_back(day, variant.lookback), _months_back(day, variant.skip)
     scores: dict[str, float] = {}
+    vols: dict[str, float] = {}
     for symbol in known.columns:
         if symbol.startswith("^"):
             continue
@@ -82,9 +105,32 @@ def ranking(closes: pd.DataFrame, day: date, variant: Variant) -> list[str]:
         if s.empty or s.index[0] > since or s.index[-1] < day:
             continue                    # not listed a full lookback ago, or no price today
         start, end = s.loc[:since].iloc[-1], s.loc[:until].iloc[-1]
-        if start > 0:
-            scores[symbol] = end / start - 1
-    return sorted(scores, key=lambda k: (-scores[k], k))[: variant.top]
+        if start <= 0:
+            continue
+        if variant.above_sma and (len(s) < variant.above_sma
+                                  or s.iloc[-1] < s.iloc[-variant.above_sma:].mean()):
+            continue
+        vol = _volatility(s, since)
+        if variant.max_volatility is not None and not vol <= variant.max_volatility:
+            continue
+        ret = end / start - 1
+        if variant.score == "return_over_volatility":
+            if not vol > 0:
+                continue
+            ret = ret / vol
+        scores[symbol], vols[symbol] = ret, vol
+    best = sorted(scores, key=lambda k: (-scores[k], k))[: variant.top]
+    return [(k, vols[k]) for k in best]
+
+
+def _weights(target: list[tuple[str, float]], variant: Variant) -> dict[str, float]:
+    if not target:
+        return {}
+    if variant.weighting == "inverse_volatility" and all(v > 0 for _, v in target):
+        inv = {s: 1 / v for s, v in target}
+        total = sum(inv.values())
+        return {s: w / total for s, w in inv.items()}
+    return {s: 1 / len(target) for s, _ in target}
 
 
 def run(closes: pd.DataFrame, variant: Variant, *, start: date, end: date, cost_pct: float,
@@ -95,7 +141,7 @@ def run(closes: pd.DataFrame, variant: Variant, *, start: date, end: date, cost_
     # On the index's OWN sessions: the frame is a union of every symbol's days, and a
     # missing index day inside the window would otherwise blank the average (20 Oct 2026).
     index = closes[INDEX].dropna()
-    trend = index.rolling(TREND_SESSIONS).mean()
+    trend = index.rolling(variant.trend_sessions).mean()
     decisions = set(month_ends(sessions))
     rate = cost_pct / 100
     cash, shares = capital, {}
@@ -106,12 +152,13 @@ def run(closes: pd.DataFrame, variant: Variant, *, start: date, end: date, cost_
         if pending is not None:
             decided, target = pending
             value = cash + sum(n * px[s] for s, n in shares.items())
-            want = {s: value / len(target) / px[s] for s in target} if target else {}
+            weights = _weights(target, variant)
+            want = {s: value * weights[s] / px[s] for s in weights}
             traded = sum(abs(want.get(s, 0.0) - shares.get(s, 0.0)) * px[s] for s in set(want) | set(shares))
             cost = rate * traded
             shares = {s: n * (1 - cost / value) for s, n in want.items()} if want else {}
             cash = 0.0 if want else value - cost
-            rebalances.append(Rebalance(decided, day, tuple(target), traded, cost))
+            rebalances.append(Rebalance(decided, day, tuple(sym for sym, _ in target), traded, cost))
             pending = None
         equity[day] = cash + sum(n * px[s] for s, n in shares.items())
         if day in decisions:
@@ -119,7 +166,7 @@ def run(closes: pd.DataFrame, variant: Variant, *, start: date, end: date, cost_
             level = trend.loc[:day]
             calm = not variant.trend or (len(seen) > 0 and not math.isnan(level.iloc[-1])
                                          and seen.iloc[-1] >= level.iloc[-1])
-            pending = (day, ranking(closes, day, variant) if calm else [])
+            pending = (day, scored(closes, day, variant) if calm else [])
     return Result(variant, capital, pd.Series(equity, dtype=float), rebalances)
 
 

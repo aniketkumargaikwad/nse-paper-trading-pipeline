@@ -38,3 +38,6 @@ data/fno/
 .claude/skills/
 .mcp.json
 skills-lock.json
+
+# Momentum research prices and NSE index levels: re-downloaded, never committed.
+data/rotation/
