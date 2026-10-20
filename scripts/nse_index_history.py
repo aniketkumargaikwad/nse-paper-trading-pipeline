@@ -34,21 +34,26 @@ def year(session: requests.Session, name: str, index: str, y: int) -> list[dict]
         raise RuntimeError(f"{index} {y}: not JSON ({r.status_code}): {r.text[:120]}") from exc
 
 
-def main() -> int:
+def fetch(first_year: int = 2005, indexes: dict[str, str] = INDEXES, log=print) -> pd.DataFrame:
+    """Total-return levels, one column per index, `first_year` to today."""
     s = requests.Session()
     s.get(HOME, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
     cols = {}
-    for index, name in INDEXES.items():
+    for index, name in indexes.items():
         rows = []
-        for y in range(2005, date.today().year + 1):
+        for y in range(first_year, date.today().year + 1):
             rows += [(datetime.strptime(r["Date"], "%d %b %Y").date(), float(r["TotalReturnsIndex"]))
                      for r in year(s, name, index, y) if r.get("TotalReturnsIndex") not in (None, "-")]
             time.sleep(0.5)
         cols[index] = pd.Series(dict(rows)).sort_index()
-        print(f"{index}: {len(cols[index])} sessions, {cols[index].index[0]} -> {cols[index].index[-1]}", flush=True)
+        log(f"{index}: {len(cols[index])} sessions, {cols[index].index[0]} -> {cols[index].index[-1]}", flush=True)
+    return pd.DataFrame(cols)
+
+
+def main() -> int:
     out = Path("data/rotation/nse_tri.parquet")
     out.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(cols).to_parquet(out)
+    fetch().to_parquet(out)
     print(f"written: {out}")
     return 0
 
