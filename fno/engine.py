@@ -280,12 +280,30 @@ def _mark(trade: Trade, rows: pd.DataFrame) -> None:
         leg.mark = mark
 
 
+LOSS_CAP = "loss cap"
+
+
+def stop_level(ex: Any, basis: float, equity_at_entry: float) -> tuple[float, str] | None:
+    """The P&L (rupees, before charges) at which the position is closed, and why.
+
+    The tighter of the stop (a share of the net premium) and the loss cap (a
+    share of the account at entry). None if neither applies.
+    """
+    levels = []
+    if ex.stop_pct is not None and basis > 0:
+        levels.append((-ex.stop_pct / 100 * basis, "stop"))
+    if ex.max_loss_pct is not None and equity_at_entry > 0:
+        levels.append((-ex.max_loss_pct / 100 * equity_at_entry, LOSS_CAP))
+    return max(levels, key=lambda lv: lv[0]) if levels else None
+
+
 def _exit_reason(strategy: OptionsStrategy, trade: Trade, day: date, condition: bool) -> str | None:
     ex = strategy.exit
     basis = abs(trade.premium)
     pnl = trade.premium + trade.value()          # before charges, the usual convention
-    if ex.stop_pct is not None and basis > 0 and pnl <= -ex.stop_pct / 100 * basis:
-        return "stop"
+    stop = stop_level(ex, basis, trade.equity_at_entry)
+    if stop is not None and pnl <= stop[0]:
+        return stop[1]
     if ex.target_pct is not None and basis > 0 and pnl >= ex.target_pct / 100 * basis:
         return "target"
     if ex.days_before_expiry > 0 and (trade.expiry - day).days <= ex.days_before_expiry:

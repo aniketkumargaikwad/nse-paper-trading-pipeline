@@ -126,3 +126,22 @@ def test_a_rate_limit_is_waited_out_in_minutes_not_seconds():
     assert c.expiries("NIFTY") == [date(2025, 4, 17)]
     assert waits == [upstox.PAUSE_SECONDS, *upstox.RATE_LIMIT_WAITS[:2]]
     assert upstox.RATE_LIMIT_WAITS[0] >= 60 and sum(upstox.RATE_LIMIT_WAITS) >= 30 * 60
+
+
+def test_index_minutes_use_the_v3_candle_endpoint_and_come_back_oldest_first():
+    rows = [["2026-10-16T09:16:00+05:30", 23050.0, 23060.0, 23040.0, 23055.0, 0, 0],
+            ["2026-10-16T09:15:00+05:30", 23065.1, 23076.55, 23017.45, 23050.25, 0, 0]]
+    c, http = client(Resp({"status": "success", "data": {"candles": rows}}))
+    frame = c.index_minutes("INDIAVIX", date(2026, 10, 16), date(2026, 10, 16))
+    assert http.calls[0]["url"] == ("https://api.upstox.com/v3/historical-candle/"
+                                    "NSE_INDEX%7CIndia%20VIX/minutes/1/2026-10-16/2026-10-16")
+    assert [t.strftime("%H:%M") for t in frame["ts"]] == ["09:15", "09:16"]
+    assert frame["open"].iloc[0] == 23065.1
+
+
+def test_index_minutes_ask_at_most_thirty_days_at_a_time():
+    empty = Resp({"status": "success", "data": {"candles": []}})
+    c, http = client(empty, empty, empty)
+    frame = c.index_minutes("NIFTY", date(2026, 1, 1), date(2026, 3, 2))
+    assert len(http.calls) == 3 and frame.empty
+    assert http.calls[0]["url"].endswith("/minutes/1/2026-01-30/2026-01-01")

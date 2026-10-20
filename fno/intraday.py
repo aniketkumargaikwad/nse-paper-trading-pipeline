@@ -35,7 +35,7 @@ from expr_eval import evaluate
 from fno import account, fills, margin
 from fno.costs import Fill, FnoCharges
 from fno.engine import (CAPITAL, LIMIT_NOTE, NO_CAPITAL, NO_EXPIRY, NO_STRIKE, NO_TRADE,
-                        BacktestResult, Skip, Trade, TradeLeg, _within_limits)
+                        BacktestResult, Skip, Trade, TradeLeg, _within_limits, stop_level)
 from fno.intraday_market import IntradayMarket
 from fno.rates import risk_free
 from fno.strategy import FACT_NAMES, OptionsStrategy, StrategyError
@@ -252,17 +252,16 @@ def _breach(strategy: OptionsStrategy, held: _Held, t: pd.Timestamp) -> tuple[st
     best = held.held_to_limits([lo if leg.sign < 0 else hi for leg, hi, lo in zip(legs, h, l)], v)
     held.last = c
     basis = abs(held.trade.premium)
-    if basis <= 0:
-        return None
     at_open, at_worst, at_best = held.pnl(o), held.pnl(worst), held.pnl(best)
     ex = strategy.exit
-    if ex.stop_pct is not None:
-        level = -ex.stop_pct / 100 * basis
+    stop = stop_level(ex, basis, held.trade.equity_at_entry)
+    if stop is not None:
+        level, why = stop
         if at_open <= level:
-            return "stop", o
+            return why, o
         if at_worst <= level:
-            return "stop", _between(o, worst, (level - at_open) / (at_worst - at_open))
-    if ex.target_pct is not None:
+            return why, _between(o, worst, (level - at_open) / (at_worst - at_open))
+    if ex.target_pct is not None and basis > 0:
         level = ex.target_pct / 100 * basis
         if at_open >= level:
             return "target", o

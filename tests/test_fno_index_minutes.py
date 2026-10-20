@@ -120,3 +120,29 @@ def test_off_minute_candles_and_non_session_days_are_dropped(tmp_path):
                        log=lambda *a, **k: None)
     got = index_minutes.read(tmp_path, "NIFTY", date(2022, 1, 1), date(2022, 1, 31))
     assert [t.strftime("%Y-%m-%d %H:%M:%S") for t in got["ts"]] == ["2022-01-07 09:15:00"]
+
+
+class FakeUpstox:
+    def __init__(self, frame):
+        self.frame, self.asked = frame, []
+
+    def index_minutes(self, name, start, end):
+        self.asked.append((name, start, end))
+        days = self.frame["ts"].dt.date
+        return self.frame[(days >= start) & (days <= end)].reset_index(drop=True)
+
+
+def test_the_upstox_provider_hands_fill_the_same_shape_as_dhan(tmp_path):
+    ts = pd.to_datetime(["2026-10-16 09:15", "2026-10-16 09:16"]).tz_localize(index_minutes.IST)
+    frame = pd.DataFrame({"ts": ts, "open": [1.0, 2.0], "high": [1.5, 2.5], "low": [0.5, 1.5],
+                          "close": [1.2, 2.2], "volume": [0, 0], "oi": [0, 0]})
+    up = FakeUpstox(frame)
+    provider = index_minutes.UpstoxIndexProvider(up)
+    stored = index_minutes.fill(provider, tmp_path, "INDIAVIX", today=date(2026, 10, 16),
+                                log=lambda *a, **k: None)
+    assert stored == 2
+    assert up.asked[0][0] == "INDIAVIX"
+    back = index_minutes.read(tmp_path, "INDIAVIX", date(2026, 10, 16), date(2026, 10, 16))
+    assert list(back.columns) == list(index_minutes.COLUMNS)
+    assert back["ts"].dt.strftime("%H:%M").tolist() == ["09:15", "09:16"]
+    assert str(back["ts"].dt.tz) == str(index_minutes.IST)

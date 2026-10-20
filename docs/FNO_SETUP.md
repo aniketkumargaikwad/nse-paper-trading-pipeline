@@ -15,7 +15,7 @@ email or a file in this repository: the repository is public.
 Keep a note open (a password manager is best) to collect five values as you
 go. Each is marked **► save this**.
 
-**Status, 14 Oct 2026:**
+**Status, 19 Oct 2026:**
 
 | Part | Status |
 |---|---|
@@ -24,7 +24,8 @@ go. Each is marked **► save this**.
 | 3. Cloudflare R2 | **Done** — bucket works; the F&O store (about 160 MB) is in it |
 | 4a. `.env` | **Done** |
 | 4b. GitHub secrets | **Done** — all nine F&O secrets are on GitHub |
-| 6. Daily GitHub job | **Waiting on you** — say "merge the F&O branch" |
+| 6. Daily GitHub job | **Done** — fno-daily runs every weekday evening |
+| 7. Options AI research | **Built 19 Oct 2026** — runs on GitHub once its branch is merged |
 
 ---
 
@@ -199,10 +200,13 @@ From then on:
   option expiry that has just ended (it must be saved within Upstox's
   window or it is gone), published to R2. Nothing to do; GitHub emails you
   if a run fails.
-- **Index minutes (Dhan) are not in the daily job.** Dhan refused this job's
-  login from GitHub's servers on 15 and 16 Oct 2026 while the same login
-  worked from your PC. Dhan keeps years of index minutes, so they are filled
-  from your PC when research needs them — I do that.
+- **Index minutes come from Upstox in the daily job** (since 19 Oct 2026).
+  Dhan refused this job's login from GitHub's servers on 15 and 16 Oct 2026;
+  Upstox serves the same NIFTY, BANKNIFTY and India VIX minutes on the key
+  you already made. Dhan filled the history before that.
+- **fno-research** runs Monday, Wednesday and Friday at about 9 am: the AI
+  designs an options strategy, tests it, and messages you the verdict
+  (Telegram and email). Stock research runs Tuesday, Thursday and Saturday.
 - **fno-backfill** runs only when you start it: GitHub → **Actions** →
   **fno-backfill** → **Run workflow**. You will not normally need it — the
   first fill runs from your PC in step 5.

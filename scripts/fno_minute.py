@@ -1,16 +1,20 @@
 """Fill or top up the minute store: expired NIFTY / BANKNIFTY options from Upstox,
-the indexes and India VIX from Dhan.
+the indexes and India VIX from Upstox (or Dhan).
 
     python scripts/fno_minute.py                  # everything due
     python scripts/fno_minute.py --options-only
     python scripts/fno_minute.py --indexes-only
+    python scripts/fno_minute.py --indexes-only --index-source dhan
     python scripts/fno_minute.py --only NIFTY
 
 Resumable: minute/_expiries.csv records every expiry fetched, index files say
 how far they reach. Run scripts/fno_daily.py first - the strike band reads
 the NSE session list and the index closes.
 
-Needs UPSTOX_ANALYTICS_TOKEN (options) and DHAN_* plus SUPABASE_* (indexes).
+Needs UPSTOX_ANALYTICS_TOKEN; DHAN_* plus SUPABASE_* only for --index-source dhan.
+Dhan filled the index history; since 19 Oct 2026 Upstox tops it up, because
+Dhan's login fails from GitHub (a stored day of each matched Upstox within
+0.01%).
 """
 
 from __future__ import annotations
@@ -59,8 +63,8 @@ def options(root: Path, underlyings: list[str], today, *, budget_seconds: float 
     return 0
 
 
-def indexes(root: Path, today) -> int:
-    provider = index_minutes.create_provider()
+def indexes(root: Path, today, source: str = "upstox") -> int:
+    provider = index_minutes.create_provider(source)
     sessions = {d for d, status in store.load_ledger(root).items() if status == "ok"}
     for name in index_minutes.INDEXES:
         n = index_minutes.fill(provider, root, name, today=today, sessions=sessions)
@@ -77,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--options-only", action="store_true")
     group.add_argument("--indexes-only", action="store_true")
+    parser.add_argument("--index-source", choices=index_minutes.SOURCES, default="upstox")
     args = parser.parse_args(argv)
     root = store.root_dir()
     today = datetime.now(IST).date()
@@ -90,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
             failed = True
     if not args.options_only:
         try:
-            indexes(root, today)
+            indexes(root, today, args.index_source)
         except Exception as exc:
             print(f"INDEXES STOPPED: {type(exc).__name__}: {exc}", file=sys.stderr)
             failed = True

@@ -49,7 +49,7 @@ MAX_LEGS = 4
 _TOP_KEYS = {"version", "name", "underlying", "mode", "expiry", "entry", "legs",
              "exit", "reentry", "sizing"}
 _ENTRY_KEYS = {"window", "when"}
-_EXIT_KEYS = {"target_pct", "stop_pct", "time", "days_before_expiry", "when"}
+_EXIT_KEYS = {"target_pct", "stop_pct", "max_loss_pct", "time", "days_before_expiry", "when"}
 _HHMM = re.compile(r"[0-2]\d:[0-5]\d")
 
 
@@ -78,6 +78,10 @@ class Exit:
     days_before_expiry: int
     time: str | None
     when: Expr | None
+    # A loss cap: close the whole position once it has lost this share of the
+    # account (its equity at entry), before charges - the research AI's own
+    # request of 20 Oct 2026, after each failure traced to one or two days.
+    max_loss_pct: float | None = None
 
 
 @dataclass(frozen=True)
@@ -219,6 +223,9 @@ def parse(text: str) -> OptionsStrategy:
     target, stop = ex.get("target_pct"), ex.get("stop_pct")
     for key, value in (("target_pct", target), ("stop_pct", stop)):
         _need(value is None or (_is_number(value) and value > 0), f"exit.{key} must be a positive number")
+    max_loss = ex.get("max_loss_pct")
+    _need(max_loss is None or (_is_number(max_loss) and 0 < max_loss <= 100),
+          "exit.max_loss_pct is a share of the account: above 0 and at most 100")
     days_before = ex.get("days_before_expiry", 0)
     _need(_is_whole(days_before) and days_before >= 0,
           "exit.days_before_expiry must be 0 (hold to expiry) or more")
@@ -228,7 +235,8 @@ def parse(text: str) -> OptionsStrategy:
     else:
         _need(exit_time is None, "exit.time is for intraday strategies")
     exit_ = Exit(None if target is None else float(target), None if stop is None else float(stop),
-                 days_before, exit_time, _expression(ex.get("when"), "exit.when"))
+                 days_before, exit_time, _expression(ex.get("when"), "exit.when"),
+                 None if max_loss is None else float(max_loss))
 
     reentry = doc.get("reentry") or {}
     _need(isinstance(reentry, dict), "reentry must be a mapping")

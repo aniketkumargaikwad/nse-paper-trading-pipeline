@@ -119,3 +119,15 @@ def test_not_yaml_is_refused():
 def test_the_day_so_far_can_be_named_in_an_intraday_strategy():
     s = parse(SPEC_EXAMPLE.replace("dte <= 4", "close > or_high and or_low > 0 and day_open > 0"))
     assert s.entry_when is not None
+
+
+def test_a_loss_cap_is_a_share_of_the_account():
+    s = parse(SPEC_EXAMPLE.replace("stop_pct: 100", "stop_pct: 100\n  max_loss_pct: 2.5"))
+    assert s.exit.max_loss_pct == 2.5
+    assert parse(SPEC_EXAMPLE).exit.max_loss_pct is None
+
+
+@pytest.mark.parametrize("value", ["0", "120", "'two'"])
+def test_a_loss_cap_outside_0_to_100_is_refused(value):
+    with pytest.raises(StrategyError, match="max_loss_pct"):
+        parse(SPEC_EXAMPLE.replace("stop_pct: 100", f"stop_pct: 100\n  max_loss_pct: {value}"))

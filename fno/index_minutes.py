@@ -1,4 +1,8 @@
-"""NIFTY, BANKNIFTY and India VIX minute by minute, from Dhan (design §2.1).
+"""NIFTY, BANKNIFTY and India VIX minute by minute, from Dhan or Upstox (design §2.1).
+
+Upstox (`UpstoxIndexProvider`) is the top-up source since 19 Oct 2026: Dhan's
+login fails from GitHub's machines, and Upstox serves the same minutes with
+the analytics token the option fetch already uses. Dhan filled the history.
 
 Dhan's ids from its scrip master (checked 9 Oct 2026): NIFTY 13, BANKNIFTY 25,
 INDIA VIX 21, all on the IDX_I segment. Measured 14 Oct 2026: NIFTY minutes
@@ -126,8 +130,28 @@ def fill(provider: Any, root: Path, name: str, *, today: date,
     return total
 
 
-def create_provider() -> Any:
-    """A Dhan provider for the indexes, sharing the stock pipeline's token cache."""
+class UpstoxIndexProvider:
+    """`fetch_minutes` from Upstox, in the shape `fill` takes from Dhan."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def fetch_minutes(self, symbol: str, from_utc: datetime, to_utc: datetime) -> pd.DataFrame:
+        frame = self._client.index_minutes(symbol, from_utc.astimezone(IST).date(),
+                                           to_utc.astimezone(IST).date())
+        if frame.empty:
+            return pd.DataFrame(columns=list(COLUMNS[1:]))
+        return frame.set_index("ts")[list(COLUMNS[1:])]
+
+
+SOURCES = ("upstox", "dhan")
+
+
+def create_provider(source: str = "upstox") -> Any:
+    """The index-minute source: Upstox (the analytics token), or Dhan (its login and Supabase)."""
+    if source == "upstox":
+        from fno import upstox
+        return UpstoxIndexProvider(upstox.UpstoxClient(upstox.token_from_env()))
     from db import SupabaseStore
     from dhan_auth import DhanCredentials, DhanTokenManager
     from providers.dhan import DhanProvider

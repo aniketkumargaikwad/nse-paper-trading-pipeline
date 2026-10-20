@@ -156,3 +156,26 @@ legs: [{side: sell, type: CE, strike: {atm: 0}, lots: 1}]
 """)
     with pytest.raises(StrategyError, match="fno.engine"):
         run(s, market(), start=P, end=D)
+
+
+def test_a_loss_cap_tighter_than_the_stop_exits_at_the_cap():
+    jump = {(D, "10:00", ATM, "CE"): {"high": 120.0}}
+    [t] = run(straddle(exit_=", stop_pct: 500, max_loss_pct: 1"),
+              market(option_overrides={**FILL, **jump}), start=P, end=D).trades
+    assert (t.exit_reason, t.facts["exit_time"]) == ("loss cap", "10:00")
+    units = t.sets * LOT
+    before_costs = t.pnl + t.charges
+    assert -0.01 * CAPITAL - units * 1.0 < before_costs < -0.01 * CAPITAL   # the exit's half-spreads below it
+
+
+def test_the_stop_stays_the_reason_when_it_is_tighter_than_the_cap():
+    jump = {(D, "10:00", ATM, "CE"): {"high": 120.0}}
+    [t] = run(straddle(exit_=", stop_pct: 50, max_loss_pct: 50"),
+              market(option_overrides={**FILL, **jump}), start=P, end=D).trades
+    assert t.exit_reason == "stop"
+
+
+def test_a_loss_cap_alone_is_enough():
+    [t] = run(straddle(exit_=", max_loss_pct: 1"),
+              market(option_overrides={**FILL, (D, "10:00", ATM, "CE"): {"high": 120.0}}), start=P, end=D).trades
+    assert t.exit_reason == "loss cap"

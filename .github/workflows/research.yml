@@ -11,7 +11,9 @@ on:
     # minutes every other cron in the world picks, and GitHub's scheduler is
     # best-effort - under load a run is delayed, and can be dropped entirely.
     # The first attempt here used "30 0 * * *" and never fired at all.
-    - cron: "33 3 * * *"
+    # Tuesday, Thursday and Saturday since 19 Oct 2026: options research
+    # (fno-research.yml) has Monday, Wednesday and Friday - the owner's split.
+    - cron: "33 3 * * 2,4,6"
   workflow_dispatch:
     inputs:
       max_versions:

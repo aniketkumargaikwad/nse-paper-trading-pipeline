@@ -449,7 +449,7 @@ keys - `docs/FNO_SETUP.md`):**
 |---|---|
 | `minute/<UNDERLYING>/<EXPIRY>.parquet` | expired NIFTY / BANKNIFTY options, 1-minute, from Upstox |
 | `minute/_expiries.csv` | the ledger: each expiry fetched and what it held |
-| `index_minute/<NAME>/<YEAR>.parquet` | NIFTY (from 3 Apr 2017), BANKNIFTY and INDIAVIX (from 4 Aug 2021), 1-minute, from Dhan |
+| `index_minute/<NAME>/<YEAR>.parquet` | NIFTY (from 3 Apr 2017), BANKNIFTY and INDIAVIX (from 4 Aug 2021), 1-minute, from Dhan; topped up from Upstox since 19 Oct 2026 |
 
 Which options: every strike within 5% of the index's close on any of the
 expiry's final 10 sessions (weekly) or 20 (monthly), for those sessions.
