@@ -34,13 +34,14 @@ UNKNOWN = "no trades"
 # Not a classification - a refusal. See the module docstring.
 UNSUPPORTED = ("f&o", "futures", "options")
 
-# What the owner is aiming for, as a monthly return. Ambitious: 5% a month
-# compounds to 80% a year and 7% to 125%, which is far above what most
-# professional funds sustain. It is a target to steer towards and to measure
-# the distance from, NOT a filter - filtering on it would simply produce empty
-# days. The floor was 4% until 2026-09-16, when the owner restated it as 5%.
-TARGET_MONTHLY_MIN = 5.0
-TARGET_MONTHLY_MAX = 7.0
+# What the owner is aiming for, as a monthly return. 1.5-2% a month compounds
+# to 20-27% a year: a margin above the best evidence found (NSE's Nifty200
+# Momentum 30, about 21% a year 2009-2025 with dividends - docs/research/
+# 2026-10-20-momentum-rotation.md). It is a target to steer towards and to
+# measure the distance from, NOT a filter. History: 4% until 2026-09-16, 5-7%
+# until 2026-10-20, when the owner reset it to what the evidence supports.
+TARGET_MONTHLY_MIN = 1.5
+TARGET_MONTHLY_MAX = 2.0
 
 def holding_days(trades: Sequence[Any]) -> float | None:
     """The MEDIAN holding period in days.
@@ -111,7 +112,7 @@ def meets_target(monthly_pct: float | None) -> str:
     if monthly_pct is None:
         return "not measured"
     if monthly_pct < TARGET_MONTHLY_MIN:
-        return f"below the {TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}% target"
+        return f"below the {TARGET_MONTHLY_MIN:g}-{TARGET_MONTHLY_MAX:g}% target"
     if monthly_pct > TARGET_MONTHLY_MAX:
-        return f"above the {TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}% target"
-    return f"IN the {TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}% target"
+        return f"above the {TARGET_MONTHLY_MIN:g}-{TARGET_MONTHLY_MAX:g}% target"
+    return f"IN the {TARGET_MONTHLY_MIN:g}-{TARGET_MONTHLY_MAX:g}% target"

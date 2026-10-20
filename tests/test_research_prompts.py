@@ -115,9 +115,9 @@ def test_review_says_the_tables_are_ranked_by_excess_over_holding():
 
 def test_propose_states_the_monthly_return_being_aimed_at():
     text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
-    assert "5-7% A MONTH" in text
-    assert "80-125% a year" in text
-    assert "deliberately ambitious" in text
+    assert "1.5-2% A MONTH" in text
+    assert "20-27% a year" in text
+    assert "Nifty200 Momentum 30" in text
 
 
 def test_propose_states_the_basket_rule_the_pick_is_made_by():

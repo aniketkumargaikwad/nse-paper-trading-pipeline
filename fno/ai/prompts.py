@@ -26,17 +26,17 @@ FORMAT_DOC = Path("docs/OPTIONS_STRATEGY_FORMAT.md")
 
 AIM = f"""\
 What this strategy is being designed to achieve:
-- an average compounded return of {TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}% A MONTH on a Rs 5,00,000
-  account trading NIFTY or BANKNIFTY options. That is deliberately ambitious:
-  say so in your hypothesis if you think the idea cannot reach it, rather
-  than quietly aiming lower.
+- an average compounded return of {TARGET_MONTHLY_MIN:g}-{TARGET_MONTHLY_MAX:g}% A MONTH on a Rs 5,00,000
+  account trading NIFTY or BANKNIFTY options - a margin above the best real
+  evidence found (NSE's Nifty200 Momentum 30 stock index, about 21% a year
+  2009-2025). Say so in your hypothesis if you think the idea cannot reach it.
 - it must PASS this rule on at least one of the two indexes, on the training
   years, or it is discarded however good one number looks:
   - history: at least {rules.MIN_MONTHS['positional']} months (positional) or {rules.MIN_MONTHS['intraday']} months (intraday)
   - worst single day no worse than {rules.WORST_DAY_PCT:.0f}% of the account
   - worst fall from a high no more than {rules.MAX_FALL_PCT:.0f}%
   - a positive average month
-  - at least {rules.MIN_TRADES_PER_MONTH:.0f} trades a month, or an average month of {TARGET_MONTHLY_MIN:.0f}% or more. A
+  - at least {rules.MIN_TRADES_PER_MONTH:.0f} trades a month, or an average month of {TARGET_MONTHLY_MIN:g}% or more. A
     rule that trades a few times a year FAILS: the owner does not want it,
     and the account sits idle while simply holding NIFTY earns more.
   - beat simply holding the index on the same capital in at least
@@ -152,8 +152,8 @@ def review_prompt(*, summary: Any, version: int, versions_left: int) -> str:
         "Read months_positive_pct, worst_day_pct, worst_fall_pct, trades_per_month, the year rows "
         "(strategy_pct against holding_pct), edge_t (the luck test, needs 2 or more) and the splits "
         "by market condition before believing an average. A `warning` means most days could not "
-        f"be entered as written. The aim is an average month of {TARGET_MONTHLY_MIN:.0f}-"
-        f"{TARGET_MONTHLY_MAX:.0f}% that passes; a version trading a few times a year has failed "
+        f"be entered as written. The aim is an average month of {TARGET_MONTHLY_MIN:g}-"
+        f"{TARGET_MONTHLY_MAX:g}% that passes; a version trading a few times a year has failed "
         "however well its trades did.",
         "",
         "Then set decision to one of:",

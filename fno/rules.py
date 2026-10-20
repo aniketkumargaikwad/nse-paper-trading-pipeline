@@ -36,7 +36,7 @@ def disqualified(report: Any, mode: str) -> str | None:
         return f"lost money on average: {b.avg_month_pct:+.2f}% a month"
     if b.trades_per_month < MIN_TRADES_PER_MONTH and b.avg_month_pct < TARGET_MONTHLY_MIN:
         return (f"too slow: {b.trades_per_month:.1f} trades a month (needs {MIN_TRADES_PER_MONTH:.0f}, "
-                f"or {TARGET_MONTHLY_MIN:.0f}% a month)")
+                f"or {TARGET_MONTHLY_MIN:g}% a month)")
     if b.years_beating_holding_pct < MIN_YEARS_BEATING_HOLDING_PCT:
         return f"beat holding the index in only {b.years_beating_holding_pct:.0f}% of years"
     luck = b.avg_excess_pct > 0 if b.edge_t is None else b.edge_t >= LUCK_STRONG_T
