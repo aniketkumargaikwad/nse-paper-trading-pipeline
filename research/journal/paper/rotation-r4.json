@@ -1,0 +1,16 @@
+{
+ "key": "rotation-r4",
+ "kind": "rotation",
+ "title": "Momentum rotation, 10 stocks (R4)",
+ "training": "3.5% a month in training, worst fall 43% - on today's stock list, about 1% a month of it hindsight",
+ "start": "2026-10-21",
+ "as_of": "2026-10-19",
+ "complete_through": null,
+ "capital": 500000.0,
+ "value": 500000.0,
+ "nifty_hold": 500000.0,
+ "state": "not started",
+ "equity": [],
+ "open": [],
+ "closed": []
+}

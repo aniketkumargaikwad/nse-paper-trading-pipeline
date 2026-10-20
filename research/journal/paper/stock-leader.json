@@ -1,0 +1,16 @@
+{
+ "key": "stock-leader",
+ "kind": "stock",
+ "title": "Leader buy-and-hold (stock research, 20 Sep)",
+ "training": "4.4% a month in training as a 10-slot account, 2009-2025 - on today's stock list, so flattered by hindsight; rejected then for trading 1.4 times a month",
+ "start": "2026-10-21",
+ "as_of": "2026-10-19",
+ "complete_through": null,
+ "capital": 1000000.0,
+ "value": 1000000.0,
+ "nifty_hold": 1000000.0,
+ "state": "not started",
+ "equity": [],
+ "open": [],
+ "closed": []
+}

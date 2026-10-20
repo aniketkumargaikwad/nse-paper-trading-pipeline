@@ -1,0 +1,59 @@
+{
+ "description": "Long-term (positions intended to be held months). Daily bars only. Buys any of the 200 stocks that is currently a leader - above a rising 200-day EMA, above the 50-day SMA, 6-month ROC > 10%, within 15% of its 250-day high - and is not extended above its 20-day EMA. Holds through all normal pullbacks; sells only when price is below the 200-day EMA while the 50-day SMA is falling, or on a wide 8xATR disaster stop.",
+ "document": {
+  "enabled": false,
+  "initial": "flat",
+  "instruments": [
+   "NSE:RELIANCE"
+  ],
+  "name": "R-20260920-leader-buy-and-hold-on-daily-bars-exit-o-v1",
+  "on_position_closed": "flat",
+  "risk": {
+   "stop_loss": {
+    "type": "percent",
+    "value": 25
+   },
+   "target": {
+    "type": "percent",
+    "value": 50
+   }
+  },
+  "sizing": {
+   "notional_per_trade": 100000,
+   "type": "notional"
+  },
+  "states": [
+   {
+    "name": "flat",
+    "transitions": [
+     {
+      "enter": {
+       "side": "long",
+       "stop": "close - atr(14) * 8",
+       "target": "close * 10"
+      },
+      "goto": "holding",
+      "when": "close > ema(200) and ema(200) > ema(200)[20] and close > sma(50) and roc(120) > 10 and close > donchian.upper(250) * 0.85 and close < ema(20) * 1.10"
+     }
+    ]
+   },
+   {
+    "name": "holding",
+    "transitions": [
+     {
+      "exit": {
+       "reason": "regime_break"
+      },
+      "goto": "flat",
+      "when": "close < ema(200) and sma(50) < sma(50)[10]"
+     }
+    ]
+   }
+  ],
+  "timeframe": "5m",
+  "version": 3
+ },
+ "hypothesis": "5-7% a month (80-125% a year) is not reachable by this idea and I do not claim it: holding these stocks averaged +1.9%/month and no daily long-only rule measured here has beaten that. The honest target is +2.5-3.5%/month with the dip under 30%. Every prior version failed the same way - too idle (75-90% flat) or cutting compounders. This one inverts that: the entry is a standing state, not an event, so the ten slots refill the day one empties and stay ~100% used, occupied by leaders rather than random names; the exit is deliberately severe so compounders are held for years and fees are ~2 trades/stock/year. Excess over hold must come from slot selection plus sitting out confirmed bear regimes (2018, 2020, 2022).",
+ "name": "R-20260920-leader-buy-and-hold-on-daily-bars-exit-o-v1",
+ "title": "Leader buy-and-hold on daily bars, exit only on confirmed regime break"
+}
