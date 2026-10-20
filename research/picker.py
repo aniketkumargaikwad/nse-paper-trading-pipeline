@@ -82,7 +82,7 @@ def disqualified(reading: Basket) -> str | None:
     if (reading.trades_per_month < MIN_TRADES_PER_MONTH
             and reading.avg_month_pct < TARGET_MONTHLY_MIN):
         return (f"too slow: {reading.trades_per_month:.1f} trades a month (needs "
-                f"{MIN_TRADES_PER_MONTH:.0f}, or {TARGET_MONTHLY_MIN:.0f}% a month to excuse it)")
+                f"{MIN_TRADES_PER_MONTH:.0f}, or {TARGET_MONTHLY_MIN:g}% a month to excuse it)")
     if reading.years_beating_holding_pct < MIN_YEARS_BEATING_HOLDING_PCT:
         ahead = sum(1 for y in reading.years if y["strategy_pct"] > y["holding_pct"])
         return (f"beat holding in only {ahead} of {len(reading.years)} years - a lead from "

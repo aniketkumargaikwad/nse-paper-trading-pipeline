@@ -1,0 +1,53 @@
+# The momentum + cash-rule paper account (research/momentum_paper.py). NO real money.
+#
+# Triggers are `schedule` and `workflow_dispatch` ONLY. Never add
+# pull_request or pull_request_target: this repository is public.
+#
+# Every weekday evening: fetch NSE's total-return levels for the Nifty200
+# Momentum 30 and NIFTY 50, recompute the book from its fixed start, commit
+# research/journal/momentum/paper.json (the dashboard's Momentum page reads
+# it), and on a new month's first session send the month's message.
+name: momentum-paper
+
+on:
+  schedule:
+    # 13:52 UTC = 19:22 IST, after NSE publishes the day's index levels.
+    - cron: "52 13 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: momentum-paper
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Update the paper account
+        run: python scripts/momentum_paper.py --notify
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+
+      - name: Commit the book
+        run: |
+          git add research/journal/momentum/paper.json
+          git -c user.name="momentum paper" -c user.email=noreply@anthropic.com \
+            commit -m "docs(research): momentum paper account $(date -u +%F)" || exit 0
+          git pull --rebase -q && git push

@@ -133,16 +133,21 @@ class OptionsBrain(OpusBrain):
                  echo: Any = print) -> None:
         super().__init__(claude, [format_doc], echo=echo, atlas=atlas_lines)
         self._format_doc = format_doc
+        # Today's own versions: the loop passes only earlier days' (see research.rotation_day).
+        self._today: list[str] = []
+        self._last: dict[str, Any] = {}
 
     def propose(self, *, notes, ideas_tried, previous, change_hint, error) -> dict[str, Any]:
         if error:
             self._echo(f"  repairing: {error.splitlines()[0][:140]}")
         prompt = prompts.propose_prompt(format_doc=self._format_doc, atlas=self._atlas, notes=notes,
-                                        ideas_tried=ideas_tried, previous=previous,
+                                        ideas_tried=[*self._today, *ideas_tried], previous=previous,
                                         change_hint=change_hint, error=error)
-        return self._ask(prompt, prompts.PROPOSE_SCHEMA, PROPOSE_INSTRUCTION)
+        self._last = self._ask(prompt, prompts.PROPOSE_SCHEMA, PROPOSE_INSTRUCTION)
+        return self._last
 
     def review(self, *, summary, version, versions_left) -> dict[str, Any]:
+        self._today.insert(0, f"today, version {version} ({self._last.get('title', '')}): {one_line(summary)}")
         prompt = prompts.review_prompt(summary=summary, version=version, versions_left=versions_left)
         return self._ask(prompt, prompts.REVIEW_SCHEMA, REVIEW_INSTRUCTION)
 

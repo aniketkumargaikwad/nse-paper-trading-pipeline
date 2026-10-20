@@ -96,10 +96,10 @@ def _bars(timeframes: Sequence[str]) -> str:
 # holding one stock for two years and trading twice a quarter.
 AIM = f"""\
 What this strategy is being designed to achieve:
-- an average compounded return of {TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}% A MONTH,
-  which is {_YEARLY_MIN:.0f}-{_YEARLY_MAX:.0f}% a year. That is deliberately ambitious: say so in
-  your hypothesis if you think the idea cannot reach it, rather than quietly
-  aiming lower.
+- an average compounded return of {TARGET_MONTHLY_MIN:g}-{TARGET_MONTHLY_MAX:g}% A MONTH,
+  which is {_YEARLY_MIN:.0f}-{_YEARLY_MAX:.0f}% a year - a margin above the best real evidence
+  found (NSE's Nifty200 Momentum 30 index, about 21% a year 2009-2025 with
+  dividends). Say so in your hypothesis if you think the idea cannot reach it.
 - judged as an ACCOUNT: ten slots of Rs 1,00,000, taking entry signals as
   they arrive across all 200 stocks on one timeframe and skipping a signal
   when every slot is busy, measured month by month on the whole Rs 10,00,000.
@@ -241,7 +241,7 @@ def review_prompt(*, summary: TrainingSummary, version: int, versions_left: int)
         "sees, which only a rule that stays invested longer can close. `baskets` "
         "is the same rule with every stock funded all the time - the per-stock "
         "average, useful for seeing how broadly the rule works. The aim is an "
-        f"average account month of {TARGET_MONTHLY_MIN:.0f}-{TARGET_MONTHLY_MAX:.0f}%.",
+        f"average account month of {TARGET_MONTHLY_MIN:g}-{TARGET_MONTHLY_MAX:g}%.",
         "",
         "The top and bottom tables are single combinations ranked by "
         "excess_vs_hold_pct - the luckiest and unluckiest of ~1,177 tries. They "

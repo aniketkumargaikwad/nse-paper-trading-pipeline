@@ -13,6 +13,7 @@ PAGES
   Strategies     view / build / edit; one click to go live or pause
   Backtest       run tests on history; read kill rules
   Research       what the daily research loop found: one row per run
+  Momentum       the momentum + cash-rule paper account (no real money)
   Paper trading  open positions, equity curve, today's trades
   Trade log      full filterable history + CSV export
   System         engine runs, configuration, upgrade path
@@ -61,6 +62,7 @@ def _app() -> None:  # pragma: no cover — exercised by `streamlit run`
 
     from app_pages import (
         backtest_page,
+        momentum_page,
         overview,
         paper_trading,
         research_page,
@@ -86,6 +88,7 @@ def _app() -> None:  # pragma: no cover — exercised by `streamlit run`
         page(universes_page, "Universes", "🌐", "universes"),
         page(backtest_page, "Backtest", "🔬", "backtest"),
         page(research_page, "Research", "🧪", "research"),
+        page(momentum_page, "Momentum", "🚀", "momentum"),
         page(paper_trading, "Paper trading", "📈", "paper-trading"),
         page(trade_log, "Trade log", "📜", "trade-log"),
         page(system, "System", "⚙️", "system"),
