@@ -71,6 +71,11 @@ Rules the tool applies to whatever you write, so do not spend words on them:
   textbook sellers above could not open a single position in 2025-26 - the
   day is skipped as "not enough capital". Defined-risk positions (spreads,
   condors, flies) need far less. Check each year's trade count.
+- exit.max_loss_pct caps a position's loss as a share of the ACCOUNT (e.g. 2
+  = Rs 10,000 on Rs 5 lakh), whichever of it and stop_pct comes first.
+  Intraday it holds a day's loss to about the cap plus slippage - the direct
+  answer to a -10% worst day. Positional it is checked at the close, so an
+  overnight gap still goes through it.
 """
 
 

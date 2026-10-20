@@ -268,3 +268,11 @@ legs:
     [t] = result.trades
     units = t.sets * LOT
     assert result.equity[D2] >= CAPITAL + t.premium - t.charges - 200 * units - 1e-6
+
+
+def test_a_loss_cap_is_seen_at_the_close_and_filled_at_the_next_open():
+    stop = {(D2, E1, ATM, "CE"): {"settle": 400.0}, (D3, E1, ATM, "CE"): {"open": 450.0}}
+    [t] = run(straddle(exit_="{max_loss_pct: 2}"), market(overrides=staged(FILL, stop)),
+              start=D1, end=D4).trades
+    assert (t.exited, t.exit_reason) == (D3, "loss cap")
+    assert t.pnl < -0.02 * CAPITAL      # the gap to the next open is paid, whatever the cap says

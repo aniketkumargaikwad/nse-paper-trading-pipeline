@@ -21,6 +21,7 @@ legs:
 exit:
   target_pct: 50          # take profit at 50% of the net premium
   stop_pct: 100           # stop when the position has lost 100% of the net premium
+  max_loss_pct: 2         # ...or when it has lost 2% of the account, whichever comes first
   time: "15:15"           # intraday: the close-out minute
   when: "vix_chg_pct > 15"
 reentry: {max_per_day: 1}
@@ -40,6 +41,7 @@ Times are strings in quotes: YAML reads an unquoted 10:00 as the number 600.
 | `entry.when` | optional condition; no condition = enter at the first decision point |
 | `legs` | 1 to 4. `side` buy or sell, `type` CE or PE, `lots` whole sets of that leg |
 | `exit.target_pct` / `stop_pct` | of the **net premium**: collected for a credit position, paid for a debit one. Checked on the whole position, stop first |
+| `exit.max_loss_pct` | a loss cap: close the whole position once it has lost this share of the **account** (its balance at entry), before charges. Checked like the stop, and the tighter of the two applies. Intraday it caps a day's loss to about this much plus slippage; positional it is seen at the close and filled at the next open, so an overnight gap can go through it |
 | `exit.time` | intraday only, required |
 | `exit.days_before_expiry` | positional: close this many sessions before expiry (0 = hold to expiry, settled at NSE's price) |
 | `exit.when` | optional extra exit condition |
