@@ -78,4 +78,13 @@ def pick_strikes(snap: ChainSnapshot, legs: Sequence) -> list[float]:
             j, offset = leg.value
             strike = strikes[_nearest(strikes, chosen[j] + offset)]
         chosen.append(float(strike))
+    # Legs that land on one contract from opposite sides cancel: no position at all,
+    # a margin near zero, and sizing that divides by it (BANKNIFTY 28 Nov 2024, an
+    # iron fly's wing on its own sold strike when few strikes had traded).
+    for i, a in enumerate(legs):
+        for j in range(i):
+            b = legs[j]
+            if a.type == b.type and chosen[i] == chosen[j] and a.side != b.side:
+                raise NoStrike(f"legs {j} and {i} land on the same {a.type} {chosen[i]:g} from opposite "
+                               f"sides on {snap.day} and cancel")
     return chosen
