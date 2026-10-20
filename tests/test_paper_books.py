@@ -81,3 +81,14 @@ def test_the_frozen_rules_are_in_the_repository():
     for book in pb.BOOKS:
         if book.rules:
             assert pb.rules(book)["document"], book.key
+
+
+def test_an_index_book_holds_the_index_in_an_uptrend_and_waits_before_its_start():
+    idx = pd.bdate_range("2024-01-01", periods=600).date
+    tri = pd.DataFrame({"NIFTY 50": 100 * np.exp(0.001 * np.arange(600)),
+                        "MID": 100 * np.exp(0.002 * np.arange(600))}, index=idx)
+    book = pb.Book("t-idx", "index", "t", 500_000.0, "t", index="MID")
+    b = pb.index_book(book, tri, start=idx[400])
+    assert b["state"] == "running" and b["open"] == [{"holding": "MID"}]
+    assert b["closed"][0]["action"] == "buy the index"
+    assert pb.index_book(book, tri, start=date(2030, 1, 1))["state"] == "not started"
