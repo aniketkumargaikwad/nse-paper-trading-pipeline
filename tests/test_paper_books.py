@@ -92,3 +92,27 @@ def test_an_index_book_holds_the_index_in_an_uptrend_and_waits_before_its_start(
     assert b["state"] == "running" and b["open"] == [{"holding": "MID"}]
     assert b["closed"][0]["action"] == "buy the index"
     assert pb.index_book(book, tri, start=date(2030, 1, 1))["state"] == "not started"
+
+
+def book_at(values, *, kind="rotation", closed=0, start="2026-10-21", through="2026-12-01", bench=None):
+    return {"state": "running", "kind": kind, "start": start, "complete_through": through, "capital": 100.0,
+            "value": values[-1], "nifty_hold": bench if bench is not None else 100.0,
+            "equity": [["d", v] for v in values], "closed": [{}] * closed}
+
+
+@pytest.mark.parametrize("values,today,kind,closed,bench,verdict", [
+    ([100, 110, 75], date(2026, 12, 1), "rotation", 0, 100, "STOP"),               # fell 31.8% from 110
+    ([100, 104], date(2026, 12, 1), "rotation", 0, 100, "too early"),
+    ([100, 90], date(2027, 4, 21), "rotation", 0, 100, "DROP"),                   # 10 points behind
+    ([100, 104], date(2027, 4, 21), "rotation", 0, 100, "on track"),
+    ([100, 104], date(2027, 4, 21), "stock", 12, 100, "waiting"),                 # too few trades
+    ([100, 112], date(2027, 10, 21), "stock", 40, 105, "PASSED"),
+    ([100, 103], date(2027, 10, 21), "rotation", 0, 105, "FAILED"),
+])
+def test_the_review_rule_fixed_in_advance(values, today, kind, closed, bench, verdict):
+    card = pb.scorecard(book_at(values, kind=kind, closed=closed, bench=bench), today=today)
+    assert card["verdict"] == verdict, card
+
+
+def test_a_book_that_has_not_started_has_no_verdict_yet():
+    assert pb.scorecard({"state": "not started", "equity": []})["verdict"] == "not started"
