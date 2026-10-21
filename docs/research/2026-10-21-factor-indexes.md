@@ -53,6 +53,10 @@ is shown.
   factsheet); their earlier years are NSE's back-calculation. Constituents are point-in-time, but the
   rules were designed knowing the past - the 2021–2025 column is the closest
   to a live record.
-- Midcaps are less liquid and fall harder in a crash (the 2008 fall is outside
-  these columns). An index has no costs; a fund tracking it charges a fee.
+- **Midcaps fall harder in a crash.** Over 2006-2026, which includes 2008:
+  Midcap150 Momentum 50 held made 19.8% a year but **lost 65% in 2008** (72%
+  from its peak); with the cash rule 20.6% a year, 44% lost in 2008 (49% from
+  its peak). Nifty200 Momentum 30: -60% held, -42% with the rule. NIFTY 50:
+  -51% held, -28% with the rule. The edge is real; so is this risk.
+- Midcaps are less liquid. An index has no costs; a fund tracking it charges a fee.
 - One exam year is one year. Not investment advice.

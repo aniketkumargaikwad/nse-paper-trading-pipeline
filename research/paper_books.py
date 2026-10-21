@@ -76,7 +76,8 @@ BOOKS = (
     # the strongest evidence found, NSE's own index, no stock-list hindsight.
     Book("index-midcap-momentum", "index", "Midcap150 Momentum 50 + the cash rule", 500_000.0,
          "23.7% a year 2009-Oct 2025 with the cash rule (27.3% just holding, luck test t = 3.9), "
-         "worst fall 32%; 29.9% a year 2021-Oct 2025 - NSE's real index, its early years back-calculated",
+         "worst fall 32%; 29.9% a year 2021-Oct 2025; -44% in 2008 even with the rule - NSE's real "
+         "index, its early years back-calculated",
          index="NIFTY MIDCAP150 MOMENTUM 50"),
 )
 
@@ -241,10 +242,73 @@ def summary_line(b: Mapping[str, Any]) -> str:
     if b["state"] != "running":
         return f"{b['title']}: {b['state']}"
     pct = lambda v: f"{100 * (v / b['capital'] - 1):+.1f}%"     # noqa: E731
+    card = scorecard(b)
     return (f"{b['title']}: {pct(b['value'])} (holding {b.get('benchmark', 'NIFTY 50')}: {pct(b['nifty_hold'])}), "
-            f"complete through {b['complete_through']}")
+            f"worst fall {card['worst_fall_pct']:.1f}% - {card['verdict'].upper()}: {card['detail']}")
 
 
 def message(books: Sequence[Mapping[str, Any]], as_of: date) -> str:
     return "\n".join([f"Paper books, {as_of.isoformat()} (no real money)",
                       *[f"- {summary_line(b)}" for b in books]])
+
+
+# --- the review rule, fixed on 21 Oct 2026 before any book had a single day -----------------
+#
+# Written down in advance so the conclusion cannot be bent to the result (docs/TRACKING.md):
+# - STOP at any time if the paper account falls more than 30% from its high.
+# - At 6 months (21 Apr 2027): DROP if more than 5 percentage points behind just holding
+#   its benchmark from the same day. Books that trade stock by stock or options need 20
+#   closed trades before a 6-month verdict; with fewer, wait for 12 months.
+# - At 12 months (21 Oct 2027): PASSED if ahead of its benchmark with a worst fall within
+#   30%; otherwise FAILED. Only a passed book is worth discussing with real money - and that
+#   decision is the owner's, never the tool's.
+STOP_FALL_PCT = 30.0
+DROP_BEHIND_PTS = 5.0
+MIN_TRADES = 20
+REVIEW_6M = date(2027, 4, 21)
+REVIEW_12M = date(2027, 10, 21)
+COUNTS_TRADES = ("stock", "options")
+
+
+def scorecard(b: Mapping[str, Any], *, today: date | None = None) -> dict[str, Any]:
+    """Where a book stands against the review rule above."""
+    if b.get("state") != "running" or not b.get("equity"):
+        return {"verdict": "not started", "detail": b.get("state", "")}
+    values = [row[1] for row in b["equity"]]
+    peak, fall = values[0], 0.0
+    for v in values:
+        peak = max(peak, v)
+        fall = max(fall, 100 * (1 - v / peak))
+    mine = 100 * (b["value"] / b["capital"] - 1)
+    bench = 100 * (b["nifty_hold"] / b["capital"] - 1)
+    lead = mine - bench
+    trades = len(b.get("closed", [])) if b.get("kind") in COUNTS_TRADES else None
+    day = today or date.fromisoformat(b["complete_through"])
+    card = {"return_pct": round(mine, 2), "benchmark_pct": round(bench, 2), "lead_pts": round(lead, 2),
+            "worst_fall_pct": round(fall, 1), "closed_trades": trades,
+            "months": round((day - date.fromisoformat(b["start"])).days / 30.44, 1)}
+    if fall > STOP_FALL_PCT:
+        return {**card, "verdict": "STOP", "detail": f"fell {fall:.1f}% from its high (limit {STOP_FALL_PCT:.0f}%)"}
+    if day >= REVIEW_12M:
+        ok = lead > 0
+        return {**card, "verdict": "PASSED" if ok else "FAILED",
+                "detail": f"12-month review: {lead:+.1f} points against its benchmark"}
+    if day >= REVIEW_6M:
+        if trades is not None and trades < MIN_TRADES:
+            return {**card, "verdict": "waiting", "detail": f"only {trades} closed trades: judged at 12 months"}
+        if lead < -DROP_BEHIND_PTS:
+            return {**card, "verdict": "DROP", "detail": f"{lead:+.1f} points behind its benchmark at 6 months"}
+        return {**card, "verdict": "on track", "detail": f"6-month review passed: {lead:+.1f} points; final review {REVIEW_12M}"}
+    return {**card, "verdict": "too early", "detail": f"{lead:+.1f} points against its benchmark so far; "
+                                                      f"first review {REVIEW_6M}"}
+
+
+def from_momentum(m: Mapping[str, Any]) -> dict[str, Any]:
+    """The momentum account's own file (research/momentum_paper.py) in a book's shape."""
+    running = m.get("state") in ("invested", "cash")
+    return {"key": "momentum-30", "kind": "index", "title": "Momentum 30 + the cash rule",
+            "training": "17.5% a year 2009-Oct 2025, worst fall 23%; NSE's real index",
+            "start": m["start"], "as_of": m.get("as_of"), "complete_through": m.get("as_of") if running else None,
+            "capital": m["capital"], "value": m["value"], "nifty_hold": m["nifty_hold"],
+            "state": "running" if running else m.get("state", "not started"),
+            "equity": [[row[0], row[1]] for row in m.get("equity", [])], "open": [], "closed": []}

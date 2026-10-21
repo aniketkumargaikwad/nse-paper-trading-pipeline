@@ -74,6 +74,9 @@ def main(argv: list[str] | None = None) -> int:
         from research.notify import send_all
         pair = lambda *n: (tuple(os.environ.get(x, "").strip() for x in n)            # noqa: E731
                            if all(os.environ.get(x, "").strip() for x in n) else None)
+        momentum = Path("research/journal/momentum/paper.json")
+        if momentum.exists():
+            books = [pb.from_momentum(json.loads(momentum.read_text(encoding="utf-8"))), *books]
         text = pb.message(books, sessions[-1])
         for channel, r in send_all(text, f"Paper books {sessions[-1]}", text,
                                    telegram=pair("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),

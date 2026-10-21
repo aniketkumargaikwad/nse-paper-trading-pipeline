@@ -6,7 +6,7 @@
 # Every weekday evening: fetch NSE's total-return levels for the Nifty200
 # Momentum 30 and NIFTY 50, recompute the book from its fixed start, commit
 # research/journal/momentum/paper.json (the dashboard's Momentum page reads
-# it), and on a new month's first session send the month's message.
+# it). The monthly message is the paper-books job's, which includes this account.
 name: momentum-paper
 
 on:
@@ -37,7 +37,7 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Update the paper account
-        run: python scripts/momentum_paper.py --notify
+        run: python scripts/momentum_paper.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
