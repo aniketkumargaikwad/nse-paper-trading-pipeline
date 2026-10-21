@@ -1,14 +1,21 @@
 {
- "as_of": "2026-10-19",
+ "as_of": "2026-10-21",
  "start": "2026-10-20",
  "capital": 500000.0,
- "state": "not started",
+ "state": "cash",
  "value": 500000.0,
  "momentum_hold": 500000.0,
  "nifty_hold": 500000.0,
- "nifty_close": null,
- "nifty_average": null,
- "signal_now": null,
+ "nifty_close": 34669.85,
+ "nifty_average": 36513.55,
+ "signal_now": "below",
  "decisions": [],
- "equity": []
+ "equity": [
+  [
+   "2026-10-21",
+   500000.0,
+   500000.0,
+   500000.0
+  ]
+ ]
 }
