@@ -34,7 +34,7 @@ def test_the_propose_prompt_states_the_rule_and_carries_the_history():
     text = prompts.propose_prompt(format_doc="FORMAT-DOC", atlas=["a baseline"],
                                   notes=[{"day": "2026-10-21", "idea_title": "t", "lessons": "L1"}],
                                   ideas_tried=["O-x: tried"], error="legs[0]: bad")
-    for needle in ("-10%", "30%", "luck test t of 2", "10 trades a month", "12 months (intraday)",
+    for needle in ("-10%", "35%", "luck test t of 1.65", "10 trades a month", "12 months (intraday)",
                    "FORMAT-DOC", "a baseline", "L1", "O-x: tried", "legs[0]: bad", "BOTH NIFTY and BANKNIFTY"):
         assert needle in text, needle
 

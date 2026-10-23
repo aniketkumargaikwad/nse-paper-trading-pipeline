@@ -52,7 +52,7 @@ def reading(fall=20.0, years=80.0):
 
 
 @pytest.mark.parametrize("s,vs,match", [
-    (reading(fall=35.0), {"cagr_lead_pct": 5, "luck_t": 3}, "fell 35.0%"),
+    (reading(fall=36.0), {"cagr_lead_pct": 5, "luck_t": 3}, "fell 36.0%"),
     (reading(years=40.0), {"cagr_lead_pct": 5, "luck_t": 3}, "only 40%"),
     (reading(), {"cagr_lead_pct": -1.0, "luck_t": 3}, "no better than"),
     (reading(), {"cagr_lead_pct": 2.0, "luck_t": 1.2}, "could be luck"),

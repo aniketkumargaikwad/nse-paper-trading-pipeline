@@ -27,8 +27,14 @@ def test_a_good_year_passes_as_intraday_but_is_too_short_as_positional():
 
 def test_each_rule_says_why():
     assert "worst day" in rules.disqualified(reading(worst_day_pct=-12.0), "intraday")
-    assert "fell" in rules.disqualified(reading(worst_fall_pct=35.0), "intraday")
+    assert "fell" in rules.disqualified(reading(worst_fall_pct=36.0), "intraday")
     assert "lost money" in rules.disqualified(reading(avg_month_pct=-0.5), "intraday")
     assert "too slow" in rules.disqualified(reading(trades_per_month=2.0, avg_month_pct=1.0), "intraday")
     assert "years" in rules.disqualified(reading(years_beating_holding_pct=40.0), "intraday")
     assert "luck" in rules.disqualified(reading(edge_t=1.2), "intraday")
+
+
+def test_the_bars_loosened_on_23_oct_2026_let_a_33_pct_fall_and_t_of_1_8_through():
+    assert rules.disqualified(reading(worst_fall_pct=33.0, edge_t=1.8), "intraday") is None
+    assert "needs 1.65" in rules.disqualified(reading(edge_t=1.5), "intraday")
+    assert "limit 35%" in rules.disqualified(reading(worst_fall_pct=35.5), "intraday")

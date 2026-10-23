@@ -75,6 +75,14 @@ NOTIONAL = 100_000.0
 LUCK_STRONG_T = 2.0
 LUCK_WEAK_T = 1.0
 
+# The PASS RULE's own bars, shared by every research track (stocks, options, momentum).
+# The owner loosened them "a little" on 23 Oct 2026, from t >= 2 and a 30% fall, after
+# checking that not even NSE's best indexes cleared the old bars over 2009-2025 (the 2020
+# crash alone took NIFTY 50 down 38%). They apply to strategies tested from that day on.
+# The words stay honest: a t of 1.8 passes, and is still reported as "could be luck".
+PASS_T = 1.65
+PASS_MAX_FALL_PCT = 35.0
+
 
 def month_of(ts: datetime) -> str:
     """The IST calendar month a moment falls in, as 'YYYY-MM'."""

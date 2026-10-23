@@ -12,11 +12,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from research.portfolio import LUCK_STRONG_T
+from research.portfolio import PASS_MAX_FALL_PCT, PASS_T
 from research.segment import TARGET_MONTHLY_MIN
 
 MIN_MONTHS = {"positional": 24, "intraday": 12}
-MAX_FALL_PCT = 30.0
+MAX_FALL_PCT = PASS_MAX_FALL_PCT
 WORST_DAY_PCT = -10.0
 MIN_TRADES_PER_MONTH = 10.0
 MIN_YEARS_BEATING_HOLDING_PCT = 50.0
@@ -39,8 +39,8 @@ def disqualified(report: Any, mode: str) -> str | None:
                 f"or {TARGET_MONTHLY_MIN:g}% a month)")
     if b.years_beating_holding_pct < MIN_YEARS_BEATING_HOLDING_PCT:
         return f"beat holding the index in only {b.years_beating_holding_pct:.0f}% of years"
-    luck = b.avg_excess_pct > 0 if b.edge_t is None else b.edge_t >= LUCK_STRONG_T
+    luck = b.avg_excess_pct > 0 if b.edge_t is None else b.edge_t >= PASS_T
     if not luck:
         t = "n/a" if b.edge_t is None else f"{b.edge_t:+.2f}"
-        return f"its lead over holding could be luck: t = {t} (needs {LUCK_STRONG_T:.0f})"
+        return f"its lead over holding could be luck: t = {t} (needs {PASS_T:g})"
     return None

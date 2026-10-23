@@ -14,6 +14,7 @@ had a single day**, so no result can bend it. It lives in code too
 | Is there any real edge? | **Yes - momentum.** NSE's own momentum indexes beat NIFTY over 2009-2025: Nifty200 Momentum 30 about 21% a year, **Midcap150 Momentum 50 about 27% a year (luck test t = 3.9)**, NIFTY 50 15%. | `docs/research/2026-10-20-momentum-rotation.md`, `2026-10-21-factor-indexes.md` |
 | What does that edge cost? | Deep falls: Midcap150 Momentum 50 lost 65% in 2008. A simple cash rule (out when NIFTY is below its 200-day average) cut that to 44% and the 2009-2025 worst fall to 32%. | same |
 | Realistic target? | **1.5-2% a month** (20-27% a year), reset 20 Oct 2026 from 5-7%, which nothing reached. | `research/segment.py` |
+| How strict is the research pass rule? | Loosened a little on 23 Oct 2026: worst fall up to **35%** (was 30%) and luck test **t >= 1.65** (was 2), for strategies tested from that day on. Not even NSE's best indexes cleared the old bars over 2009-2025. The paper-book review rule below is unchanged. | `research/portfolio.py` (PASS_T, PASS_MAX_FALL_PCT) |
 
 ## What is running, by itself, on GitHub (no real money anywhere)
 
