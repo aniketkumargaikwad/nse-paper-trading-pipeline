@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
 import statistics
 import subprocess
@@ -449,7 +448,9 @@ def run_day(*, brain: Any, lab: Lab, day: date, max_versions: int, budget_second
     return outcome, final, exam
 
 
-def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: bool = False) -> tuple[str, str]:
+def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: bool = False) -> tuple[str, list]:
+    """(subject, blocks) in the morning message's layout (research.blocks). The verdict comes first."""
+    from research.blocks import Block, lesson
     if exam is not None:
         s, b = exam["strategy"], exam["baseline"]
         verdict = (f"PASSED training; exam year {s['cagr_pct']:+.1f}% against the paper rule's "
@@ -459,36 +460,34 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: 
         verdict = "NOTHING TESTED: no version got past the checker."
     else:
         verdict = "NOTHING PASSED: no version beats the paper-traded momentum rule by more than luck."
-    lines = [f"Stock rotation research {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
-             f"Verdict: {verdict}", ""]
+    blocks = [Block(f"📊 Stock momentum research — {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
+                    note=f"Verdict: {verdict}")]
     for v in outcome.versions:
+        tag = f"v{v.idea_no}.{v.version_no}"
         if not v.valid:
-            lines.append(f"v{v.idea_no}.{v.version_no} {v.title or '(no title)'}: REJECTED - "
-                         f"{(v.error or '').splitlines()[0][:160]}")
+            blocks.append(Block(f"{tag} - {v.title or '(no title)'}",
+                                note=f"REJECTED by the checker: {(v.error or '').splitlines()[0][:200]}"))
             continue
-        mark = " <- final" if final is not None and v is final[0] else ""
-        lines += [f"v{v.idea_no}.{v.version_no} {v.title}{mark}", f"  {one_line(v.summary)}"]
-        if v.review.get("lessons"):
-            lines.append(f"  lesson: {v.review['lessons'][:300]}")
-    lines += ["", f"Stopped: {STOPPED.get(outcome.stopped_because, outcome.stopped_because)}"
-              + (f" ({outcome.stop_detail[:200]})" if outcome.stop_detail else "")]
-    return f"Stock rotation research {day.isoformat()}: {verdict.split(':')[0].split(';')[0]}"[:120], \
-        "\n".join(lines)
-
-
-def _send(subject: str, text: str) -> None:
-    import html
-    from research.notify import send_all, token_warning
-    pair = lambda *n: (tuple(os.environ.get(x, "").strip() for x in n)            # noqa: E731
-                       if all(os.environ.get(x, "").strip() for x in n) else None)
-    warning = token_warning(os.environ.get("CLAUDE_TOKEN_CREATED", ""))
-    body = f"{text}\n{warning}" if warning else text
-    head, _, rest = body.partition("\n")
-    results = send_all(f"<b>{html.escape(head)}</b>\n<pre>{html.escape(rest)[:3800]}</pre>", subject, body,
-                       telegram=pair("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
-                       email=pair("GMAIL_USER", "GMAIL_APP_PASSWORD", "NOTIFY_EMAIL"))
-    for channel, r in results.items():
-        print(f"{channel:9s} {'sent' if r.sent else r.detail}")
+        d = v.summary.as_dict()
+        st, vs = d["strategy"], d["versus_baseline"]
+        mark = " (the day's final version)" if final is not None and v is final[0] else ""
+        rows = (("vs paper rule", f"{vs['cagr_lead_pct']:+.2f}% a year"), ("luck t", str(vs["luck_t"])),
+                ("worst fall", f"{st['worst_fall_pct']:.1f}%"), ("beat NIFTY", f"{st['years_beating_pct']:.0f}% of years"),
+                ("result", "PASSES" if d["passes"] else "FAILS"))
+        note = " ".join([f"Why: {d['why_not']}." if d["why_not"] else "", lesson(v.review.get("lessons"))]).strip()
+        blocks.append(Block(f"{tag} - {v.title}{mark}", rows, note))
+    if exam is not None:
+        s, b = exam["strategy"], exam["baseline"]
+        span = f" {s['start']} to {s['end']}" if s.get("start") and s.get("end") else ""
+        rows = [("this version", f"{s['cagr_pct']:+.1f}%"), ("paper rule", f"{b['cagr_pct']:+.1f}%")]
+        if s.get("bench_cagr_pct") is not None:
+            rows.append(("NIFTY 50", f"{s['bench_cagr_pct']:+.1f}%"))
+        if s.get("worst_fall_pct") is not None:
+            rows.append(("worst fall", f"{s['worst_fall_pct']:.1f}%"))
+        blocks.append(Block(f"Exam year{span}, opened once", tuple(rows)))
+    blocks.append(Block("How the day ended", (("stopped", STOPPED.get(outcome.stopped_because, outcome.stopped_because)),),
+                        outcome.stop_detail[:200] if outcome.stop_detail else ""))
+    return f"Stock momentum research {day.isoformat()}: {verdict.split(':')[0].split(';')[0]}"[:120], blocks
 
 
 def _commit(day: date) -> None:
@@ -546,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.commit_journal:
             _commit(day)
     if args.notify:
-        _send(subject, text)
+        send(subject, blocks)
     return 0
 
 

@@ -247,9 +247,26 @@ def summary_line(b: Mapping[str, Any]) -> str:
             f"worst fall {card['worst_fall_pct']:.1f}% - {card['verdict'].upper()}: {card['detail']}")
 
 
-def message(books: Sequence[Mapping[str, Any]], as_of: date) -> str:
-    return "\n".join([f"Paper books, {as_of.isoformat()} (no real money)",
-                      *[f"- {summary_line(b)}" for b in books]])
+def message(books: Sequence[Mapping[str, Any]], as_of: date) -> list:
+    """Blocks in the morning message's layout (research.blocks): one per book."""
+    from research.blocks import Block
+    blocks = [Block(f"\U0001f4d2 Paper books — {as_of.isoformat()}",
+                    note="No real money. Each book trades its tested rules forward from the day it started; "
+                         f"first review {REVIEW_6M}, final review {REVIEW_12M} (docs/TRACKING.md).")]
+    for b in books:
+        if b["state"] != "running":
+            blocks.append(Block(b["title"], note=b["state"].capitalize() + "."))
+            continue
+        card = scorecard(b)
+        pct = lambda v: f"{100 * (v / b['capital'] - 1):+.1f}%"     # noqa: E731
+        rows = [("paper account", pct(b["value"])),
+                (f"hold {b.get('benchmark', 'NIFTY 50')}"[:14], pct(b["nifty_hold"])),
+                ("worst fall", f"{card['worst_fall_pct']:.1f}%")]
+        if card["closed_trades"] is not None:
+            rows.append(("closed trades", str(card["closed_trades"])))
+        rows.append(("review", card["verdict"].upper()))
+        blocks.append(Block(b["title"], tuple(rows), f"{card['detail']}. Complete through {b['complete_through']}."))
+    return blocks
 
 
 # --- the review rule, fixed on 21 Oct 2026 before any book had a single day -----------------

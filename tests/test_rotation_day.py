@@ -87,8 +87,10 @@ def test_the_exam_opens_once_and_only_on_a_pass(passes):
     outcome, final, exam = rd.run_day(brain=rd.DryBrain(), lab=lab, day=DAY, max_versions=5,
                                       budget_seconds=60, echo=lambda *a, **k: None)
     assert lab.calls == (["train", "exam"] if passes else ["train"])
-    _, text = rd.message(DAY, outcome, final, exam)
-    assert text.splitlines()[1].startswith("Verdict: PASSED" if passes else "Verdict: NOTHING PASSED")
+    from research.blocks import as_html, as_text
+    _, blocks = rd.message(DAY, outcome, final, exam)
+    assert as_text(blocks).splitlines()[1].startswith("Verdict: PASSED" if passes else "Verdict: NOTHING PASSED")
+    assert "<pre>" in as_html(blocks)
 
 
 def test_records_feed_the_next_day_and_never_carry_an_exam(tmp_path):

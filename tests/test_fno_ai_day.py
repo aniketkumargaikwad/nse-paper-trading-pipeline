@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fno import atlas  # noqa: E402
 from fno.ai import day as options_day  # noqa: E402
+from research.blocks import as_html, as_text  # noqa: E402
 
 DAY = date(2026, 10, 21)
 
@@ -71,8 +72,10 @@ def test_a_passing_version_opens_its_own_index_exam_once_after_the_last_ai_call(
     assert lab.calls[-1] == ("exam", "NIFTY")
     assert brain.seen[-1][0] == "review" and brain.seen[-1][1] < len(lab.calls)
     assert exam["strategy_name"].startswith("O-20261021-calm-strangle") and exam["beat_holding"]
-    subject, text = options_day.message(DAY, outcome, final, pick, exam)
+    subject, blocks = options_day.message(DAY, outcome, final, pick, exam)
+    text = as_text(blocks)
     assert text.splitlines()[1].startswith("Verdict: PASSED training on NIFTY")
+    assert "<b>" in as_html(blocks) and "<pre>" in as_html(blocks)
 
 
 def test_nothing_passing_opens_no_exam_and_says_so_first():
@@ -80,7 +83,8 @@ def test_nothing_passing_opens_no_exam_and_says_so_first():
     outcome, final, pick, exam = run(lab, FakeBrain(lab))
     assert pick is None and exam is None
     assert all(c[0] == "train" for c in lab.calls)
-    subject, text = options_day.message(DAY, outcome, final, pick, exam)
+    subject, blocks = options_day.message(DAY, outcome, final, pick, exam)
+    text = as_text(blocks)
     assert text.splitlines()[1] == ("Verdict: NOTHING PASSED: no version passes the rule on NIFTY or "
                                     "BANKNIFTY. Not usable.")
     assert "NOTHING PASSED" in subject
@@ -92,8 +96,9 @@ def test_an_engine_error_on_one_index_is_a_result_not_a_crash():
     bank = outcome.versions[0].summary.indexes[1]
     assert bank["underlying"] == "BANKNIFTY" and bank["passes"] is False
     assert "could not run it: KeyError" in bank["why_not"]
-    _, text = options_day.message(DAY, outcome, final, pick, exam)
-    assert "BANKNIFTY fails: the engine could not run it" in text
+    _, blocks = options_day.message(DAY, outcome, final, pick, exam)
+    text = as_text(blocks)
+    assert "BANKNIFTY      could not run" in text and "BANKNIFTY: the engine could not run it" in text
 
 
 def test_the_dry_brain_proposes_a_strategy_the_checker_accepts():

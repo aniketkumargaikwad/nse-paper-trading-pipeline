@@ -116,3 +116,14 @@ def test_the_review_rule_fixed_in_advance(values, today, kind, closed, bench, ve
 
 def test_a_book_that_has_not_started_has_no_verdict_yet():
     assert pb.scorecard({"state": "not started", "equity": []})["verdict"] == "not started"
+
+
+def test_the_monthly_message_has_a_heading_and_a_short_table_per_book():
+    from research.blocks import as_html, as_text
+    running = {**book_at([100, 104], closed=3, kind="stock"), "title": "A book", "complete_through": "2026-12-01"}
+    blocks = pb.message([running, {"title": "Later", "state": "not started"}], date(2026, 12, 1))
+    text = as_text(blocks)
+    assert "A book\npaper account  +4.0%" in text and "review         TOO EARLY" in text
+    assert "Later\nNot started." in text
+    html_text = as_html(blocks)
+    assert "<b>A book</b>\n<pre>" in html_text
