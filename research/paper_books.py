@@ -56,6 +56,7 @@ class Book:
     variant: Variant | None = None    # rotation
     underlying: str | None = None     # options
     index: str | None = None          # index: the NSE index name
+    start: date = START               # the day this book began trading forward
 
 
 BOOKS = (
@@ -69,6 +70,14 @@ BOOKS = (
     Book("rotation-r1", "rotation", "Momentum rotation, 20 stocks (R1)", 500_000.0,
          "3.1% a month in training, worst fall 43% - on today's stock list, about 1% a month of it hindsight",
          variant=Variant("R1", 12, 1, 20, False)),
+    # Added 23 Oct 2026, at the owner's request: the one tested version that clears the pass
+    # rule as loosened that day (t 1.65 exactly against the paper-traded momentum rule).
+    Book("rotation-12-own-trend", "rotation", "Momentum rotation, 12 stocks above their own trend (AI, 20 Oct)",
+         500_000.0,
+         "2.65% a month in training, +2.9% a year over the paper-traded momentum rule on the same "
+         "stocks (luck test t = 1.65), worst fall 24% - on today's stock list, so flattered by hindsight",
+         variant=Variant("M-20261020-concentrated-12-1-momentum-12-stocks-own-v1", 12, 1, 12, True,
+                         above_sma=200, trend_sessions=200), start=date(2026, 10, 23)),
     Book("options-banknifty-condor", "options", "BANKNIFTY same-day iron condor (options AI, 19 Oct)", 500_000.0,
          "6.0% a month in training on only 33 trades, worst day -11%; failed the -10% day rule",
          rules="options-banknifty-condor.json", underlying="BANKNIFTY"),
@@ -118,13 +127,14 @@ def _nifty_hold(nifty: pd.Series, start: date, capital: float) -> tuple[float, p
     return round(float(curve.iloc[-1]), 2), curve
 
 
-def stock_book(book: Book, ohlcv: pd.DataFrame, *, start: date = START, slippage_pct: float,
+def stock_book(book: Book, ohlcv: pd.DataFrame, *, start: date | None = None, slippage_pct: float,
                cost_model: Any) -> dict[str, Any]:
     from backtest import simulate_any
     from research.account import replay
     from strategy.v3 import is_v3_document, parse_machine
     from strategy_schema import parse_strategy_dict
 
+    start = start or book.start
     nifty = ohlcv["^NSEI"]["Close"]
     sessions = sorted(nifty.dropna().index)
     if not sessions or sessions[-1] < start:
@@ -168,7 +178,8 @@ def stock_book(book: Book, ohlcv: pd.DataFrame, *, start: date = START, slippage
             "closed": [row(t) for t in closed][-50:]}
 
 
-def rotation_book(book: Book, closes: pd.DataFrame, *, start: date = START) -> dict[str, Any]:
+def rotation_book(book: Book, closes: pd.DataFrame, *, start: date | None = None) -> dict[str, Any]:
+    start = start or book.start
     nifty = closes[INDEX]
     sessions = sorted(nifty.dropna().index)
     if not sessions or sessions[-1] < start:
@@ -188,7 +199,8 @@ def rotation_book(book: Book, closes: pd.DataFrame, *, start: date = START) -> d
             "state": "running" if last else "waiting for the first month-end"}
 
 
-def options_book(book: Book, root: Path, *, start: date = START) -> dict[str, Any]:
+def options_book(book: Book, root: Path, *, start: date | None = None) -> dict[str, Any]:
+    start = start or book.start
     from fno import intraday, minute
     from fno.intraday_market import IntradayMarket
     from fno.strategy import parse
@@ -217,8 +229,9 @@ def options_book(book: Book, root: Path, *, start: date = START) -> dict[str, An
             "skipped": {k: sum(1 for s in result.skips if s.kind == k) for k in {s.kind for s in result.skips}}}
 
 
-def index_book(book: Book, tri: pd.DataFrame, *, start: date = START) -> dict[str, Any]:
+def index_book(book: Book, tri: pd.DataFrame, *, start: date | None = None) -> dict[str, Any]:
     """`book.index` while NIFTY 50 is above its 200-day average, cash at 6% otherwise (NSE TRI levels)."""
+    start = start or book.start
     from research.rotation import index_switch
     nifty = tri["NIFTY 50"].dropna()
     sessions = sorted(set(nifty.index) & set(tri[book.index].dropna().index))

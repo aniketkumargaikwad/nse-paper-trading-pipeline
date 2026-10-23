@@ -127,3 +127,12 @@ def test_the_monthly_message_has_a_heading_and_a_short_table_per_book():
     assert "Later\nNot started." in text
     html_text = as_html(blocks)
     assert "<b>A book</b>\n<pre>" in html_text
+
+
+def test_a_book_added_later_starts_on_its_own_day():
+    added = next(b for b in pb.BOOKS if b.key == "rotation-12-own-trend")
+    assert added.start == date(2026, 10, 23) and pb.START == date(2026, 10, 21)
+    closes = ohlcv().xs("Close", axis=1, level=1)
+    late = pb.Book("t-rot", "rotation", "t", 500_000.0, "t", variant=Variant("t", 6, 0, 2, False),
+                   start=closes.index[500])
+    assert pb.rotation_book(late, closes)["start"] == closes.index[500].isoformat()
