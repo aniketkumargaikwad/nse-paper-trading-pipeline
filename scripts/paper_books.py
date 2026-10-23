@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -71,17 +70,11 @@ def main(argv: list[str] | None = None) -> int:
     sessions = sorted(closes["^NSEI"].dropna().index)
     first_of_month = len(sessions) > 1 and (sessions[-1].year, sessions[-1].month) != (sessions[-2].year, sessions[-2].month)
     if args.notify and first_of_month and books:
-        from research.notify import send_all
-        pair = lambda *n: (tuple(os.environ.get(x, "").strip() for x in n)            # noqa: E731
-                           if all(os.environ.get(x, "").strip() for x in n) else None)
+        from research.blocks import send
         momentum = Path("research/journal/momentum/paper.json")
         if momentum.exists():
             books = [pb.from_momentum(json.loads(momentum.read_text(encoding="utf-8"))), *books]
-        text = pb.message(books, sessions[-1])
-        for channel, r in send_all(text, f"Paper books {sessions[-1]}", text,
-                                   telegram=pair("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
-                                   email=pair("GMAIL_USER", "GMAIL_APP_PASSWORD", "NOTIFY_EMAIL")).items():
-            print(f"{channel:9s} {'sent' if r.sent else r.detail}")
+        send(f"Paper books {sessions[-1]}", pb.message(books, sessions[-1]), warn_token=False)
     return 1 if failed else 0
 
 

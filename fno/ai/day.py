@@ -18,8 +18,6 @@ anywhere a later prompt reads (fno.ai.ledger).
 from __future__ import annotations
 
 import argparse
-import html
-import os
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -32,6 +30,7 @@ from fno import atlas, report, rules, store
 from fno.ai import ledger, prompts
 from fno.ai.checker import check_proposal
 from fno.ai.summary import OptionsSummary, index_summary, one_line, score
+from research.blocks import Block, as_text, lesson, send
 from research.run_day import OpusBrain, choose_final, nothing_to_commit
 
 DRY_RUN_TITLE = "Dry run placeholder (no AI)"
@@ -176,9 +175,28 @@ def exam_row(day: date, version: Any, pick: Any, built: Any, sessions: int) -> d
             "beat_holding": (h.get("avg_month_pct") or 0) > (h.get("avg_holding_month_pct") or 0)}
 
 
+def _index_rows(summary: Any) -> tuple[list[tuple[str, str]], list[str]]:
+    """Short table rows per index, and the reasons each failed (for the note, where they can wrap)."""
+    rows, why = [], []
+    for s in summary.indexes:
+        if s.get("avg_month_pct") is None:
+            rows.append((s["underlying"], "could not run"))
+            why.append(f"{s['underlying']}: {s['why_not']}")
+            continue
+        t = s.get("edge_t")
+        rows += [(s["underlying"], f"{s['avg_month_pct']:+.2f}%/month"),
+                 ("  trades", f"{s['trades_per_month']:.1f} a month"),
+                 ("  worst day", f"{s['worst_day_pct']:+.1f}%"),
+                 ("  luck t", "n/a" if t is None else f"{t:+.2f}"),
+                 ("  result", "PASSES" if s["passes"] else "FAILS")]
+        if not s["passes"]:
+            why.append(f"{s['underlying']}: {s['why_not']}")
+    return rows, why
+
+
 def message(day: date, outcome: Any, final: Any, pick: Any, exam: dict[str, Any] | None,
-            *, dry_run: bool = False) -> tuple[str, str]:
-    """(subject, plain text). The verdict comes first, in one line."""
+            *, dry_run: bool = False) -> tuple[str, list[Block]]:
+    """(subject, blocks). The verdict comes first."""
     if exam is not None:
         verdict = (f"PASSED training on {pick['underlying']}; exam year "
                    f"{exam['avg_month_pct']:+.2f}%/month against holding's "
@@ -188,43 +206,28 @@ def message(day: date, outcome: Any, final: Any, pick: Any, exam: dict[str, Any]
         verdict = "NOTHING TESTED: no version got past the checker."
     else:
         verdict = "NOTHING PASSED: no version passes the rule on NIFTY or BANKNIFTY. Not usable."
-    lines = [f"Options research {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
-             f"Verdict: {verdict}", ""]
+    blocks = [Block(f"📊 Options research — {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
+                    note=f"Verdict: {verdict}")]
     for v in outcome.versions:
-        mark = " <- final" if final is not None and v is final[0] else ""
+        tag = f"v{v.idea_no}.{v.version_no}"
         if not v.valid:
-            lines.append(f"v{v.idea_no}.{v.version_no} {v.title or '(no title)'}: REJECTED - "
-                         f"{(v.error or '').splitlines()[0][:160]}")
+            blocks.append(Block(f"{tag} - {v.title or '(no title)'}",
+                                note=f"REJECTED by the checker: {(v.error or '').splitlines()[0][:200]}"))
             continue
-        lines.append(f"v{v.idea_no}.{v.version_no} {v.title} ({v.checked.mode}){mark}")
-        lines.append(f"  {one_line(v.summary)}")
-        if v.review.get("lessons"):
-            lines.append(f"  lesson: {v.review['lessons'][:300]}")
-    lines += ["", f"Stopped: {STOPPED.get(outcome.stopped_because, outcome.stopped_because)}"
-              + (f" ({outcome.stop_detail[:200]})" if outcome.stop_detail else "")]
+        mark = " (the day's final version)" if final is not None and v is final[0] else ""
+        rows, why = _index_rows(v.summary)
+        note = " ".join([*(f"{w}." for w in why), lesson(v.review.get("lessons"))]).strip()
+        mode = "" if v.checked.mode in v.title.lower() else f" ({v.checked.mode})"
+        blocks.append(Block(f"{tag} - {v.title}{mode}{mark}", tuple(rows), note))
+    end = [("stopped", STOPPED.get(outcome.stopped_because, outcome.stopped_because))]
     if exam is not None:
-        lines.append(f"Exam year {exam['start']} to {exam['end']}: {exam['trades']} trades, "
-                     f"worst day {exam['worst_day_pct']:+.1f}%, worst fall {exam['worst_fall_pct']:.1f}%, "
-                     f"Rs 5 lakh became Rs {exam['end_value']:,.0f}.")
+        blocks.append(Block(f"Exam year {exam['start']} to {exam['end']} - {pick['underlying']}, opened once", (
+            ("a month", f"{exam['avg_month_pct']:+.2f}%"), ("holding", f"{exam['avg_holding_month_pct']:+.2f}%"),
+            ("trades", str(exam["trades"])), ("worst day", f"{exam['worst_day_pct']:+.1f}%"),
+            ("worst fall", f"{exam['worst_fall_pct']:.1f}%"), ("Rs 5 lakh ->", f"Rs {exam['end_value']:,.0f}"))))
+    blocks.append(Block("How the day ended", tuple(end), outcome.stop_detail[:200] if outcome.stop_detail else ""))
     subject = f"Options research {day.isoformat()}: {verdict.split(':')[0].split(';')[0]}"
-    return subject[:120], "\n".join(lines)
-
-
-def send(subject: str, text: str) -> None:
-    from research.notify import send_all, token_warning
-
-    def pair(*names: str) -> tuple[str, ...] | None:
-        values = tuple((os.environ.get(n) or "").strip() for n in names)
-        return values if all(values) else None
-
-    warning = token_warning(os.environ.get("CLAUDE_TOKEN_CREATED", ""))
-    body = f"{text}\n{warning}" if warning else text
-    head, _, rest = body.partition("\n")
-    tg = f"<b>{html.escape(head)}</b>\n<pre>{html.escape(rest)[:3800]}</pre>"
-    results = send_all(tg, subject, body, telegram=pair("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
-                       email=pair("GMAIL_USER", "GMAIL_APP_PASSWORD", "NOTIFY_EMAIL"))
-    for channel, result in results.items():
-        print(f"{channel:9s} {'sent' if result.sent else result.detail}")
+    return subject[:120], blocks
 
 
 def commit(day: date) -> None:
@@ -302,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.commit_journal:
             commit(day)
     if args.notify:
-        send(subject, text)
+        send(subject, blocks)
     return 0
 
 
