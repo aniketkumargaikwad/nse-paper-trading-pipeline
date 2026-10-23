@@ -30,7 +30,7 @@ GitHub starts these late, often by 4-5 hours. Email messages need the
 `GMAIL_USER`, `GMAIL_APP_PASSWORD` and `NOTIFY_EMAIL` secrets, which are empty;
 Telegram works.
 
-## The paper books (started 20-21 Oct 2026)
+## The paper books (started 20-23 Oct 2026)
 
 | Book | Training said | Benchmark |
 |---|---|---|
@@ -38,6 +38,7 @@ Telegram works.
 | Midcap150 Momentum 50 + the cash rule | 23.7% a year, worst fall 32% (NSE index) | NIFTY 50 |
 | Momentum rotation, 10 stocks (R4) | 3.5% a month (hindsight-inflated) | NIFTY 50 |
 | Momentum rotation, 20 stocks (R1) | 3.1% a month (hindsight-inflated) | NIFTY 50 |
+| Momentum rotation, 12 stocks above their own trend (AI; added 23 Oct) | +2.9% a year over the paper-traded rule, t = 1.65 (hindsight-inflated) | NIFTY 50 |
 | Leader buy-and-hold (stock AI) | 4.4% a month (hindsight-inflated, few trades) | NIFTY 50 |
 | BANKNIFTY same-day iron condor (options AI) | 6.0% a month on 33 trades | BANKNIFTY |
 
