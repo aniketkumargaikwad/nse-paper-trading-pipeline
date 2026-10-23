@@ -37,6 +37,7 @@ import pandas as pd
 import yaml
 
 from config import IST, use_utf8_stdout
+from research.portfolio import PASS_MAX_FALL_PCT, PASS_T
 from research.rotation import INDEX, SCORES, WEIGHTINGS, Variant, month_returns, run, stats
 from research.run_day import OpusBrain, choose_final, nothing_to_commit
 from research.segment import TARGET_MONTHLY_MAX, TARGET_MONTHLY_MIN
@@ -50,9 +51,9 @@ EXAM_DAYS = 365
 COST_PCT = 0.2
 WARMUP_DAYS = 800          # history fed to an exam run so its lookback and averages exist
 BASELINE = Variant("baseline: 12-1 momentum, 20 stocks, NIFTY 200-day filter", 12, 1, 20, True)
-MAX_FALL_PCT = 30.0
+MAX_FALL_PCT = PASS_MAX_FALL_PCT
 MIN_YEARS_BEATING_PCT = 50.0
-MIN_T = 2.0
+MIN_T = PASS_T
 BUDGET_SECONDS = 4 * 60 * 60
 
 FORMAT = """\
@@ -176,7 +177,7 @@ def disqualified(s: dict, vs: dict) -> str | None:
         return (f"no better than the momentum rule already paper-traded "
                 f"({vs['cagr_lead_pct']:+.2f}% a year against it)")
     if vs["luck_t"] is None or vs["luck_t"] < MIN_T:
-        return f"its lead over the paper-traded rule could be luck: t = {vs['luck_t']} (needs {MIN_T:.0f})"
+        return f"its lead over the paper-traded rule could be luck: t = {vs['luck_t']} (needs {MIN_T:g})"
     return None
 
 
@@ -270,7 +271,7 @@ only if ALL hold:
 - worst fall from a high no more than {MAX_FALL_PCT:.0f}%
 - beat NIFTY 50 in at least {MIN_YEARS_BEATING_PCT:.0f}% of calendar years
 - a higher yearly return than the baseline
-- that lead is more than luck: t of the monthly excess over the baseline >= {MIN_T:.0f}
+- that lead is more than luck: t of the monthly excess over the baseline >= {MIN_T:g}
 
 Change the rule for a REASON (a known effect: volatility-adjusted momentum,
 trend confirmation, avoiding crash-prone stocks, concentration), not to fit

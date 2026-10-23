@@ -187,5 +187,5 @@ def test_propose_states_the_consistency_and_luck_rules():
     """Opus must know a boom-only lead is discarded, or it keeps designing one."""
     text = propose_prompt(formats=["F"], notes=[], ideas_tried=[])
     assert "HALF of its years" in text
-    assert "luck check t of 2 or more" in text
+    assert "luck check t of 1.65 or more" in text
     assert "2020-24" in text

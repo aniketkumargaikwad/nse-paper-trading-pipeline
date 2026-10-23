@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from research.facts import FACTS
+from research.portfolio import PASS_MAX_FALL_PCT, PASS_T
 from research.segment import TARGET_MONTHLY_MAX, TARGET_MONTHLY_MIN
 from research.summary import TrainingSummary
 from research.universe import (
@@ -104,10 +105,10 @@ What this strategy is being designed to achieve:
   they arrive across all 200 stocks on one timeframe and skipping a signal
   when every slot is busy, measured month by month on the whole Rs 10,00,000.
   The timeframe whose account earns the most per month is picked - but only
-  if it never fell more than 30% from a high, beat holding the same stocks
+  if it never fell more than {PASS_MAX_FALL_PCT:.0f}% from a high, beat holding the same stocks
   on average, either traded 10+ times a month or averaged the target, beat
   holding in at least HALF of its years, and led holding by more than luck
-  explains (luck check t of 2 or more). An account failing any of those is
+  explains (luck check t of {PASS_T:g} or more). An account failing any of those is
   DISCARDED however good its best stock looks. A selective rule is fine: ten
   slots mean a signal on 5% of stocks still keeps the account busy.
 - the training years hold one exceptional boom, 2020-24. Every account that

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fno import rules
-from research.portfolio import LUCK_STRONG_T
+from research.portfolio import PASS_T
 from research.prompts import PROPOSE_SCHEMA, REVIEW_SCHEMA  # noqa: F401 - re-exported for the day
 from research.segment import TARGET_MONTHLY_MAX, TARGET_MONTHLY_MIN
 
@@ -41,7 +41,7 @@ What this strategy is being designed to achieve:
     and the account sits idle while simply holding NIFTY earns more.
   - beat simply holding the index on the same capital in at least
     {rules.MIN_YEARS_BEATING_HOLDING_PCT:.0f}% of its years
-  - a lead over holding larger than luck explains (luck test t of {LUCK_STRONG_T:.0f} or more)
+  - a lead over holding larger than luck explains (luck test t of {PASS_T:g} or more)
 - nothing from the textbook has passed (the atlas below). Selling options
   wins often and loses big; buying them bleeds time value; costs - half the
   spread on every leg, NSE charges - take a real share of every trade. Aim
