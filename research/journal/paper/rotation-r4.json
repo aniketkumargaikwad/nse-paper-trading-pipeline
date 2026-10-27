@@ -4,11 +4,11 @@
  "title": "Momentum rotation, 10 stocks (R4)",
  "training": "3.5% a month in training, worst fall 43% - on today's stock list, about 1% a month of it hindsight",
  "start": "2026-10-21",
- "as_of": "2026-10-23",
- "complete_through": "2026-10-23",
+ "as_of": "2026-10-26",
+ "complete_through": "2026-10-26",
  "capital": 500000.0,
  "value": 500000.0,
- "nifty_hold": 495367.45,
+ "nifty_hold": 498725.41,
  "state": "waiting for the first month-end",
  "equity": [
   [
@@ -25,6 +25,11 @@
    "2026-10-23",
    500000.0,
    495367.45
+  ],
+  [
+   "2026-10-26",
+   500000.0,
+   498725.41
   ]
  ],
  "open": [],
