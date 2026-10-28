@@ -4,13 +4,47 @@
  "title": "BANKNIFTY same-day iron condor (options AI, 19 Oct)",
  "training": "6.0% a month in training on only 33 trades, worst day -11%; failed the -10% day rule",
  "start": "2026-10-21",
- "as_of": "2026-10-27",
- "complete_through": null,
+ "as_of": "2026-10-28",
+ "complete_through": "2026-10-27",
  "capital": 500000.0,
- "value": 500000.0,
- "nifty_hold": 500000.0,
- "state": "waiting for option minutes: they arrive after each BANKNIFTY expiry",
- "equity": [],
+ "value": 501612.37,
+ "nifty_hold": 490887.08,
+ "state": "running",
+ "equity": [
+  [
+   "2026-10-21",
+   500000.0,
+   500000.0
+  ],
+  [
+   "2026-10-22",
+   500000.0,
+   499534.35
+  ],
+  [
+   "2026-10-23",
+   500000.0,
+   493728.73
+  ],
+  [
+   "2026-10-26",
+   500000.0,
+   494450.4
+  ],
+  [
+   "2026-10-27",
+   501612.37,
+   490887.08
+  ]
+ ],
  "open": [],
- "closed": []
+ "closed": [
+  {
+   "day": "2026-10-27",
+   "pnl": 1612.37,
+   "why": "target"
+  }
+ ],
+ "benchmark": "BANKNIFTY",
+ "skipped": {}
 }
