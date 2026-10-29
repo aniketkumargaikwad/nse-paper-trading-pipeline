@@ -4,11 +4,11 @@
  "title": "Leader buy-and-hold (stock research, 20 Sep)",
  "training": "4.4% a month in training as a 10-slot account, 2009-2025 - on today's stock list, so flattered by hindsight; rejected then for trading 1.4 times a month",
  "start": "2026-10-21",
- "as_of": "2026-10-27",
- "complete_through": "2026-10-27",
+ "as_of": "2026-10-28",
+ "complete_through": "2026-10-28",
  "capital": 1000000.0,
- "value": 1000000.0,
- "nifty_hold": 997299.61,
+ "value": 998969.31,
+ "nifty_hold": 995068.24,
  "state": "running",
  "equity": [
   [
@@ -35,8 +35,23 @@
    "2026-10-27",
    1000000.0,
    997299.61
+  ],
+  [
+   "2026-10-28",
+   998969.31,
+   995068.24
   ]
  ],
- "open": [],
+ "open": [
+  {
+   "stock": "MPHASIS",
+   "entered": "2026-10-28",
+   "entry_price": 2541.07,
+   "quantity": 39,
+   "exit_price": 2516.74,
+   "pnl": -1030.69,
+   "pnl_if_sold_now": -1030.69
+  }
+ ],
  "closed": []
 }
