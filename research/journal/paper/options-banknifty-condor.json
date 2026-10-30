@@ -4,11 +4,11 @@
  "title": "BANKNIFTY same-day iron condor (options AI, 19 Oct)",
  "training": "6.0% a month in training on only 33 trades, worst day -11%; failed the -10% day rule",
  "start": "2026-10-21",
- "as_of": "2026-10-29",
+ "as_of": "2026-10-30",
  "complete_through": "2026-10-27",
  "capital": 500000.0,
  "value": 501612.37,
- "nifty_hold": 493547.29,
+ "nifty_hold": 499388.38,
  "state": "running",
  "equity": [
   [
