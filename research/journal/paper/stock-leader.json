@@ -4,11 +4,11 @@
  "title": "Leader buy-and-hold (stock research, 20 Sep)",
  "training": "4.4% a month in training as a 10-slot account, 2009-2025 - on today's stock list, so flattered by hindsight; rejected then for trading 1.4 times a month",
  "start": "2026-10-21",
- "as_of": "2026-10-29",
- "complete_through": "2026-10-29",
+ "as_of": "2026-10-30",
+ "complete_through": "2026-10-30",
  "capital": 1000000.0,
- "value": 1000503.01,
- "nifty_hold": 1005497.28,
+ "value": 999112.85,
+ "nifty_hold": 1010597.79,
  "state": "running",
  "equity": [
   [
@@ -43,8 +43,13 @@
   ],
   [
    "2026-10-29",
-   1000503.01,
+   1000000.0,
    1005497.28
+  ],
+  [
+   "2026-10-30",
+   999112.85,
+   1010597.79
   ]
  ],
  "open": [
@@ -53,9 +58,9 @@
    "entered": "2026-10-28",
    "entry_price": 2541.07,
    "quantity": 39,
-   "exit_price": 2560.02,
-   "pnl": 503.01,
-   "pnl_if_sold_now": 503.01
+   "exit_price": 2524.34,
+   "pnl": -887.15,
+   "pnl_if_sold_now": -887.15
   }
  ],
  "closed": []
