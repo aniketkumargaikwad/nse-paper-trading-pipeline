@@ -4,12 +4,12 @@
  "title": "Momentum rotation, 20 stocks (R1)",
  "training": "3.1% a month in training, worst fall 43% - on today's stock list, about 1% a month of it hindsight",
  "start": "2026-10-21",
- "as_of": "2026-10-30",
- "complete_through": "2026-10-30",
+ "as_of": "2026-11-02",
+ "complete_through": "2026-11-02",
  "capital": 500000.0,
- "value": 500000.0,
- "nifty_hold": 505298.9,
- "state": "waiting for the first month-end",
+ "value": 499000.0,
+ "nifty_hold": 513796.89,
+ "state": "running",
  "equity": [
   [
    "2026-10-21",
@@ -50,8 +50,101 @@
    "2026-10-30",
    500000.0,
    505298.9
+  ],
+  [
+   "2026-11-02",
+   499000.0,
+   513796.89
   ]
  ],
- "open": [],
- "closed": []
+ "open": [
+  {
+   "stock": "LAURUSLABS",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "MCX",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "POWERINDIA",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "BHEL",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "MOTHERSON",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "AUROPHARMA",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "IDEA",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "NATIONALUM",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "BHARATFORG",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "SOLARINDS",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "DIVISLAB",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "RADICO",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "GVT&D",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "ADANIENSOL",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "FEDERALBNK",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "SHRIRAMFIN",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "TORNTPHARM",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "SAIL",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "ABB",
+   "since": "2026-11-02"
+  },
+  {
+   "stock": "OFSS",
+   "since": "2026-11-02"
+  }
+ ],
+ "closed": [
+  {
+   "decided": "2026-10-30",
+   "filled": "2026-11-02",
+   "holdings": 20,
+   "cost": 1000.0
+  }
+ ]
 }

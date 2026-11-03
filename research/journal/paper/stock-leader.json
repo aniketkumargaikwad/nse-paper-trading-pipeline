@@ -4,11 +4,11 @@
  "title": "Leader buy-and-hold (stock research, 20 Sep)",
  "training": "4.4% a month in training as a 10-slot account, 2009-2025 - on today's stock list, so flattered by hindsight; rejected then for trading 1.4 times a month",
  "start": "2026-10-21",
- "as_of": "2026-10-30",
- "complete_through": "2026-10-30",
+ "as_of": "2026-11-02",
+ "complete_through": "2026-11-02",
  "capital": 1000000.0,
- "value": 999112.85,
- "nifty_hold": 1010597.79,
+ "value": 999648.82,
+ "nifty_hold": 1027593.77,
  "state": "running",
  "equity": [
   [
@@ -48,8 +48,13 @@
   ],
   [
    "2026-10-30",
-   999112.85,
+   1000000.0,
    1010597.79
+  ],
+  [
+   "2026-11-02",
+   999648.82,
+   1027593.77
   ]
  ],
  "open": [
@@ -58,9 +63,18 @@
    "entered": "2026-10-28",
    "entry_price": 2541.07,
    "quantity": 39,
-   "exit_price": 2524.34,
-   "pnl": -887.15,
-   "pnl_if_sold_now": -887.15
+   "exit_price": 2562.42,
+   "pnl": 596.47,
+   "pnl_if_sold_now": 596.47
+  },
+  {
+   "stock": "ICICIBANK",
+   "entered": "2026-11-02",
+   "entry_price": 1398.9,
+   "quantity": 71,
+   "exit_price": 1386.71,
+   "pnl": -947.64,
+   "pnl_if_sold_now": -947.64
   }
  ],
  "closed": []
