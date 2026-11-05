@@ -4,11 +4,11 @@
  "title": "Leader buy-and-hold (stock research, 20 Sep)",
  "training": "4.4% a month in training as a 10-slot account, 2009-2025 - on today's stock list, so flattered by hindsight; rejected then for trading 1.4 times a month",
  "start": "2026-10-21",
- "as_of": "2026-11-03",
- "complete_through": "2026-11-03",
+ "as_of": "2026-11-04",
+ "complete_through": "2026-11-04",
  "capital": 1000000.0,
- "value": 1004903.81,
- "nifty_hold": 1043815.91,
+ "value": 1006157.43,
+ "nifty_hold": 1050380.62,
  "state": "running",
  "equity": [
   [
@@ -58,8 +58,13 @@
   ],
   [
    "2026-11-03",
-   1004903.81,
+   1000000.0,
    1043815.91
+  ],
+  [
+   "2026-11-04",
+   1006157.43,
+   1050380.62
   ]
  ],
  "open": [
@@ -68,36 +73,54 @@
    "entered": "2026-10-28",
    "entry_price": 2541.07,
    "quantity": 39,
-   "exit_price": 2534.03,
-   "pnl": -509.43,
-   "pnl_if_sold_now": -509.43
+   "exit_price": 2467.17,
+   "pnl": -3114.53,
+   "pnl_if_sold_now": -3114.53
   },
   {
    "stock": "ICICIBANK",
    "entered": "2026-11-02",
    "entry_price": 1398.9,
    "quantity": 71,
-   "exit_price": 1423.79,
-   "pnl": 1529.53,
-   "pnl_if_sold_now": 1529.53
+   "exit_price": 1423.39,
+   "pnl": 1501.17,
+   "pnl_if_sold_now": 1501.17
   },
   {
    "stock": "BHARTIARTL",
    "entered": "2026-11-03",
    "entry_price": 2001.0,
    "quantity": 49,
-   "exit_price": 2063.97,
-   "pnl": 3002.77,
-   "pnl_if_sold_now": 3002.77
+   "exit_price": 2066.57,
+   "pnl": 2976.51,
+   "pnl_if_sold_now": 2976.51
   },
   {
    "stock": "PHOENIXLTD",
    "entered": "2026-11-03",
    "entry_price": 2028.01,
    "quantity": 49,
-   "exit_price": 2047.68,
-   "pnl": 880.94,
-   "pnl_if_sold_now": 880.94
+   "exit_price": 2078.46,
+   "pnl": 2233.48,
+   "pnl_if_sold_now": 2233.48
+  },
+  {
+   "stock": "GAIL",
+   "entered": "2026-11-04",
+   "entry_price": 181.19,
+   "quantity": 551,
+   "exit_price": 186.13,
+   "pnl": 2636.75,
+   "pnl_if_sold_now": 2636.75
+  },
+  {
+   "stock": "LGEINDIA",
+   "entered": "2026-11-04",
+   "entry_price": 1691.15,
+   "quantity": 59,
+   "exit_price": 1691.25,
+   "pnl": -75.95,
+   "pnl_if_sold_now": -75.95
   }
  ],
  "closed": []
