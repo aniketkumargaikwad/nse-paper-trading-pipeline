@@ -4,11 +4,11 @@
  "title": "Midcap150 Momentum 50 + the cash rule",
  "training": "23.7% a year 2009-Oct 2025 with the cash rule (27.3% just holding, luck test t = 3.9), worst fall 32%; 29.9% a year 2021-Oct 2025; -44% in 2008 even with the rule - NSE's real index, its early years back-calculated",
  "start": "2026-10-21",
- "as_of": "2026-11-05",
- "complete_through": "2026-11-05",
+ "as_of": "2026-11-06",
+ "complete_through": "2026-11-06",
  "capital": 500000.0,
- "value": 501197.92,
- "nifty_hold": 537923.44,
+ "value": 501277.88,
+ "nifty_hold": 548880.37,
  "state": "running",
  "equity": [
   [
@@ -70,6 +70,11 @@
    "2026-11-05",
    501197.92,
    537923.44
+  ],
+  [
+   "2026-11-06",
+   501277.88,
+   548880.37
   ]
  ],
  "open": [

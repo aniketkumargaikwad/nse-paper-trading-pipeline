@@ -4,11 +4,11 @@
  "title": "Leader buy-and-hold (stock research, 20 Sep)",
  "training": "4.4% a month in training as a 10-slot account, 2009-2025 - on today's stock list, so flattered by hindsight; rejected then for trading 1.4 times a month",
  "start": "2026-10-21",
- "as_of": "2026-11-04",
- "complete_through": "2026-11-04",
+ "as_of": "2026-11-05",
+ "complete_through": "2026-11-05",
  "capital": 1000000.0,
- "value": 1006157.43,
- "nifty_hold": 1050380.62,
+ "value": 1017190.65,
+ "nifty_hold": 1075631.21,
  "state": "running",
  "equity": [
   [
@@ -63,8 +63,13 @@
   ],
   [
    "2026-11-04",
-   1006157.43,
+   1000000.0,
    1050380.62
+  ],
+  [
+   "2026-11-05",
+   1017190.65,
+   1075631.21
   ]
  ],
  "open": [
@@ -73,54 +78,63 @@
    "entered": "2026-10-28",
    "entry_price": 2541.07,
    "quantity": 39,
-   "exit_price": 2467.17,
-   "pnl": -3114.53,
-   "pnl_if_sold_now": -3114.53
+   "exit_price": 2508.75,
+   "pnl": -1494.62,
+   "pnl_if_sold_now": -1494.62
   },
   {
    "stock": "ICICIBANK",
    "entered": "2026-11-02",
    "entry_price": 1398.9,
    "quantity": 71,
-   "exit_price": 1423.39,
-   "pnl": 1501.17,
-   "pnl_if_sold_now": 1501.17
+   "exit_price": 1499.25,
+   "pnl": 6881.8,
+   "pnl_if_sold_now": 6881.8
   },
   {
    "stock": "BHARTIARTL",
    "entered": "2026-11-03",
    "entry_price": 2001.0,
    "quantity": 49,
-   "exit_price": 2066.57,
-   "pnl": 2976.51,
-   "pnl_if_sold_now": 2976.51
+   "exit_price": 2055.87,
+   "pnl": 2453.01,
+   "pnl_if_sold_now": 2453.01
   },
   {
    "stock": "PHOENIXLTD",
    "entered": "2026-11-03",
    "entry_price": 2028.01,
    "quantity": 49,
-   "exit_price": 2078.46,
-   "pnl": 2233.48,
-   "pnl_if_sold_now": 2233.48
+   "exit_price": 2124.94,
+   "pnl": 4508.48,
+   "pnl_if_sold_now": 4508.48
   },
   {
    "stock": "GAIL",
    "entered": "2026-11-04",
    "entry_price": 181.19,
    "quantity": 551,
-   "exit_price": 186.13,
-   "pnl": 2636.75,
-   "pnl_if_sold_now": 2636.75
+   "exit_price": 185.9,
+   "pnl": 2353.69,
+   "pnl_if_sold_now": 2353.69
   },
   {
    "stock": "LGEINDIA",
    "entered": "2026-11-04",
    "entry_price": 1691.15,
    "quantity": 59,
-   "exit_price": 1691.25,
-   "pnl": -75.95,
-   "pnl_if_sold_now": -75.95
+   "exit_price": 1777.61,
+   "pnl": 4859.43,
+   "pnl_if_sold_now": 4859.43
+  },
+  {
+   "stock": "GLENMARK",
+   "entered": "2026-11-05",
+   "entry_price": 2539.27,
+   "quantity": 39,
+   "exit_price": 2480.56,
+   "pnl": -2371.13,
+   "pnl_if_sold_now": -2371.13
   }
  ],
  "closed": []
