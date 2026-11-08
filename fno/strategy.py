@@ -25,7 +25,7 @@ from typing import Any
 import yaml
 
 from fno.contracts import INDEX_UNDERLYINGS, MINUTE_UNDERLYINGS
-from strategy.expr import Expr, ExpressionError, names_used, parse_expression
+from strategy.expr import Expr, ExpressionError, calls_used, names_used, parse_expression
 
 VERSION = "options/1"
 
@@ -43,6 +43,9 @@ FACT_NAMES = frozenset({
     "day_open", "or_high", "or_low",
 })
 CANDLE_NAMES = frozenset({"open", "high", "low", "close"})
+# Indicators that read traded volume. An index has none, so on index candles they would
+# compute from zeros; refused with the reason instead (8 Nov 2026).
+VOLUME_FUNCTIONS = frozenset({"vwap", "vwma", "obv", "mfi", "cmf"})
 STRIKE_RULES = ("atm", "otm_pct", "delta", "premium", "max_oi", "from_leg")
 MAX_LEGS = 4
 
@@ -130,6 +133,9 @@ def _expression(text: Any, where: str) -> Expr | None:
         node = parse_expression(text)
     except ExpressionError as exc:
         raise StrategyError(f"{where}: {exc}") from None
+    volume = sorted({path[-1] for path in calls_used(node) if path and path[-1] in VOLUME_FUNCTIONS})
+    _need(not volume, f"{where}: {', '.join(volume)} read traded volume, and an index has none - "
+                      "use a price-only indicator (sma, ema, rsi, atr, adx, bbands, supertrend, ...)")
     for path in sorted(names_used(node)):
         name = ".".join(path)
         _need(len(path) == 1 and path[0] in FACT_NAMES | CANDLE_NAMES,

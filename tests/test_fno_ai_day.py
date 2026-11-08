@@ -105,3 +105,19 @@ def test_the_dry_brain_proposes_a_strategy_the_checker_accepts():
     lab = FakeLab()
     outcome, final, pick, exam = run(lab, options_day.DryBrain())
     assert outcome.versions[0].valid and outcome.stopped_because == "stop"
+
+
+def test_the_whole_day_runs_through_to_the_message(monkeypatch, capsys):
+    """main() end to end on a fake engine: the 23 Oct 2026 layout change left main() printing
+    the old text and every scheduled day crashed after its research, before saving or sending."""
+    lab = FakeLab()
+    lab.window = lambda underlying, mode, exam=False: (date(2016, 1, 1), date(2025, 10, 17))
+    sent = []
+    monkeypatch.setattr(options_day, "Lab", lambda root: lab)
+    monkeypatch.setattr(options_day.ledger, "notes", lambda **k: [])
+    monkeypatch.setattr(options_day.ledger, "ideas_tried", lambda **k: [])
+    monkeypatch.setattr(options_day.prompts, "atlas_lines", lambda root: [])
+    monkeypatch.setattr(options_day, "send", lambda subject, blocks: sent.append((subject, blocks)))
+    assert options_day.main(["--dry-run", "--no-save", "--notify"]) == 0
+    assert "Verdict: NOTHING PASSED" in capsys.readouterr().out
+    assert sent and sent[0][0].startswith("Options research")

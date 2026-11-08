@@ -295,8 +295,8 @@ def main(argv: list[str] | None = None) -> int:
     outcome, final, pick, exam = run_day(brain=brain, lab=lab, day=day,
                                          max_versions=args.max_versions or MAX_VERSIONS,
                                          budget_seconds=args.budget_seconds, notes=notes, ideas=ideas)
-    subject, text = message(day, outcome, final, pick, exam, dry_run=args.dry_run)
-    print("\n" + text)
+    subject, blocks = message(day, outcome, final, pick, exam, dry_run=args.dry_run)
+    print("\n" + as_text(blocks))
     if not args.no_save:
         ledger.append_versions(ledger.version_rows(day, outcome.versions))
         print(f"\njournal    {ledger.write_note(day, outcome.versions)}")

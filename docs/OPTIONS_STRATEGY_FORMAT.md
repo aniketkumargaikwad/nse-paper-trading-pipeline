@@ -100,6 +100,8 @@ from 2016. Intraday: minute candles with the previous five sessions as
 warm-up, so `sma(30)` is 30 minutes and long daily lookbacks are not
 available — use the previous session's facts instead.
 
+An index has no traded volume, so `vwap`, `vwma`, `obv`, `mfi` and `cmf` are refused.
+
 Operators: `and`, `or`, `not`, `< > <= >= == !=`, `+ - * /`, brackets.
 
 ## How it is tested

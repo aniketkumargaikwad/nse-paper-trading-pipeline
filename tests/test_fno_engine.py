@@ -276,3 +276,21 @@ def test_a_loss_cap_is_seen_at_the_close_and_filled_at_the_next_open():
               start=D1, end=D4).trades
     assert (t.exited, t.exit_reason) == (D3, "loss cap")
     assert t.pnl < -0.02 * CAPITAL      # the gap to the next open is paid, whatever the cap says
+
+
+def test_a_price_only_indicator_runs_on_the_index_candles():
+    """atr() needs the volume column although it never reads it; an index has none (8 Nov 2026)."""
+    s = parse("""
+version: options/1
+name: test-atr
+underlying: NIFTY
+mode: positional
+expiry: {cycle: weekly, which: 0}
+entry: {when: "atr(3) > 0"}
+legs:
+  - {side: sell, type: CE, strike: {atm: 0}, lots: 1}
+  - {side: sell, type: PE, strike: {atm: 0}, lots: 1}
+exit: {}
+""")
+    result = run(s, market(overrides=FILL), start=D1, end=D4)   # raised "missing OHLCV column(s)" before
+    assert not result.equity.empty
