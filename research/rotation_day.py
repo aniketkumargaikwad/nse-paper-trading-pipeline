@@ -450,12 +450,10 @@ def run_day(*, brain: Any, lab: Lab, day: date, max_versions: int, budget_second
     return outcome, final, exam
 
 
-def report(subject: str, blocks: Sequence[Block], *, notify: bool) -> str:
-    """Print the day's message as plain text and, when asked, send it. Returns the text printed."""
+def print_report(blocks: Sequence[Block]) -> str:
+    """Print the day's message as plain text. Returns the text printed."""
     text = as_text(blocks)
     print("\n" + text)
-    if notify:
-        send(subject, blocks)
     return text
 
 
@@ -547,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
     outcome, final, exam = run_day(brain=brain, lab=lab, day=day, max_versions=args.max_versions or MAX_VERSIONS,
                                    budget_seconds=args.budget_seconds, notes_=n, ideas=ideas)
     subject, blocks = message(day, outcome, final, exam, dry_run=args.dry_run)
-    report(subject, blocks, notify=args.notify)
+    print_report(blocks)
     if not args.no_save:
         _append(_path(LEDGER, None), version_rows(day, outcome.versions))
         print(f"\njournal    {write_note(day, outcome.versions)}")
@@ -555,6 +553,8 @@ def main(argv: list[str] | None = None) -> int:
             _append(_path(EXAMS, None), [exam])
         if args.commit_journal:
             _commit(day)
+    if args.notify:
+        send(subject, blocks)
     return 0
 
 

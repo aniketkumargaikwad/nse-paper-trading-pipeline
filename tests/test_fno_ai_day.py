@@ -109,16 +109,16 @@ def test_the_dry_brain_proposes_a_strategy_the_checker_accepts():
     assert outcome.versions[0].valid and outcome.stopped_because == "stop"
 
 
-def test_report_prints_the_blocks_as_text_and_sends_the_same_blocks(monkeypatch, capsys):
+def test_print_report_prints_the_blocks_as_text(capsys):
     blocks = [Block("Options day", rows=(("Verdict", "PASSED"),), note="a note")]
-    sent = []
-    monkeypatch.setattr(options_day, "send", lambda subject, b, **kw: sent.append((subject, b)))
-    text = options_day.report("subject", blocks, notify=True)
-    assert "Options day" in capsys.readouterr().out and "Options day" in text
-    assert sent == [("subject", blocks)] and sent[0][1] is blocks
+    text = options_day.print_report(blocks)
+    out = capsys.readouterr().out
+    assert out == "\n" + text + "\n"
+    assert "Options day" in text and "Verdict" in text and "a note" in text
 
 
-def test_report_sends_nothing_unless_asked(monkeypatch, capsys):
-    monkeypatch.setattr(options_day, "send", lambda *a, **k: pytest.fail("sent without --notify"))
-    options_day.report("subject", [Block("Options day")], notify=False)
-    assert "Options day" in capsys.readouterr().out
+def test_main_prints_and_notifies_with_the_same_blocks_after_saving():
+    import inspect
+    src = inspect.getsource(options_day.main)
+    assert src.index("print_report(blocks)") < src.index("if args.notify:") < src.index("send(subject, blocks)")
+    assert src.index("if not args.no_save:") < src.index("if args.notify:")

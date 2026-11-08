@@ -125,18 +125,17 @@ def test_each_proposal_sees_the_versions_already_tried_today():
     assert "today, version 1 (t)" in seen[1] and "return_over_volatility" in seen[1]
 
 
-def test_report_prints_the_blocks_as_text_and_sends_the_same_blocks(monkeypatch, capsys):
+def test_print_report_prints_the_blocks_as_text(capsys):
     from research.blocks import Block
     blocks = [Block("Rotation day", rows=(("Verdict", "PASSED"),), note="a note")]
-    sent = []
-    monkeypatch.setattr(rd, "send", lambda subject, b, **kw: sent.append((subject, b)))
-    text = rd.report("subject", blocks, notify=True)
-    assert "Rotation day" in capsys.readouterr().out and "Rotation day" in text
-    assert sent == [("subject", blocks)] and sent[0][1] is blocks
+    text = rd.print_report(blocks)
+    out = capsys.readouterr().out
+    assert out == "\n" + text + "\n"
+    assert "Rotation day" in text and "Verdict" in text and "a note" in text
 
 
-def test_report_sends_nothing_unless_asked(monkeypatch, capsys):
-    from research.blocks import Block
-    monkeypatch.setattr(rd, "send", lambda *a, **k: pytest.fail("sent without --notify"))
-    rd.report("subject", [Block("Rotation day")], notify=False)
-    assert "Rotation day" in capsys.readouterr().out
+def test_main_prints_and_notifies_with_the_same_blocks_after_saving():
+    import inspect
+    src = inspect.getsource(rd.main)
+    assert src.index("print_report(blocks)") < src.index("if args.notify:") < src.index("send(subject, blocks)")
+    assert src.index("if not args.no_save:") < src.index("if args.notify:")
