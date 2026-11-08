@@ -194,6 +194,15 @@ def _index_rows(summary: Any) -> tuple[list[tuple[str, str]], list[str]]:
     return rows, why
 
 
+def report(subject: str, blocks: Sequence[Block], *, notify: bool) -> str:
+    """Print the day's message as plain text and, when asked, send it. Returns the text printed."""
+    text = as_text(blocks)
+    print("\n" + text)
+    if notify:
+        send(subject, blocks)
+    return text
+
+
 def message(day: date, outcome: Any, final: Any, pick: Any, exam: dict[str, Any] | None,
             *, dry_run: bool = False) -> tuple[str, list[Block]]:
     """(subject, blocks). The verdict comes first."""
@@ -295,8 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     outcome, final, pick, exam = run_day(brain=brain, lab=lab, day=day,
                                          max_versions=args.max_versions or MAX_VERSIONS,
                                          budget_seconds=args.budget_seconds, notes=notes, ideas=ideas)
-    subject, text = message(day, outcome, final, pick, exam, dry_run=args.dry_run)
-    print("\n" + text)
+    subject, blocks = message(day, outcome, final, pick, exam, dry_run=args.dry_run)
+    report(subject, blocks, notify=args.notify)
     if not args.no_save:
         ledger.append_versions(ledger.version_rows(day, outcome.versions))
         print(f"\njournal    {ledger.write_note(day, outcome.versions)}")
@@ -304,8 +313,6 @@ def main(argv: list[str] | None = None) -> int:
             ledger.append_exam(exam)
         if args.commit_journal:
             commit(day)
-    if args.notify:
-        send(subject, blocks)
     return 0
 
 

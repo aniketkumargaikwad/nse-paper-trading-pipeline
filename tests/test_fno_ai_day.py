@@ -7,11 +7,13 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fno import atlas  # noqa: E402
 from fno.ai import day as options_day  # noqa: E402
-from research.blocks import as_html, as_text  # noqa: E402
+from research.blocks import Block, as_html, as_text  # noqa: E402
 
 DAY = date(2026, 10, 21)
 
@@ -105,3 +107,18 @@ def test_the_dry_brain_proposes_a_strategy_the_checker_accepts():
     lab = FakeLab()
     outcome, final, pick, exam = run(lab, options_day.DryBrain())
     assert outcome.versions[0].valid and outcome.stopped_because == "stop"
+
+
+def test_report_prints_the_blocks_as_text_and_sends_the_same_blocks(monkeypatch, capsys):
+    blocks = [Block("Options day", rows=(("Verdict", "PASSED"),), note="a note")]
+    sent = []
+    monkeypatch.setattr(options_day, "send", lambda subject, b, **kw: sent.append((subject, b)))
+    text = options_day.report("subject", blocks, notify=True)
+    assert "Options day" in capsys.readouterr().out and "Options day" in text
+    assert sent == [("subject", blocks)] and sent[0][1] is blocks
+
+
+def test_report_sends_nothing_unless_asked(monkeypatch, capsys):
+    monkeypatch.setattr(options_day, "send", lambda *a, **k: pytest.fail("sent without --notify"))
+    options_day.report("subject", [Block("Options day")], notify=False)
+    assert "Options day" in capsys.readouterr().out

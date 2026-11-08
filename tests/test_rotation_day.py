@@ -123,3 +123,20 @@ def test_each_proposal_sees_the_versions_already_tried_today():
                echo=lambda *a, **k: None)
     assert "today, version 1" not in seen[0]
     assert "today, version 1 (t)" in seen[1] and "return_over_volatility" in seen[1]
+
+
+def test_report_prints_the_blocks_as_text_and_sends_the_same_blocks(monkeypatch, capsys):
+    from research.blocks import Block
+    blocks = [Block("Rotation day", rows=(("Verdict", "PASSED"),), note="a note")]
+    sent = []
+    monkeypatch.setattr(rd, "send", lambda subject, b, **kw: sent.append((subject, b)))
+    text = rd.report("subject", blocks, notify=True)
+    assert "Rotation day" in capsys.readouterr().out and "Rotation day" in text
+    assert sent == [("subject", blocks)] and sent[0][1] is blocks
+
+
+def test_report_sends_nothing_unless_asked(monkeypatch, capsys):
+    from research.blocks import Block
+    monkeypatch.setattr(rd, "send", lambda *a, **k: pytest.fail("sent without --notify"))
+    rd.report("subject", [Block("Rotation day")], notify=False)
+    assert "Rotation day" in capsys.readouterr().out
