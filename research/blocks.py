@@ -71,8 +71,10 @@ def as_html(blocks: Sequence[Block]) -> str:
     return render(blocks, as_html=True)
 
 
-def send(subject: str, blocks: Sequence[Block], *, warn_token: bool = True) -> None:
-    """Telegram (HTML) and email (plain text), each channel's failure kept to itself."""
+def send(subject: str, blocks: Sequence[Block], *, warn_token: bool = True) -> bool:
+    """Telegram (HTML) and email (plain text), each channel's failure kept to itself.
+
+    Returns whether any channel confirmed delivery."""
     from research.notify import send_all, token_warning
 
     def pair(*names: str) -> tuple[str, ...] | None:
@@ -88,3 +90,4 @@ def send(subject: str, blocks: Sequence[Block], *, warn_token: bool = True) -> N
                        email=pair("GMAIL_USER", "GMAIL_APP_PASSWORD", "NOTIFY_EMAIL"))
     for channel, result in results.items():
         print(f"{channel:9s} {'sent' if result.sent else result.detail}")
+    return any(r.sent for r in results.values())

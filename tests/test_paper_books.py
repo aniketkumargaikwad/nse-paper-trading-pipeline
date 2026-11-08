@@ -136,3 +136,31 @@ def test_a_book_added_later_starts_on_its_own_day():
     late = pb.Book("t-rot", "rotation", "t", 500_000.0, "t", variant=Variant("t", 6, 0, 2, False),
                    start=closes.index[500])
     assert pb.rotation_book(late, closes)["start"] == closes.index[500].isoformat()
+
+
+def test_the_monthly_summary_is_sent_once_per_month_and_only_marked_when_delivered(tmp_path, monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "paper_books_script", Path(__file__).resolve().parent.parent / "scripts" / "paper_books.py")
+    spb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(spb)
+    calls = []
+    deliver = {"ok": False}
+
+    def fake_send(subject, blocks, **k):
+        calls.append(subject)
+        return deliver["ok"]
+
+    import research.blocks
+    monkeypatch.setattr(research.blocks, "send", fake_send)
+    monkeypatch.setattr(pb, "OUT", tmp_path)
+    data = ohlcv()
+    monkeypatch.setattr(spb, "_load", lambda args: data)
+    monkeypatch.setattr(pb, "BOOKS", (pb.Book("t-rot", "rotation", "t", 500_000.0, "t",
+                                              variant=Variant("t", 6, 0, 2, False), start=data.index[500]),))
+    spb.main(["--skip-download", "--notify"])            # Telegram fails: nothing remembered
+    assert len(calls) == 1 and not (tmp_path / spb.MONTHLY_MARK).exists()
+    deliver["ok"] = True
+    spb.main(["--skip-download", "--notify"])            # delivered: remembered
+    spb.main(["--skip-download", "--notify"])            # same month: not sent again
+    assert len(calls) == 2 and (tmp_path / spb.MONTHLY_MARK).read_text().strip() == f"{data.index[-1]:%Y-%m}"
