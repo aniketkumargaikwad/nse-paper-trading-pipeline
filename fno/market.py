@@ -220,6 +220,11 @@ class MarketData:
         index = pd.DatetimeIndex(pd.to_datetime(days))
         bars = self.spot.assign(trade_date=pd.to_datetime(self.spot["trade_date"])).set_index("trade_date")
         df = bars.reindex(index)[["open", "high", "low", "close"]].astype(float)
+        # An index has no traded volume, but the indicator code asks for the column even for
+        # price-only indicators (atr, adx, supertrend...): every positional strategy using one
+        # failed with "missing OHLCV column(s): ['volume']" (found 8 Nov 2026). Volume-based
+        # indicators are refused at parse (fno.strategy.VOLUME_FUNCTIONS), so zeros are safe here.
+        df["volume"] = 0.0
         facts = (self.facts.assign(trade_date=pd.to_datetime(self.facts["trade_date"]))
                  .set_index("trade_date").reindex(index))
         variables: dict[str, pd.Series] = {}

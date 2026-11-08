@@ -194,13 +194,6 @@ def _index_rows(summary: Any) -> tuple[list[tuple[str, str]], list[str]]:
     return rows, why
 
 
-def print_report(blocks: Sequence[Block]) -> str:
-    """Print the day's message as plain text. Returns the text printed."""
-    text = as_text(blocks)
-    print("\n" + text)
-    return text
-
-
 def message(day: date, outcome: Any, final: Any, pick: Any, exam: dict[str, Any] | None,
             *, dry_run: bool = False) -> tuple[str, list[Block]]:
     """(subject, blocks). The verdict comes first."""
@@ -303,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
                                          max_versions=args.max_versions or MAX_VERSIONS,
                                          budget_seconds=args.budget_seconds, notes=notes, ideas=ideas)
     subject, blocks = message(day, outcome, final, pick, exam, dry_run=args.dry_run)
-    print_report(blocks)
+    print("\n" + as_text(blocks))
     if not args.no_save:
         ledger.append_versions(ledger.version_rows(day, outcome.versions))
         print(f"\njournal    {ledger.write_note(day, outcome.versions)}")

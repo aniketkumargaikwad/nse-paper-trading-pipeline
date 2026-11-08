@@ -7,13 +7,11 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fno import atlas  # noqa: E402
 from fno.ai import day as options_day  # noqa: E402
-from research.blocks import Block, as_html, as_text  # noqa: E402
+from research.blocks import as_html, as_text  # noqa: E402
 
 DAY = date(2026, 10, 21)
 
@@ -109,16 +107,17 @@ def test_the_dry_brain_proposes_a_strategy_the_checker_accepts():
     assert outcome.versions[0].valid and outcome.stopped_because == "stop"
 
 
-def test_print_report_prints_the_blocks_as_text(capsys):
-    blocks = [Block("Options day", rows=(("Verdict", "PASSED"),), note="a note")]
-    text = options_day.print_report(blocks)
-    out = capsys.readouterr().out
-    assert out == "\n" + text + "\n"
-    assert "Options day" in text and "Verdict" in text and "a note" in text
-
-
-def test_main_prints_and_notifies_with_the_same_blocks_after_saving():
-    import inspect
-    src = inspect.getsource(options_day.main)
-    assert src.index("print_report(blocks)") < src.index("if args.notify:") < src.index("send(subject, blocks)")
-    assert src.index("if not args.no_save:") < src.index("if args.notify:")
+def test_the_whole_day_runs_through_to_the_message(monkeypatch, capsys):
+    """main() end to end on a fake engine: the 23 Oct 2026 layout change left main() printing
+    the old text and every scheduled day crashed after its research, before saving or sending."""
+    lab = FakeLab()
+    lab.window = lambda underlying, mode, exam=False: (date(2016, 1, 1), date(2025, 10, 17))
+    sent = []
+    monkeypatch.setattr(options_day, "Lab", lambda root: lab)
+    monkeypatch.setattr(options_day.ledger, "notes", lambda **k: [])
+    monkeypatch.setattr(options_day.ledger, "ideas_tried", lambda **k: [])
+    monkeypatch.setattr(options_day.prompts, "atlas_lines", lambda root: [])
+    monkeypatch.setattr(options_day, "send", lambda subject, blocks: sent.append((subject, blocks)))
+    assert options_day.main(["--dry-run", "--no-save", "--notify"]) == 0
+    assert "Verdict: NOTHING PASSED" in capsys.readouterr().out
+    assert sent and sent[0][0].startswith("Options research")

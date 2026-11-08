@@ -37,7 +37,6 @@ import pandas as pd
 import yaml
 
 from config import IST, use_utf8_stdout
-from research.blocks import Block, as_text, send
 from research.portfolio import PASS_MAX_FALL_PCT, PASS_T
 from research.rotation import INDEX, SCORES, WEIGHTINGS, Variant, month_returns, run, stats
 from research.run_day import OpusBrain, choose_final, nothing_to_commit
@@ -450,13 +449,6 @@ def run_day(*, brain: Any, lab: Lab, day: date, max_versions: int, budget_second
     return outcome, final, exam
 
 
-def print_report(blocks: Sequence[Block]) -> str:
-    """Print the day's message as plain text. Returns the text printed."""
-    text = as_text(blocks)
-    print("\n" + text)
-    return text
-
-
 def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: bool = False) -> tuple[str, list]:
     """(subject, blocks) in the morning message's layout (research.blocks). The verdict comes first."""
     from research.blocks import Block, lesson
@@ -544,8 +536,9 @@ def main(argv: list[str] | None = None) -> int:
     brain: Any = DryBrain() if args.dry_run else RotationBrain(Claude(), baseline=base)
     outcome, final, exam = run_day(brain=brain, lab=lab, day=day, max_versions=args.max_versions or MAX_VERSIONS,
                                    budget_seconds=args.budget_seconds, notes_=n, ideas=ideas)
+    from research.blocks import as_text, send
     subject, blocks = message(day, outcome, final, exam, dry_run=args.dry_run)
-    print_report(blocks)
+    print("\n" + as_text(blocks))
     if not args.no_save:
         _append(_path(LEDGER, None), version_rows(day, outcome.versions))
         print(f"\njournal    {write_note(day, outcome.versions)}")
