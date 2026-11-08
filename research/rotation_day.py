@@ -536,8 +536,9 @@ def main(argv: list[str] | None = None) -> int:
     brain: Any = DryBrain() if args.dry_run else RotationBrain(Claude(), baseline=base)
     outcome, final, exam = run_day(brain=brain, lab=lab, day=day, max_versions=args.max_versions or MAX_VERSIONS,
                                    budget_seconds=args.budget_seconds, notes_=n, ideas=ideas)
-    subject, text = message(day, outcome, final, exam, dry_run=args.dry_run)
-    print("\n" + text)
+    from research.blocks import as_text, send
+    subject, blocks = message(day, outcome, final, exam, dry_run=args.dry_run)
+    print("\n" + as_text(blocks))
     if not args.no_save:
         _append(_path(LEDGER, None), version_rows(day, outcome.versions))
         print(f"\njournal    {write_note(day, outcome.versions)}")

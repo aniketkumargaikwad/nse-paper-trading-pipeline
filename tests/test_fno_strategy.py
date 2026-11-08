@@ -131,3 +131,13 @@ def test_a_loss_cap_is_a_share_of_the_account():
 def test_a_loss_cap_outside_0_to_100_is_refused(value):
     with pytest.raises(StrategyError, match="max_loss_pct"):
         parse(SPEC_EXAMPLE.replace("stop_pct: 100", f"stop_pct: 100\n  max_loss_pct: {value}"))
+
+
+@pytest.mark.parametrize("func", ["vwap()", "obv()", "mfi(14)", "cmf(20)", "vwma(20)"])
+def test_volume_indicators_are_refused_because_an_index_has_no_volume(func):
+    with pytest.raises(StrategyError, match="index has none"):
+        parse(POSITIONAL.replace("iv_rank > 50", f"close > {func}"))
+
+
+def test_price_only_indicators_are_still_allowed():
+    assert parse(POSITIONAL.replace("iv_rank > 50", "atr(14) > 0 and adx.adx(14) > 20")).entry_when is not None

@@ -123,3 +123,25 @@ def test_each_proposal_sees_the_versions_already_tried_today():
                echo=lambda *a, **k: None)
     assert "today, version 1" not in seen[0]
     assert "today, version 1 (t)" in seen[1] and "return_over_volatility" in seen[1]
+
+
+def test_the_whole_day_runs_through_to_the_message(monkeypatch, tmp_path, capsys):
+    """main() end to end on made-up prices (see the options twin of this test for why)."""
+    import numpy as np
+    import pandas as pd
+    import research.blocks
+    idx = pd.bdate_range("2020-01-01", periods=900).date
+    rng = np.random.default_rng(5)
+    closes = pd.DataFrame({f"S{i}.NS": 100 * np.exp(np.cumsum(0.0004 * i + 0.02 * rng.standard_normal(900)))
+                           for i in range(25)}, index=idx)
+    closes["^NSEI"] = 100 * np.exp(0.0004 * np.arange(900))
+    path = tmp_path / "closes.parquet"
+    closes.to_parquet(path)
+    sent = []
+    monkeypatch.setattr(rd, "CLOSES", path)
+    monkeypatch.setattr(rd, "notes", lambda *a, **k: [])
+    monkeypatch.setattr(rd, "ideas_tried", lambda *a, **k: [])
+    monkeypatch.setattr(research.blocks, "send", lambda subject, blocks, **k: sent.append(subject))
+    assert rd.main(["--dry-run", "--no-save", "--skip-download", "--notify"]) == 0
+    assert "Verdict:" in capsys.readouterr().out
+    assert sent and sent[0].startswith("Stock momentum research")
