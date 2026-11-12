@@ -4,11 +4,11 @@
  "title": "Momentum rotation, 12 stocks above their own trend (AI, 20 Oct)",
  "training": "2.65% a month in training, +2.9% a year over the paper-traded momentum rule on the same stocks (luck test t = 1.65), worst fall 24% - on today's stock list, so flattered by hindsight",
  "start": "2026-10-23",
- "as_of": "2026-11-09",
- "complete_through": "2026-11-09",
+ "as_of": "2026-11-11",
+ "complete_through": "2026-11-11",
  "capital": 500000.0,
  "value": 500000.0,
- "nifty_hold": 554085.19,
+ "nifty_hold": 558740.06,
  "state": "running",
  "equity": [
   [
@@ -70,6 +70,11 @@
    "2026-11-09",
    500000.0,
    554085.19
+  ],
+  [
+   "2026-11-11",
+   500000.0,
+   558740.06
   ]
  ],
  "open": [],
