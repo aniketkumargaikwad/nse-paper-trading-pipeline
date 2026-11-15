@@ -37,12 +37,14 @@ def main(argv: list[str] | None = None) -> int:
     closes = closes_of(ohlcv)
     from costs import HoldingCostModel
     from fno import store
-    from nse_index_history import fetch as fetch_nse
-    indexes = {b.index for b in pb.BOOKS if b.kind == "index"}
-    tri = (fetch_nse(pb.START.year - 1, {i: i for i in [*indexes, "NIFTY 50"]}, log=lambda *a, **k: None)
-           if indexes else None)
+    from nse_index_history import fetch_whole
+    all_books = pb.all_books()
+    # Two years before the first book: an allocation plan ranks on up to 12 months and
+    # reads 250-session averages, and both must exist on its first day.
+    tri = (fetch_whole(pb.indexes_needed(all_books), pb.START.year - 2, log=lambda *a, **k: None)
+           if any(b.kind in ("index", "alloc") for b in all_books) else None)
     books, failed = [], False
-    for book in pb.BOOKS:
+    for book in all_books:
         try:
             if book.kind == "stock":
                 b = pb.stock_book(book, ohlcv, slippage_pct=get_settings(require_supabase=False).slippage_pct, cost_model=HoldingCostModel())
@@ -50,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
                 b = pb.rotation_book(book, closes)
             elif book.kind == "index":
                 b = pb.index_book(book, tri)
+            elif book.kind == "alloc":
+                b = pb.alloc_book(book, tri)
             else:
                 b = pb.options_book(book, store.root_dir())
         except Exception as exc:        # noqa: BLE001 - one book's failure must not stop the rest

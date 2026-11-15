@@ -167,3 +167,12 @@ jobs:
           else
             echo "Nothing was published to Supabase Storage."
           fi
+
+      # A crash used to be silent: from 24 Oct to 7 Nov 2026 every research day failed and
+      # nothing reached Telegram (scripts/alert_failure.py). Keep this the LAST step.
+      - name: Say so on Telegram if the job failed
+        if: failure()
+        run: python scripts/alert_failure.py "price recovery"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
