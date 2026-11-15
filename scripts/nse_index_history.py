@@ -50,6 +50,42 @@ def fetch(first_year: int = 2005, indexes: dict[str, str] = INDEXES, log=print) 
     return pd.DataFrame(cols)
 
 
+def fetch_whole(indexes: list[str], first_year: int = 2005, log=print, pause: float = 1.0) -> pd.DataFrame:
+    """Total-return levels for many indexes, ONE request each (the endpoint serves 20+ years at once).
+
+    An index the site does not know, or that fails twice, is left out and named in
+    the log - the caller decides whether what is left is enough.
+    """
+    s = requests.Session()
+    s.get(HOME, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+    cols, missing = {}, []
+    for index in indexes:
+        cinfo = (f"{{'name':'{index}','startDate':'01-Jan-{first_year}',"
+                 f"'endDate':'31-Dec-{date.today().year}','indexName':'{index}'}}")
+        rows: list[tuple[date, float]] = []
+        for attempt in range(2):
+            try:
+                r = s.post(URL, headers=HEADERS, data=json.dumps({"cinfo": cinfo}), timeout=120)
+                got = r.json()
+                got = json.loads(got) if isinstance(got, str) else got
+                rows = [(datetime.strptime(x["Date"], "%d %b %Y").date(), float(x["TotalReturnsIndex"]))
+                        for x in got if x.get("TotalReturnsIndex") not in (None, "-")]
+                if rows:
+                    break
+            except (ValueError, KeyError, requests.RequestException):
+                rows = []
+            time.sleep(5 * (attempt + 1))
+        if rows:
+            cols[index] = pd.Series(dict(rows)).sort_index()
+        else:
+            missing.append(index)
+        time.sleep(pause)
+    frame = pd.DataFrame(cols).sort_index()
+    log(f"{len(cols)} NSE indexes, {frame.index.min()} -> {frame.index.max()}"
+        + (f"; missing {', '.join(missing)}" if missing else ""), flush=True)
+    return frame
+
+
 def main() -> int:
     out = Path("data/rotation/nse_tri.parquet")
     out.parent.mkdir(parents=True, exist_ok=True)

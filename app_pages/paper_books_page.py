@@ -64,7 +64,8 @@ def render(ctx: AppContext) -> None:
         f"At 6 months ({REVIEW_6M}): DROP if more than {DROP_BEHIND_PTS:.0f} points behind just holding "
         f"its benchmark (stock and options books need {MIN_TRADES} closed trades first). "
         f"At 12 months ({REVIEW_12M}): PASSED if ahead of its benchmark with a worst fall within "
-        f"{STOP_FALL_PCT:.0f}%. Full plan: docs/TRACKING.md.")
+        f"{STOP_FALL_PCT:.0f}%. A book added later is reviewed 6 and 12 months from its own "
+        f"first day. Full plan: docs/TRACKING.md.")
     books = []
     momentum = ROOT / "momentum" / "paper.json"
     if momentum.exists():

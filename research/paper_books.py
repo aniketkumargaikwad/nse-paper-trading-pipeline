@@ -18,6 +18,9 @@ nothing in it can be edited after the fact:
              after each expiry, so the book says how far it is complete
   index      an NSE total-return index held while NIFTY 50 is above its 200-day
              average, cash (6% a year) otherwise - the momentum account's rule
+  alloc      research.alloc.run, an index allocation plan the research PASSED.
+             These are not listed here by hand: the research day adds each one to
+             research/paper/promoted.json the day it passes (research/alloc_day.py)
 
 The strategies' rules are frozen in research/paper/*.json.
 """
@@ -27,7 +30,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +51,7 @@ ROTATION_COST_PCT = 0.2
 @dataclass(frozen=True)
 class Book:
     key: str
-    kind: str                # stock | rotation | options
+    kind: str                # stock | rotation | options | index | alloc
     title: str
     capital: float
     training: str            # what it showed in training, in words, with the caveat
@@ -56,6 +59,7 @@ class Book:
     variant: Variant | None = None    # rotation
     underlying: str | None = None     # options
     index: str | None = None          # index: the NSE index name
+    plan: Any = None                  # alloc: a research.alloc.Plan
     start: date = START               # the day this book began trading forward
 
 
@@ -78,6 +82,16 @@ BOOKS = (
          "stocks (luck test t = 1.65), worst fall 24% - on today's stock list, so flattered by hindsight",
          variant=Variant("M-20261020-concentrated-12-1-momentum-12-stocks-own-v1", 12, 1, 12, True,
                          above_sma=200, trend_sessions=200), start=date(2026, 10, 23)),
+    # Added 15 Nov 2026: the one version the rotation research PASSED and that then beat the
+    # paper-traded rule in its exam year (12 Nov 2026: +1.8% against -1.6%). It passed on
+    # 10 Nov too, with an extra stock-level trend gate; this is the simpler of the two. No
+    # book was started when it passed - passes went nowhere until this date.
+    Book("rotation-12-0", "rotation", "Momentum rotation, 20 stocks, no skip month (AI, 12 Nov)", 500_000.0,
+         "+2.8% a year over the paper-traded momentum rule on the same stocks (luck test t = 2.04), "
+         "worst fall 22%; exam year +1.8% against that rule's -1.6% - on today's stock list, so "
+         "flattered by hindsight",
+         variant=Variant("M-20261112-12-0-momentum-20-stocks-nifty-200-day-fi-v2", 12, 0, 20, True,
+                         trend_sessions=200), start=date(2026, 11, 16)),
     Book("options-banknifty-condor", "options", "BANKNIFTY same-day iron condor (options AI, 19 Oct)", 500_000.0,
          "6.0% a month in training on only 33 trades, worst day -11%; failed the -10% day rule",
          rules="options-banknifty-condor.json", underlying="BANKNIFTY"),
@@ -89,6 +103,43 @@ BOOKS = (
          "index, its early years back-calculated",
          index="NIFTY MIDCAP150 MOMENTUM 50"),
 )
+
+
+PROMOTED = RULES / "promoted.json"
+
+
+def promoted_books(path: Path | None = None) -> tuple[Book, ...]:
+    """The plans the index allocation research passed, each paper-traded from the day after."""
+    from research.alloc import PlanError, parse
+    path = path or PROMOTED
+    if not path.exists():
+        return ()
+    books = []
+    for row in json.loads(path.read_text(encoding="utf-8")):
+        try:
+            plan = parse(row["document"], name=row["title"])
+        except (PlanError, KeyError):
+            continue                 # an index dropped from the menu: the book cannot be replayed
+        books.append(Book(row["key"], "alloc", f"{row['title']} (AI, {row['day']})", 500_000.0,
+                          row["training"], plan=plan, start=date.fromisoformat(row["start"])))
+    return tuple(books)
+
+
+def all_books() -> tuple[Book, ...]:
+    return (*BOOKS, *promoted_books())
+
+
+def indexes_needed(books: Sequence[Book]) -> list[str]:
+    """Every NSE index the index and alloc books read, NIFTY 50 included."""
+    names = {"NIFTY 50"}
+    for b in books:
+        if b.kind == "index":
+            names.add(b.index)
+        elif b.kind == "alloc":
+            names.update(b.plan.universe)
+            if b.plan.market_index:
+                names.add(b.plan.market_index)
+    return sorted(names)
 
 
 def rules(book: Book) -> dict[str, Any]:
@@ -251,6 +302,29 @@ def index_book(book: Book, tri: pd.DataFrame, *, start: date | None = None) -> d
                         "action": "buy the index" if r.holdings else "sell to cash"} for r in held]}
 
 
+def alloc_book(book: Book, tri: pd.DataFrame, *, start: date | None = None) -> dict[str, Any]:
+    """An index allocation plan (research.alloc) replayed from its start on NSE total-return levels."""
+    from research import alloc
+    start = start or book.start
+    nifty = tri[alloc.BENCHMARK].dropna()
+    sessions = sorted(nifty.index)
+    if not sessions or sessions[-1] < start:
+        return _empty(book, start, sessions[-1] if sessions else None, "not started")
+    result = alloc.run(tri, book.plan, start=start, end=sessions[-1], capital=book.capital)
+    hold, curve = _nifty_hold(nifty, start, book.capital)
+    share = lambda w: f"{100 * w:.0f}%"                                        # noqa: E731
+    now = dict(result.switches[-1].weights) if result.switches else {}
+    return {**_empty(book, start, sessions[-1], "running"), "complete_through": sessions[-1].isoformat(),
+            "value": round(float(result.equity.iloc[-1]), 2), "nifty_hold": hold,
+            "equity": [[d.isoformat(), round(v, 2), round(float(curve.get(d, float("nan"))), 2)]
+                       for d, v in result.equity.items()],
+            "open": ([{"holding": k, "share": share(w)} for k, w in now.items()]
+                     + [{"holding": "cash (6% a year)", "share": share(1 - sum(now.values()))}]),
+            "closed": [{"decided": s.decided.isoformat(), "filled": s.filled.isoformat(),
+                        "action": ", ".join(f"{k} {share(w)}" for k, w in s.weights) or "all to cash"}
+                       for s in result.switches][-24:]}
+
+
 def summary_line(b: Mapping[str, Any]) -> str:
     if b["state"] != "running":
         return f"{b['title']}: {b['state']}"
@@ -300,6 +374,14 @@ REVIEW_12M = date(2027, 10, 21)
 COUNTS_TRADES = ("stock", "options")
 
 
+def review_dates(start: date) -> tuple[date, date]:
+    """(six-month, twelve-month) review days. The books of October 2026 keep the dates fixed
+    above; a book added later is given the same six and twelve months of its own."""
+    if start <= date(2026, 10, 31):
+        return REVIEW_6M, REVIEW_12M
+    return start + timedelta(days=182), start + timedelta(days=365)
+
+
 def scorecard(b: Mapping[str, Any], *, today: date | None = None) -> dict[str, Any]:
     """Where a book stands against the review rule above."""
     if b.get("state") != "running" or not b.get("equity"):
@@ -314,23 +396,24 @@ def scorecard(b: Mapping[str, Any], *, today: date | None = None) -> dict[str, A
     lead = mine - bench
     trades = len(b.get("closed", [])) if b.get("kind") in COUNTS_TRADES else None
     day = today or date.fromisoformat(b["complete_through"])
+    review_6m, review_12m = review_dates(date.fromisoformat(b["start"]))
     card = {"return_pct": round(mine, 2), "benchmark_pct": round(bench, 2), "lead_pts": round(lead, 2),
             "worst_fall_pct": round(fall, 1), "closed_trades": trades,
             "months": round((day - date.fromisoformat(b["start"])).days / 30.44, 1)}
     if fall > STOP_FALL_PCT:
         return {**card, "verdict": "STOP", "detail": f"fell {fall:.1f}% from its high (limit {STOP_FALL_PCT:.0f}%)"}
-    if day >= REVIEW_12M:
+    if day >= review_12m:
         ok = lead > 0
         return {**card, "verdict": "PASSED" if ok else "FAILED",
                 "detail": f"12-month review: {lead:+.1f} points against its benchmark"}
-    if day >= REVIEW_6M:
+    if day >= review_6m:
         if trades is not None and trades < MIN_TRADES:
             return {**card, "verdict": "waiting", "detail": f"only {trades} closed trades: judged at 12 months"}
         if lead < -DROP_BEHIND_PTS:
             return {**card, "verdict": "DROP", "detail": f"{lead:+.1f} points behind its benchmark at 6 months"}
-        return {**card, "verdict": "on track", "detail": f"6-month review passed: {lead:+.1f} points; final review {REVIEW_12M}"}
+        return {**card, "verdict": "on track", "detail": f"6-month review passed: {lead:+.1f} points; final review {review_12m}"}
     return {**card, "verdict": "too early", "detail": f"{lead:+.1f} points against its benchmark so far; "
-                                                      f"first review {REVIEW_6M}"}
+                                                      f"first review {review_6m}"}
 
 
 def from_momentum(m: Mapping[str, Any]) -> dict[str, Any]:

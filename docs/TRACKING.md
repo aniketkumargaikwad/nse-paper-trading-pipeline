@@ -21,12 +21,13 @@ had a single day**, so no result can bend it. It lives in code too
 | When | Job | What you get |
 |---|---|---|
 | Mon, Wed, Fri morning | `fno-research` | the options AI designs and tests; Telegram message with the verdict |
-| Tue, Thu, Sat morning | `research` | the stock AI improves on momentum; Telegram message |
+| Tue, Thu, Sat morning | `research` | since 15 Nov 2026: the AI designs index allocation plans on NSE's own index histories (`docs/research/2026-11-15-index-allocation-research.md`); a plan that passes starts paper-trading by itself; Telegram message |
 | Weekday evenings | `fno-daily` | option and index data saved |
 | Weekday evenings | `momentum-paper`, `paper-books` | every paper book recomputed; the dashboard updates |
 | First trading day of each month | `paper-books` | one Telegram message: every book, its return, and its review status |
 
-GitHub starts these late, often by 4-5 hours. Email messages need the
+Since 15 Nov 2026 a job that crashes sends a Telegram message the same hour
+(`scripts/alert_failure.py`). GitHub starts these late, often by 4-5 hours. Email messages need the
 `GMAIL_USER`, `GMAIL_APP_PASSWORD` and `NOTIFY_EMAIL` secrets, which are empty;
 Telegram works.
 
@@ -41,6 +42,8 @@ Telegram works.
 | Momentum rotation, 12 stocks above their own trend (AI; added 23 Oct) | +2.9% a year over the paper-traded rule, t = 1.65 (hindsight-inflated) | NIFTY 50 |
 | Leader buy-and-hold (stock AI) | 4.4% a month (hindsight-inflated, few trades) | NIFTY 50 |
 | BANKNIFTY same-day iron condor (options AI) | 6.0% a month on 33 trades | BANKNIFTY |
+| Momentum rotation, 20 stocks, no skip month (AI; added 15 Nov, trades from 16 Nov) | +2.8% a year over the paper-traded rule, t = 2.04; exam year +1.8% against -1.6% (hindsight-inflated) | NIFTY 50 |
+| Any plan the index allocation research passes (added by itself, from the day after it passes) | on NSE's own index histories from 2006, 2008 included, fund fee charged - no hindsight | NIFTY 50 |
 
 From the start date on there is no hindsight: the stock list is fixed and the
 future is unknown to it. These are the honest numbers.
@@ -55,6 +58,9 @@ future is unknown to it. These are the honest numbers.
   worst fall within 30%; otherwise **FAILED**.
 - Only a PASSED book is worth discussing with real money, small, and that
   decision is the owner's. Nothing in this system can place an order.
+- A book added after October 2026 is judged by the same rule, 6 and 12 months
+  from its own first day (`research.paper_books.review_dates`). The dates of
+  the October books are unchanged.
 
 ## How to check, in two minutes
 

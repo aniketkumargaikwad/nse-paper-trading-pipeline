@@ -62,3 +62,12 @@ jobs:
           git -c user.name="paper books" -c user.email=noreply@anthropic.com \
             commit -m "docs(research): paper books $(date -u +%F)" || exit 0
           git pull --rebase -q && git push
+
+      # A crash used to be silent: from 24 Oct to 7 Nov 2026 every research day failed and
+      # nothing reached Telegram (scripts/alert_failure.py). Keep this the LAST step.
+      - name: Say so on Telegram if the job failed
+        if: failure()
+        run: python scripts/alert_failure.py "paper books"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
