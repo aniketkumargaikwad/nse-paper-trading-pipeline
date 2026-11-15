@@ -313,16 +313,19 @@ def alloc_book(book: Book, tri: pd.DataFrame, *, start: date | None = None) -> d
     result = alloc.run(tri, book.plan, start=start, end=sessions[-1], capital=book.capital)
     hold, curve = _nifty_hold(nifty, start, book.capital)
     share = lambda w: f"{100 * w:.0f}%"                                        # noqa: E731
-    now = dict(result.switches[-1].weights) if result.switches else {}
+    now = {k: w for k, w in sorted(result.holdings.items()) if w > 0.0005}
     return {**_empty(book, start, sessions[-1], "running"), "complete_through": sessions[-1].isoformat(),
             "value": round(float(result.equity.iloc[-1]), 2), "nifty_hold": hold,
             "equity": [[d.isoformat(), round(v, 2), round(float(curve.get(d, float("nan"))), 2)]
                        for d, v in result.equity.items()],
             "open": ([{"holding": k, "share": share(w)} for k, w in now.items()]
                      + [{"holding": "cash (6% a year)", "share": share(1 - sum(now.values()))}]),
+            # The account runs as equal parts deciding on different days (research.alloc.PARTS),
+            # so a line here is one part's switch, and its shares are shares of that part.
             "closed": [{"decided": s.decided.isoformat(), "filled": s.filled.isoformat(),
-                        "action": ", ".join(f"{k} {share(w)}" for k, w in s.weights) or "all to cash"}
-                       for s in result.switches][-24:]}
+                        "action": f"part {s.part + 1}: "
+                                  + (", ".join(f"{k} {share(w)}" for k, w in s.weights) or "all to cash")}
+                       for s in result.switches][-40:]}
 
 
 def summary_line(b: Mapping[str, Any]) -> str:

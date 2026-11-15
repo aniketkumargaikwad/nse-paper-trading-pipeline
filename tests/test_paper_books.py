@@ -183,9 +183,12 @@ def test_an_allocation_book_replays_its_plan_from_its_own_start():
     b = pb.alloc_book(book, tri)
     assert b["state"] == "running" and b["start"] == tri.index[500].isoformat()
     # NIFTY IT is below its own average, so its half of the account waits in cash.
-    assert b["open"] == [{"holding": "NIFTY200 MOMENTUM 30", "share": "50%"},
-                         {"holding": "cash (6% a year)", "share": "50%"}]
+    # Bought at half; 200 sessions of the index rising faster than cash has drifted it up a little.
+    assert [o["holding"] for o in b["open"]] == ["NIFTY200 MOMENTUM 30", "cash (6% a year)"]
+    held, cash = (int(o["share"].rstrip("%")) for o in b["open"])
+    assert 50 <= held <= 58 and held + cash == 100
     assert b["closed"][0]["filled"] == tri.index[500].isoformat()          # in position from its first close
+    assert b["closed"][0]["action"] == "part 1: NIFTY200 MOMENTUM 30 50%"
     assert b["equity"][0][0] == tri.index[500].isoformat() and b["value"] > 500_000.0
     assert b["nifty_hold"] == pytest.approx(500_000.0 * tri["NIFTY 50"].iloc[-1] / tri["NIFTY 50"].iloc[500])
     assert pb.alloc_book(book, tri, start=date(2030, 1, 1))["state"] == "not started"

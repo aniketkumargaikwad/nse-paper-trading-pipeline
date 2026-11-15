@@ -60,7 +60,11 @@ LEVELS = Path("data/rotation/nse_menu_tri.parquet")
 DIR = Path("research/journal/alloc")
 PROMOTED = Path("research/paper/promoted.json")
 LEDGER, EXAMS = "ledger.jsonl", "exams.jsonl"
-TRAIN_FROM = date(2006, 4, 3)       # a year after NSE's factor indexes begin, so every lookback exists
+# The first day on which EVERY setting the format allows can be computed: NSE's factor
+# indexes begin on 1 Apr 2005, the longest look-back is 12 months and the longest average
+# 250 sessions. A week earlier (3 Apr 2006, the first choice) a 12-month look-back was one
+# day short, so a plan sat in cash for its first month and met the May 2006 crash by accident.
+TRAIN_FROM = date(2006, 4, 10)
 HISTORY_FROM = date(2005, 4, 1)     # an index is offered only with levels from here
 EXAM_DAYS = 365
 BUDGET_SECONDS = 4 * 60 * 60
@@ -106,7 +110,8 @@ market_filter:               # optional: the whole account to cash while this in
 volatility_target:           # optional: invest less when the picks swing more than this
   percent: 15                # 8-30, % a year
   sessions: 60               # 20-120: the window the swing is measured over
-decide: monthly              # monthly | weekly (decided at the period's last close, filled the next session)
+decide: monthly              # monthly | weekly. The account always runs as equal parts deciding on
+                             # different days (monthly: four parts a week apart; weekly: one per weekday)
 """
 
 _MM, _M30 = "NIFTY MIDCAP150 MOMENTUM 50", "NIFTY200 MOMENTUM 30"
@@ -166,6 +171,24 @@ def check_proposal(text: str, *, idea: str, day: date, version: int, menu: Seque
     name = research_name(day, idea, version)
     plan = parse(doc, name=name, menu=menu)
     return CheckedPlan({**doc, "name": name}, plan)
+
+
+def same_plan(plan: Plan) -> Plan:
+    """The plan without its name: two proposals are the same plan when these are equal."""
+    return dataclasses.replace(plan, name="")
+
+
+def tested_before(ledger: Sequence[dict], menu: Sequence[str] = MENU) -> dict[Plan, str]:
+    """Every plan already measured - the reference plans and the ledger's - to its title."""
+    seen = {same_plan(p): p.name for p in REFERENCE}
+    for r in ledger:
+        if r.get("valid") and r.get("strategy"):
+            try:
+                seen.setdefault(same_plan(parse({k: v for k, v in r["strategy"].items() if k != "name"},
+                                                name="", menu=menu)), r.get("title") or r["strategy"].get("name", ""))
+            except PlanError:
+                continue
+    return seen
 
 
 def windows(levels: pd.DataFrame) -> tuple[tuple[date, date], tuple[date, date]]:
@@ -382,9 +405,11 @@ def _brief(r: dict) -> dict[str, Any]:
 def closest(rows: Sequence[dict]) -> dict[str, dict | None]:
     """Of the SOUND plans tested so far, the two nearest a pass, one from each side.
 
-    rows: {"title", "avg_month_pct", "worst_fall_pct", "sound"} (sound = near_sound). `within_fall` is the best
-    return among plans inside the fall limit; `at_target` the smallest fall among plans
-    that reach the monthly target. A plan in both is a pass.
+    rows: {"title", "avg_month_pct", "worst_fall_pct", "sound", "failed"} (sound = near_sound).
+    `within_fall` is the best return among plans inside the fall limit; `at_target` the
+    smallest fall among plans that reach the monthly target. One plan in both rows has both
+    of the owner's numbers - and is a pass only if `failed` is empty, since soundness here
+    is looser than the pass rule's luck test.
     """
     sound = [r for r in rows if r.get("sound")]
     within = [r for r in sound if r["worst_fall_pct"] <= MAX_FALL_PCT]
@@ -395,17 +420,19 @@ def closest(rows: Sequence[dict]) -> dict[str, dict | None]:
 
 def board_rows(reference: Sequence[dict], ledger: Sequence[dict], versions: Sequence[Any] = ()) -> list[dict]:
     rows = [{"title": r["plan"], "avg_month_pct": r["avg_month_pct"], "worst_fall_pct": r["worst_fall_pct"],
-             "sound": r["sound"]} for r in reference]
+             "sound": r["sound"], "failed": list(r.get("fails", []))} for r in reference]
     for r in ledger:
         t = r.get("training")
         if r.get("valid") and t:
             rows.append({"title": r["title"], "avg_month_pct": t["plan"]["avg_month_pct"],
                          "worst_fall_pct": t["plan"]["worst_fall_pct"],
-                         "sound": near_sound(t["plan"]) and t.get("checks", {}).get("nearby", True)})
+                         "sound": near_sound(t["plan"]) and t.get("checks", {}).get("nearby", True),
+                         "failed": list(t.get("failed", []))})
     for v in versions:
         if v.valid and v.summary is not None:
             rows.append({"title": v.title, "avg_month_pct": v.summary.reading["avg_month_pct"],
-                         "worst_fall_pct": v.summary.reading["worst_fall_pct"], "sound": v.summary.sound})
+                         "worst_fall_pct": v.summary.reading["worst_fall_pct"], "sound": v.summary.sound,
+                         "failed": [c.detail for c in v.summary.checks if not c.ok]})
     return rows
 
 
@@ -425,17 +452,29 @@ What is established (NSE total-return data, Apr 2006 to a year ago, 2008 include
 - Momentum is the one edge found. Midcap150 Momentum 50 simply held made about 19% a
   year against about 12% for NIFTY 50 - and fell 73% in 2008.
 - Simple protection (cash while NIFTY 50 is below its 200-day average; a volatility
-  target; the index's own trend) cuts the fall to 40-50% and keeps most of the return.
+  target; the index's own trend) cuts the fall to roughly 40-50% and keeps most of the
+  return. The reference plans below give the exact figures.
 - Nothing measured so far has BOTH reached the owner's target AND kept the worst fall
   inside his limit. That gap is the problem to solve.
 
 The owner's target is {TARGET_MONTHLY_MIN:g}-{TARGET_MONTHLY_MAX:g}% a month.
 
 How you are judged. Each plan is replayed on NSE total-return levels from {TRAIN_FROM:%b %Y}
-to a year before the latest session. Decisions are made at a month's or week's last close
-and filled at the next session's close; {COST_PCT:g}% of every rupee switched is charged, {FUND_FEE_PCT:g}%
+to a year before the latest session. A decision is made at a session's close and filled
+at the next session's close; {COST_PCT:g}% of every rupee switched is charged, {FUND_FEE_PCT:g}%
 a year on invested money (the fund's fee and tracking shortfall), and cash earns
-{100 * CASH_YIELD:g}% a year. A plan PASSES only if ALL hold:
+{100 * CASH_YIELD:g}% a year.
+
+No lucky decision day. Every plan is run as equal parts that decide on different days -
+a monthly plan as four parts a week apart, a weekly plan as five parts, one per weekday.
+The first plan that ever passed here did so only when decided on the month's last
+session: its worst fall was 35% there and up to 49% on other days of the month. So you
+cannot gain anything from WHEN in the month a rule acts, and a rule that flips the whole
+account at once (an on/off cash rule) is blurred into four steps. Rules that move
+exposure gradually - a volatility target, several indexes each with its own filter -
+lose least from this.
+
+A plan PASSES only if ALL hold:
 - average month at least {MIN_MONTH_PCT:g}%
 - worst fall from a high no more than {MAX_FALL_PCT:.0f}% (2008 is in the test)
 - beat NIFTY 50 in at least {MIN_YEARS_BEATING_PCT:.0f}% of calendar years
@@ -660,17 +699,30 @@ STOPPED = {"stop": "the AI chose to stop", "version_limit": "all versions used",
 
 
 def run_day(*, brain: Any, lab: Lab, day: date, max_versions: int, budget_seconds: float,
-            notes_: Sequence[dict] = (), ideas: Sequence[str] = (), echo: Callable[..., None] = print):
-    from functools import partial
-
+            notes_: Sequence[dict] = (), ideas: Sequence[str] = (), seen: dict[Plan, str] | None = None,
+            echo: Callable[..., None] = print):
     from research.loop import run_versions
+
+    seen = dict(seen) if seen is not None else {same_plan(p): p.name for p in REFERENCE}
+
+    def check(text: str, *, idea: str, day: date, version: int) -> CheckedPlan:
+        checked = check_proposal(text, idea=idea, day=day, version=version, menu=lab.menu)
+        # On 15 Nov 2026 the AI wanted a rule the format cannot express and sent the previous
+        # plan again, unchanged: a version spent on a result already known.
+        before = seen.get(same_plan(checked.plan))
+        if before is not None:
+            raise PlanError(f"this exact plan was already tested ('{before}'). Change a setting, or propose "
+                            "a different plan. If the rule you want cannot be written in the format, use the "
+                            "nearest thing the format CAN express and say so in the description.")
+        return checked
 
     def test(checked: CheckedPlan, version_no: int) -> AllocSummary:
         summary = lab.test(checked, version_no)
+        seen[same_plan(checked.plan)] = checked.document["name"]
         echo(f"    {checked.document['name']}: {one_line(summary)}", flush=True)
         return summary
 
-    outcome = run_versions(brain=brain, check=partial(check_proposal, menu=lab.menu), test=test, day=day,
+    outcome = run_versions(brain=brain, check=check, test=test, day=day,
                            notes=notes_, ideas_tried=ideas, max_versions=max_versions,
                            budget_seconds=budget_seconds)
     tested = [(v, v.summary) for v in outcome.versions if v.valid]
@@ -723,23 +775,34 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, board: di
                              ("worst fall", f"{s['worst_fall_pct']:.1f}%"),
                              ("result", "OK" if exam["ok"] else "FAILED")),
                             promoted if exam["ok"] else f"{exam['why_not']}."))
-    near = []
-    if board.get("within_fall"):
-        b = board["within_fall"]
-        near.append((f"fall <= {MAX_FALL_PCT:.0f}%", f"{b['avg_month_pct']:.2f}%/mo, fall {b['worst_fall_pct']:.0f}%"))
-    if board.get("at_target"):
-        b = board["at_target"]
-        near.append((f">= {MIN_MONTH_PCT:g}%/mo", f"{b['avg_month_pct']:.2f}%/mo, fall {b['worst_fall_pct']:.0f}%"))
-    if near:
-        names = [f"Inside the fall limit, the best return is '{board['within_fall']['title']}'."
-                 if board.get("within_fall") else "",
-                 f"At the monthly target, the smallest fall is '{board['at_target']['title']}'."
-                 if board.get("at_target") else ""]
-        blocks.append(Block("Closest so far (every day's plans)", tuple(near),
-                            " ".join(n for n in names if n) + " A pass needs one plan in both rows."))
+    blocks += closest_blocks(board)
     blocks.append(Block("How the day ended", (("stopped", STOPPED.get(outcome.stopped_because, outcome.stopped_because)),),
                         outcome.stop_detail[:200] if outcome.stop_detail else ""))
     return f"Index allocation research {day.isoformat()}: {verdict.split(':')[0].split('.')[0]}"[:120], blocks
+
+
+def closest_blocks(board: dict) -> list:
+    """The "closest so far" block: how far a pass is, in the owner's two numbers."""
+    from research.blocks import Block
+    inside, reaching = board.get("within_fall"), board.get("at_target")
+    figures = lambda b: f"{b['avg_month_pct']:.2f}%/mo, fall {b['worst_fall_pct']:.0f}%"      # noqa: E731
+    if inside and reaching and inside["title"] == reaching["title"]:
+        failed = inside.get("failed") or []
+        note = (f"'{inside['title']}' has BOTH of your numbers: {MIN_MONTH_PCT:g}% a month and a worst fall "
+                f"inside {MAX_FALL_PCT:.0f}%. "
+                + (f"It is not a pass yet because: {'; '.join(failed)}." if failed else "It passed."))
+        return [Block("Closest so far (every day's plans)", (("both numbers", figures(inside)),), note)]
+    rows, names = [], []
+    if inside:
+        rows.append((f"fall <= {MAX_FALL_PCT:.0f}%", figures(inside)))
+        names.append(f"Inside the fall limit, the best return is '{inside['title']}'.")
+    if reaching:
+        rows.append((f">= {MIN_MONTH_PCT:g}%/mo", figures(reaching)))
+        names.append(f"At the monthly target, the smallest fall is '{reaching['title']}'.")
+    if not rows:
+        return []
+    return [Block("Closest so far (every day's plans)", tuple(rows),
+                  " ".join(names) + " A pass needs one plan with both.")]
 
 
 def _commit(day: date) -> None:
@@ -797,7 +860,8 @@ def main(argv: list[str] | None = None) -> int:
     brain: Any = DryBrain() if args.dry_run else AllocBrain(
         Claude(), reference=reference, menu=lab.menu_table(), board=closest(board_rows(reference, ledger)))
     outcome, final, exam = run_day(brain=brain, lab=lab, day=day, max_versions=args.max_versions or MAX_VERSIONS,
-                                   budget_seconds=args.budget_seconds, notes_=notes(), ideas=ideas_tried())
+                                   budget_seconds=args.budget_seconds, notes_=notes(), ideas=ideas_tried(),
+                                   seen=None if args.dry_run else tested_before(ledger, lab.menu))
     promoted = ""
     if exam is not None and exam["ok"] and not args.no_save and not args.dry_run:
         _, promoted = promote(day, final[0], exam)

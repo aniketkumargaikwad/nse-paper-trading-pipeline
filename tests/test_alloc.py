@@ -95,7 +95,9 @@ def test_holding_one_index_is_the_index_less_the_fee_and_the_first_purchase():
     f = levels()
     start, end = day_at(f, 300), day_at(f, 899)
     r = alloc.run(f, Plan("p", (UP,), 1, rank_by="none"), start=start, end=end, capital=100_000.0)
-    assert [s.filled for s in r.switches] == [start]              # in position from the first close, never traded again
+    # Every part is in position from the first close and never trades again.
+    assert [(s.filled, s.part) for s in r.switches] == [(start, 0), (start, 1), (start, 2), (start, 3)]
+    assert r.holdings == pytest.approx({UP: 1.0}) and r.parts == 4
     years = (end - start).days / 365.25
     expect = 100_000 * (1 - alloc.COST_PCT / 100) * f[UP][end] / f[UP][start] * (1 - alloc.FUND_FEE_PCT / 100) ** years
     assert r.equity.iloc[-1] == pytest.approx(expect, rel=1e-9)
@@ -114,7 +116,7 @@ def test_cash_earns_the_cash_yield():
 def test_a_switch_is_decided_at_a_month_end_and_filled_the_next_session():
     f = levels()
     plan = Plan("p", (DOWN,), 1, rank_by="none", own_average=100)
-    r = alloc.run(f, plan, start=day_at(f, 200), end=day_at(f, 600))
+    r = alloc.run(f, plan, start=day_at(f, 200), end=day_at(f, 600), parts=(0,))
     out = next(s for s in r.switches if not s.weights)            # the move to cash once DOWN breaks its average
     sessions = list(f.index)
     assert sessions[sessions.index(out.decided) + 1] == out.filled
@@ -126,7 +128,36 @@ def test_weekly_decisions_do_not_trade_small_drift():
     f = levels()
     plan = Plan("p", (UP, BENCHMARK), 2, rank_by="none", decide="weekly")
     r = alloc.run(f, plan, start=day_at(f, 300), end=day_at(f, 899))
-    assert len(r.switches) == 1                                   # bought once; the weights only drift
+    assert len(r.switches) == 5 and {s.filled for s in r.switches} == {day_at(f, 300)}   # each part bought once
+
+
+def test_the_account_is_split_into_parts_that_decide_on_different_days():
+    """No lucky decision day: a monthly plan is four parts a week apart, and the whole is their sum."""
+    f = levels()
+    plan = Plan("p", (DOWN,), 1, rank_by="none", own_average=100)
+    start, end = day_at(f, 200), day_at(f, 600)
+    whole = alloc.run(f, plan, start=start, end=end, capital=400_000.0)
+    exits = sorted((s.part, s.decided) for s in whole.switches if not s.weights)
+    assert [p for p, _ in exits] == [0, 1, 2, 3]
+    sessions = list(f.index)
+    first = sessions.index(exits[0][1])
+    assert {sessions.index(d) - first for _, d in exits} <= {0, 5, 10, 15, -5, -10, -15, 5 - 21, 10 - 21, 15 - 21,
+                                                           5 - 22, 10 - 22, 15 - 22, 5 - 20, 10 - 20, 15 - 20,
+                                                           5 - 23, 10 - 23, 15 - 23}
+    assert len({d for _, d in exits}) == 4                         # four different days
+    singles = [alloc.run(f, plan, start=start, end=end, capital=100_000.0, parts=(k,)) for k in alloc.PARTS["monthly"]]
+    assert whole.equity.iloc[-1] == pytest.approx(sum(r.equity.iloc[-1] for r in singles), rel=1e-12)
+    worst = lambda r: float((1 - r.equity / r.equity.cummax()).max())      # noqa: E731
+    assert min(map(worst, singles)) <= worst(whole) <= max(map(worst, singles))
+    assert alloc.PARTS["weekly"] == (0, 1, 2, 3, 4)
+
+
+def test_holdings_say_what_the_whole_account_holds_now():
+    f = levels()
+    plan = Plan("p", (DOWN, UP), 2, rank_by="none", own_average=100)
+    r = alloc.run(f, plan, start=day_at(f, 600), end=day_at(f, 899))
+    assert set(r.holdings) == {UP} and r.holdings[UP] == pytest.approx(float(r.exposure.iloc[-1]))
+    assert 0.45 < r.holdings[UP] < 0.6                            # DOWN's half waits in cash
 
 
 def test_holding_the_benchmark_has_no_edge_only_the_fee():

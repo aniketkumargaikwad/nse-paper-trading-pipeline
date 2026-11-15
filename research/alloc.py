@@ -17,6 +17,15 @@ half in cash - exposure falls by itself when trends break.
 Point in time throughout: a decision reads only levels up to that session's
 close and is filled at the NEXT session's close.
 
+NO LUCKY DECISION DAY. The account is always run as equal PARTS that decide on
+different days: four parts a week apart for a monthly plan, five parts on the
+five weekdays for a weekly one (`PARTS`). On 15 Nov 2026 the first plan to pass
+did so only when decided on the month's last session - 34.6% worst fall there,
+35% to 49% on seven other days of the month, 1.41% to 1.63% a month. A result
+that depends on the day of the month is luck, and one account cannot pick its
+day in hindsight. Split into parts, the plan is the same on any calendar, and
+the paper book trades exactly what was tested.
+
 What is charged: `COST_PCT` of every rupee switched, and `FUND_FEE_PCT` a year
 on invested money (an index has no costs; the fund tracking it has a fee and
 falls a little short). Tax is NOT modelled.
@@ -46,6 +55,8 @@ YEAR_SESSIONS = 252
 # A decision that keeps the same indexes and moves exposure by less than this is not
 # traded: nobody re-balances a few hundred rupees of drift every week.
 MIN_EXPOSURE_MOVE = 0.10
+# How many sessions after the period's last session each part of the account decides.
+PARTS: dict[str, tuple[int, ...]] = {"monthly": (0, 5, 10, 15), "weekly": (0, 1, 2, 3, 4)}
 
 # The indexes a plan may use: every one has NSE total-return levels from April 2005
 # (niftyindices.com, scripts/nse_index_history.fetch_whole). Sector indexes are
@@ -95,9 +106,10 @@ class Plan:
 class Switch:
     decided: date
     filled: date
-    weights: tuple[tuple[str, float], ...]   # index -> share of the account; the rest is cash
+    weights: tuple[tuple[str, float], ...]   # index -> share of THIS PART; the rest of it is cash
     traded: float
     cost: float
+    part: int = 0                            # which part of the account switched (0 = decides first)
 
 
 @dataclass
@@ -107,7 +119,8 @@ class Result:
     equity: pd.Series
     exposure: pd.Series                      # share of the account invested, per session
     switches: list[Switch] = field(default_factory=list)
-    target_now: dict[str, float] = field(default_factory=dict)   # what the latest decision asked for
+    holdings: dict[str, float] = field(default_factory=dict)     # index -> share of the whole account, at the end
+    parts: int = 1                           # how many parts the account was run as
 
 
 def week_ends(sessions: Sequence[date]) -> list[date]:
@@ -122,49 +135,73 @@ def week_ends(sessions: Sequence[date]) -> list[date]:
     return sorted(v for k, v in last.items() if k != tuple(final.isocalendar()[:2]))
 
 
-def _upto(s: pd.Series, day: date) -> pd.Series:
-    """`s` up to and including `day` (the index is sorted dates)."""
-    return s.iloc[: int(np.searchsorted(s.index.values, day, side="right"))]
+# A decision reads a handful of levels out of twenty years, a thousand times a run, and a
+# research day makes hundreds of runs. Sliced as pandas objects that took 12 seconds for
+# one weekly plan; as plain arrays - (session ordinals, levels) per index - it is under 2.
+Arrays = Mapping[str, tuple[np.ndarray, np.ndarray]]
 
 
-def _volatility(s: pd.Series, sessions: int) -> float:
-    r = s.iloc[-(sessions + 1):].pct_change().dropna()
-    return float(r.std() * YEAR_SESSIONS ** 0.5 * 100) if len(r) > 2 else float("nan")
+def arrays(series: Mapping[str, pd.Series]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Each index as (the sessions as day numbers, the levels), both sorted by session."""
+    return {k: (np.fromiter((d.toordinal() for d in v.index), dtype=np.int64, count=len(v)),
+                v.to_numpy(dtype=float)) for k, v in series.items()}
+
+
+def _upto(days: np.ndarray, day: date) -> int:
+    """How many sessions are on or before `day`."""
+    return int(np.searchsorted(days, day.toordinal(), side="right"))
+
+
+def _swing(levels: np.ndarray) -> float:
+    """Annualised volatility, in %, of the daily returns between these levels."""
+    if len(levels) < 4:                       # fewer than three returns
+        return float("nan")
+    r = levels[1:] / levels[:-1] - 1
+    return float(np.std(r, ddof=1) * YEAR_SESSIONS ** 0.5 * 100)
 
 
 def target(series: Mapping[str, pd.Series], day: date, plan: Plan, *, cash_yield: float = CASH_YIELD) -> dict[str, float]:
     """The share of the account each index should hold, as known at `day`'s close. Empty = all cash."""
+    return _target(arrays(series), day, plan, cash_yield)
+
+
+def _target(data: Arrays, day: date, plan: Plan, cash_yield: float) -> dict[str, float]:
+    today = day.toordinal()
     if plan.market_index and plan.market_average:
-        m = _upto(series[plan.market_index], day)
-        if len(m) < plan.market_average or m.iloc[-1] < m.iloc[-plan.market_average:].mean():
+        days, levels = data[plan.market_index]
+        n = _upto(days, day)
+        if n < plan.market_average or levels[n - 1] < levels[n - plan.market_average:n].mean():
             return {}
     longest = max(plan.lookbacks)
     scores: dict[str, float] = {}
     vols: dict[str, float] = {}
+    upto: dict[str, int] = {}
     for order, name in enumerate(plan.universe):
-        s = _upto(series[name], day)
-        if s.empty or s.index[-1] != day or s.index[0] > _months_back(day, longest):
+        days, levels = data[name]
+        n = _upto(days, day)
+        if n == 0 or days[n - 1] != today or days[0] > _months_back(day, longest).toordinal():
             continue                         # no level today, or not a full lookback of history
-        if plan.own_average and (len(s) < plan.own_average or s.iloc[-1] < s.iloc[-plan.own_average:].mean()):
+        if plan.own_average and (n < plan.own_average or levels[n - 1] < levels[n - plan.own_average:n].mean()):
             continue
         if plan.positive_months:
             since = _months_back(day, plan.positive_months)
-            if s.index[0] > since:
+            if days[0] > since.toordinal():
                 continue
             hurdle = (1 + cash_yield) ** (plan.positive_months / 12) - 1
-            if s.iloc[-1] / _upto(s, since).iloc[-1] - 1 <= hurdle:
+            if levels[n - 1] / levels[_upto(days, since) - 1] - 1 <= hurdle:
                 continue
-        vol = _volatility(s, longest * 21)
+        vol = _swing(levels[max(0, n - (longest * 21 + 1)):n])
         if plan.rank_by == "none":
             score = -float(order)
         else:
-            end = _upto(s, _months_back(day, plan.skip_months)).iloc[-1] if plan.skip_months else s.iloc[-1]
-            score = statistics.mean(end / _upto(s, _months_back(day, lb)).iloc[-1] - 1 for lb in plan.lookbacks)
+            end = levels[_upto(days, _months_back(day, plan.skip_months)) - 1] if plan.skip_months else levels[n - 1]
+            score = statistics.mean(float(end / levels[_upto(days, _months_back(day, lb)) - 1] - 1)
+                                    for lb in plan.lookbacks)
             if plan.rank_by == "return_over_volatility":
                 if not vol > 0:
                     continue
                 score /= vol
-        scores[name], vols[name] = score, vol
+        scores[name], vols[name], upto[name] = score, vol, n
     picked = sorted(scores, key=lambda k: (-scores[k], plan.universe.index(k)))[: plan.hold]
     if not picked:
         return {}
@@ -175,25 +212,77 @@ def target(series: Mapping[str, pd.Series], day: date, plan: Plan, *, cash_yield
     else:
         weights = {k: 1 / plan.hold for k in picked}
     if plan.target_volatility:
-        frame = pd.DataFrame({k: _upto(series[k], day).iloc[-(plan.volatility_sessions + 1):] for k in picked})
         total = sum(weights.values())
-        basket = (frame.pct_change().dropna() * pd.Series({k: w / total for k, w in weights.items()})).sum(axis=1)
-        swing = float(basket.std() * YEAR_SESSIONS ** 0.5 * 100) if len(basket) > 2 else float("nan")
+        swing = _basket_swing(data, picked, upto, {k: w / total for k, w in weights.items()},
+                              plan.volatility_sessions)
         if swing > 0:
             scale = min(1.0, plan.target_volatility / (swing * total))
             weights = {k: w * scale for k, w in weights.items()}
     return weights
 
 
+def _basket_swing(data: Arrays, picked: Sequence[str], upto: Mapping[str, int], share: Mapping[str, float],
+                  sessions: int) -> float:
+    """Annualised volatility, in %, of the picks held in these shares over their last `sessions` returns."""
+    tails = {k: (data[k][0][max(0, upto[k] - (sessions + 1)):upto[k]],
+                 data[k][1][max(0, upto[k] - (sessions + 1)):upto[k]]) for k in picked}
+    first = tails[picked[0]][0]
+    if all(len(d) == len(first) and (d == first).all() for d, _ in tails.values()):
+        if len(first) < 4:
+            return float("nan")
+        basket = sum(share[k] * (v[1:] / v[:-1] - 1) for k, (_, v) in tails.items())
+        return float(np.std(basket, ddof=1) * YEAR_SESSIONS ** 0.5 * 100)
+    # The picks do not share every session (one index missing a day): line them up by date.
+    frame = pd.DataFrame({k: pd.Series(v, index=d) for k, (d, v) in tails.items()})
+    basket = (frame.pct_change().dropna() * pd.Series(dict(share))).sum(axis=1)
+    return float(basket.std() * YEAR_SESSIONS ** 0.5 * 100) if len(basket) > 2 else float("nan")
+
+
 def run(levels: pd.DataFrame, plan: Plan, *, start: date, end: date, cost_pct: float = COST_PCT,
-        fee_pct: float = FUND_FEE_PCT, cash_yield: float = CASH_YIELD, capital: float = CAPITAL) -> Result:
-    """Replay `plan` over the benchmark's sessions in [start, end]. `levels`: one column per index."""
+        fee_pct: float = FUND_FEE_PCT, cash_yield: float = CASH_YIELD, capital: float = CAPITAL,
+        parts: Sequence[int] | None = None) -> Result:
+    """Replay `plan` over the benchmark's sessions in [start, end]. `levels`: one column per index.
+
+    The account is split equally into parts that decide on different days (`PARTS`; see the
+    module docstring). `parts` overrides the offsets - (0,) is one account deciding on the
+    period's last session, which is how a single lucky day is measured, not how a plan is judged.
+    """
     levels = levels.sort_index()
     needed = sorted({*plan.universe, BENCHMARK, *([plan.market_index] if plan.market_index else [])})
     series = {k: levels[k].dropna() for k in needed}
-    sessions = [d for d in series[BENCHMARK].index if start <= d <= end]
+    data = arrays(series)
+    every = list(series[BENCHMARK].index)
+    sessions = [d for d in every if start <= d <= end]
+    before = [d for d in every if d < start][-1:]
     px = levels[needed].ffill()
-    decisions = set(week_ends(sessions) if plan.decide == "weekly" else month_ends(sessions))
+    column = {k: i for i, k in enumerate(px.columns)}
+    grid = px.loc[sessions].to_numpy(dtype=float)
+    offsets = tuple(parts) if parts is not None else PARTS[plan.decide]
+    ends = week_ends(sessions) if plan.decide == "weekly" else month_ends(sessions)
+    place = {d: i for i, d in enumerate(sessions)}
+    runs = []
+    for number, offset in enumerate(offsets):
+        days = {sessions[place[d] + offset] for d in ends if place[d] + offset < len(sessions)}
+        runs.append(_part(data, grid, column, sessions, days, plan, before=before, cost_pct=cost_pct,
+                          fee_pct=fee_pct, cash_yield=cash_yield, capital=capital / len(offsets), number=number))
+    equity = sum(r[0] for r in runs)
+    invested = sum(r[0] * r[1] for r in runs)
+    switches = sorted((s for r in runs for s in r[2]), key=lambda s: (s.filled, s.part))
+    total = float(equity.iloc[-1]) if len(equity) else 0.0
+    holdings: dict[str, float] = {}
+    for r in runs:
+        for k, v in r[3].items():
+            holdings[k] = holdings.get(k, 0.0) + (v / total if total else 0.0)
+    return Result(plan, capital, equity, invested / equity, switches, holdings, len(offsets))
+
+
+def _part(data: Arrays, grid: np.ndarray, column: Mapping[str, int], sessions: Sequence[date],
+          decisions: set[date], plan: Plan, *, before: Sequence[date], cost_pct: float, fee_pct: float,
+          cash_yield: float, capital: float,
+          number: int) -> tuple[pd.Series, pd.Series, list[Switch], dict[str, float]]:
+    """One part of the account: (equity, exposure, switches, rupees held per index at the end).
+
+    `grid` is the forward-filled levels, one row per session, `column` each index's column."""
     rate = cost_pct / 100
     cash, held = capital, {}
     pending: tuple[date, dict[str, float]] | None = None
@@ -202,15 +291,14 @@ def run(levels: pd.DataFrame, plan: Plan, *, start: date, end: date, cost_pct: f
     # Start in the position the plan would already hold: decided on the session before
     # `start`, filled at the first session's close. Without it every run began with up to
     # a month in cash, which mattered in a one-year exam and in a new paper book.
-    before = [d for d in series[BENCHMARK].index if d < start]
     if before and sessions:
-        wanted = target(series, before[-1], plan, cash_yield=cash_yield)
+        wanted = _target(data, before[-1], plan, cash_yield)
         pending = (before[-1], wanted)
-    for day in sessions:
+    for row, day in enumerate(sessions):
         if prev is not None:
             span = (day - prev).days / 365.25
             keep = (1 - fee_pct / 100) ** span
-            held = {k: v * px.at[day, k] / px.at[prev, k] * keep for k, v in held.items()}
+            held = {k: v * grid[row, column[k]] / grid[row - 1, column[k]] * keep for k, v in held.items()}
             cash *= (1 + cash_yield) ** span
         total = cash + sum(held.values())
         if pending is not None:
@@ -223,15 +311,15 @@ def run(levels: pd.DataFrame, plan: Plan, *, start: date, end: date, cost_pct: f
                 total -= cost
                 held = {k: total * w for k, w in weights.items()}
                 cash = total - sum(held.values())
-                switches.append(Switch(decided, day, tuple(sorted(weights.items())), traded, cost))
+                switches.append(Switch(decided, day, tuple(sorted(weights.items())), traded, cost, number))
             pending = None
         equity[day] = total
         exposure[day] = sum(held.values()) / total if total else 0.0
         if day in decisions:
-            wanted = target(series, day, plan, cash_yield=cash_yield)
+            wanted = _target(data, day, plan, cash_yield)
             pending = (day, wanted)
         prev = day
-    return Result(plan, capital, pd.Series(equity, dtype=float), pd.Series(exposure, dtype=float), switches, wanted)
+    return pd.Series(equity, dtype=float), pd.Series(exposure, dtype=float), switches, held
 
 
 def _alpha(m: pd.Series, b: pd.Series, rf: float) -> tuple[float, float | None, float]:
@@ -287,7 +375,7 @@ def stats(result: Result, benchmark: pd.Series, *, cash_yield: float = CASH_YIEL
         "beta": round(beta, 2),
         "alpha_first_half_pct": round(first, 2), "alpha_second_half_pct": round(second, 2),
         "invested_pct": round(100 * float(result.exposure.mean()), 0),
-        "switches_per_year": round(len(result.switches) / years, 1),
+        "switches_per_year": round(len(result.switches) / years / max(result.parts, 1), 1),   # per part
         "costs": round(sum(s.cost for s in result.switches), 0),
         "yearly": {int(y): round(100 * v, 1) for y, v in yearly.items()},
         "bench_yearly": {int(y): round(100 * v, 1) for y, v in byearly.items()},

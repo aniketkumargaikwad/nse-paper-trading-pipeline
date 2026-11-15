@@ -22,7 +22,7 @@ DAY = date(2026, 11, 17)
 MM, M30 = "NIFTY MIDCAP150 MOMENTUM 50", "NIFTY200 MOMENTUM 30"
 
 
-def levels(days=2300, seed=11):
+def levels(days=1400, seed=11):
     """Three menu indexes from Jan 2005: enough for the training window and a year of exam."""
     rng = np.random.default_rng(seed)
     idx = pd.bdate_range("2005-01-03", periods=days).date
@@ -121,6 +121,51 @@ def test_closest_shows_the_gap_from_both_sides():
     assert ad.closest([]) == {"within_fall": None, "at_target": None}
 
 
+def test_the_closest_block_says_what_a_plan_with_both_numbers_still_fails():
+    """15 Nov 2026: one plan sat in both rows, the note said "a pass needs one plan in both rows"."""
+    both = {"title": "Near miss", "avg_month_pct": 1.5, "worst_fall_pct": 33.3, "sound": True,
+            "failed": ["its edge could be luck: t = 2.56 (needs 2.6)"]}
+    [block] = ad.closest_blocks(ad.closest([both]))
+    assert block.rows == (("both numbers", "1.50%/mo, fall 33%"),)
+    assert "BOTH of your numbers" in block.note and "not a pass yet because: its edge could be luck" in block.note
+    apart = ad.closest([{**both, "avg_month_pct": 1.3, "title": "Safe"},
+                        {**both, "worst_fall_pct": 40.0, "title": "Rich"}])
+    [block] = ad.closest_blocks(apart)
+    assert [r[0] for r in block.rows] == ["fall <= 35%", ">= 1.5%/mo"] and "A pass needs one plan with both" in block.note
+    assert ad.closest_blocks(ad.closest([])) == []
+
+
+def test_a_plan_already_tested_is_refused_instead_of_costing_a_version():
+    lab = ad.Lab(levels())
+
+    class Repeats:
+        """Sends the dry-run plan every time, as the AI did on 15 Nov 2026."""
+        def __init__(self):
+            self.errors = []
+
+        def propose(self, *, error=None, **_):
+            self.errors.append(error)
+            return {**ad.DryBrain().propose(), "title": f"Try {len(self.errors)}"}
+
+        def review(self, **_):
+            return {"why_failed": "", "why_worked": "", "decision": "next_version", "lessons": "L"}
+
+    brain = Repeats()
+    outcome, _, _ = ad.run_day(brain=brain, lab=lab, day=DAY, max_versions=2, budget_seconds=600,
+                               echo=lambda *a, **k: None)
+    assert [v.valid for v in outcome.versions] == [True, False]          # tested once; the repeat never ran
+    assert "already tested" in outcome.versions[1].error
+    assert any(e and "already tested" in e for e in brain.errors)       # and the AI was told why
+
+    # ...across days too: the ledger's plans and the reference plans count as tested.
+    row = ad.version_rows(DAY, [outcome.versions[0]])[0]
+    seen = ad.tested_before([row], lab.menu)
+    assert ad.same_plan(outcome.versions[0].checked.plan) in seen and len(seen) == len(ad.REFERENCE) + 1
+    outcome, _, _ = ad.run_day(brain=Repeats(), lab=lab, day=DAY, max_versions=1, budget_seconds=600, seen=seen,
+                               echo=lambda *a, **k: None)
+    assert [v.valid for v in outcome.versions] == [False]
+
+
 def test_the_lab_measures_the_reference_plans_it_has_data_for():
     lab = ad.Lab(levels())
     assert lab.menu == (BENCHMARK, M30, MM) or set(lab.menu) == {BENCHMARK, MM, M30}
@@ -128,6 +173,19 @@ def test_the_lab_measures_the_reference_plans_it_has_data_for():
     names = [r["plan"] for r in lab.reference()]
     assert "Hold NIFTY 50" in names and not any("factor indexes" in n for n in names)   # those need 8 indexes
     assert {m["index"] for m in lab.menu_table()} == set(lab.menu)
+
+
+def test_every_allowed_setting_can_be_computed_on_the_first_training_day():
+    """A plan must be in position from day one, not waiting a month for one more day of history."""
+    from research.alloc import _months_back
+    first_level = ad.HISTORY_FROM
+    assert _months_back(ad.TRAIN_FROM, 12) >= first_level          # the longest look-back
+    sessions = pd.bdate_range(first_level, ad.TRAIN_FROM)           # more sessions than NSE really had
+    assert len(sessions) - 12 >= 250                                # the longest average, holidays allowed for
+    lab = ad.Lab(levels())
+    from research.alloc import run
+    r = run(lab.levels, Plan("p", (MM,), 1, rank_by="none"), start=lab.train[0], end=lab.train[1])
+    assert r.exposure.iloc[0] == pytest.approx(1.0)
 
 
 def test_an_index_that_starts_late_is_not_offered():
