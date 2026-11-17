@@ -4,11 +4,11 @@
  "title": "Leader buy-and-hold (stock research, 20 Sep)",
  "training": "4.4% a month in training as a 10-slot account, 2009-2025 - on today's stock list, so flattered by hindsight; rejected then for trading 1.4 times a month",
  "start": "2026-10-21",
- "as_of": "2026-11-13",
- "complete_through": "2026-11-13",
+ "as_of": "2026-11-16",
+ "complete_through": "2026-11-16",
  "capital": 1000000.0,
- "value": 1054370.36,
- "nifty_hold": 1102271.51,
+ "value": 1051918.16,
+ "nifty_hold": 1108706.85,
  "state": "running",
  "equity": [
   [
@@ -93,8 +93,13 @@
   ],
   [
    "2026-11-13",
-   1054370.36,
+   1000000.0,
    1102271.51
+  ],
+  [
+   "2026-11-16",
+   1051918.16,
+   1108706.85
   ]
  ],
  "open": [
@@ -103,108 +108,117 @@
    "entered": "2026-10-28",
    "entry_price": 2541.07,
    "quantity": 39,
-   "exit_price": 2453.77,
-   "pnl": -3636.32,
-   "pnl_if_sold_now": -3636.32
+   "exit_price": 2431.68,
+   "pnl": -4496.9,
+   "pnl_if_sold_now": -4496.9
   },
   {
    "stock": "ICICIBANK",
    "entered": "2026-11-02",
    "entry_price": 1398.9,
    "quantity": 71,
-   "exit_price": 1582.81,
-   "pnl": 12808.28,
-   "pnl_if_sold_now": 12808.28
+   "exit_price": 1584.21,
+   "pnl": 12907.53,
+   "pnl_if_sold_now": 12907.53
   },
   {
    "stock": "BHARTIARTL",
    "entered": "2026-11-03",
    "entry_price": 2001.0,
    "quantity": 49,
-   "exit_price": 2104.95,
-   "pnl": 4855.22,
-   "pnl_if_sold_now": 4855.22
+   "exit_price": 2152.42,
+   "pnl": 7179.14,
+   "pnl_if_sold_now": 7179.14
   },
   {
    "stock": "PHOENIXLTD",
    "entered": "2026-11-03",
    "entry_price": 2028.01,
    "quantity": 49,
-   "exit_price": 2253.87,
-   "pnl": 10819.77,
-   "pnl_if_sold_now": 10819.77
+   "exit_price": 2200.9,
+   "pnl": 8226.76,
+   "pnl_if_sold_now": 8226.76
   },
   {
    "stock": "GAIL",
    "entered": "2026-11-04",
    "entry_price": 181.19,
    "quantity": 551,
-   "exit_price": 187.91,
-   "pnl": 3459.49,
-   "pnl_if_sold_now": 3459.49
+   "exit_price": 186.91,
+   "pnl": 2909.34,
+   "pnl_if_sold_now": 2909.34
   },
   {
    "stock": "LGEINDIA",
    "entered": "2026-11-04",
    "entry_price": 1691.15,
    "quantity": 59,
-   "exit_price": 1744.53,
-   "pnl": 2909.53,
-   "pnl_if_sold_now": 2909.53
+   "exit_price": 1722.04,
+   "pnl": 1584.07,
+   "pnl_if_sold_now": 1584.07
   },
   {
    "stock": "GLENMARK",
    "entered": "2026-11-05",
    "entry_price": 2539.27,
    "quantity": 39,
-   "exit_price": 2638.68,
-   "pnl": 3637.92,
-   "pnl_if_sold_now": 3637.92
+   "exit_price": 2631.58,
+   "pnl": 3361.44,
+   "pnl_if_sold_now": 3361.44
   },
   {
    "stock": "ABCAPITAL",
    "entered": "2026-11-06",
    "entry_price": 394.25,
    "quantity": 253,
-   "exit_price": 407.8,
-   "pnl": 3187.66,
-   "pnl_if_sold_now": 3187.66
+   "exit_price": 408.3,
+   "pnl": 3313.97,
+   "pnl_if_sold_now": 3313.97
   },
   {
    "stock": "TITAN",
    "entered": "2026-11-06",
    "entry_price": 4802.3,
    "quantity": 20,
-   "exit_price": 4842.48,
-   "pnl": 574.26,
-   "pnl_if_sold_now": 574.26
+   "exit_price": 4907.54,
+   "pnl": 1874.26,
+   "pnl_if_sold_now": 1874.26
   },
   {
    "stock": "KALYANKJIL",
    "entered": "2026-11-09",
    "entry_price": 595.3,
    "quantity": 167,
-   "exit_price": 696.65,
-   "pnl": 16672.63,
-   "pnl_if_sold_now": 16672.63
+   "exit_price": 707.8,
+   "pnl": 18531.83,
+   "pnl_if_sold_now": 18531.83
   },
   {
-   "stock": "LENSKART",
-   "entered": "2026-11-13",
-   "entry_price": 720.96,
-   "quantity": 138,
-   "exit_price": 726.64,
-   "pnl": 700.83,
-   "pnl_if_sold_now": 700.83
+   "stock": "BAJFINANCE",
+   "entered": "2026-11-16",
+   "entry_price": 1117.56,
+   "quantity": 89,
+   "exit_price": 1109.45,
+   "pnl": -804.15,
+   "pnl_if_sold_now": -804.15
   },
   {
-   "stock": "ULTRACEMCO",
-   "entered": "2026-11-13",
-   "entry_price": 12286.14,
-   "quantity": 8,
-   "exit_price": 12093.95,
-   "pnl": -1618.92,
-   "pnl_if_sold_now": -1618.92
+   "stock": "PRESTIGE",
+   "entered": "2026-11-16",
+   "entry_price": 1663.73,
+   "quantity": 60,
+   "exit_price": 1637.98,
+   "pnl": -1626.99,
+   "pnl_if_sold_now": -1626.99
+  },
+  {
+   "stock": "INDIGO",
+   "entered": "2026-11-16",
+   "entry_price": 5597.8,
+   "quantity": 17,
+   "exit_price": 5541.23,
+   "pnl": -1042.15,
+   "pnl_if_sold_now": -1042.15
   }
  ],
  "closed": []
