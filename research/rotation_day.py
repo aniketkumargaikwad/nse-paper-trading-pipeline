@@ -451,7 +451,7 @@ def run_day(*, brain: Any, lab: Lab, day: date, max_versions: int, budget_second
 
 def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: bool = False) -> tuple[str, list]:
     """(subject, blocks) in the morning message's layout (research.blocks). The verdict comes first."""
-    from research.blocks import Block, lesson
+    from research.blocks import Block, lesson, marked
     if exam is not None:
         s, b = exam["strategy"], exam["baseline"]
         verdict = (f"PASSED training; exam year {s['cagr_pct']:+.1f}% against the paper rule's "
@@ -462,11 +462,12 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: 
     else:
         verdict = "NOTHING PASSED: no version beats the paper-traded momentum rule by more than luck."
     blocks = [Block(f"📊 Stock momentum research — {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
-                    note=f"Verdict: {verdict}")]
+                    note=marked(exam is not None and exam["strategy"]["cagr_pct"] > exam["baseline"]["cagr_pct"],
+                                f"Verdict: {verdict}"))]
     for v in outcome.versions:
         tag = f"v{v.idea_no}.{v.version_no}"
         if not v.valid:
-            blocks.append(Block(f"{tag} - {v.title or '(no title)'}",
+            blocks.append(Block(marked(False, f"{tag} - {v.title or '(no title)'}"),
                                 note=f"REJECTED by the checker: {(v.error or '').splitlines()[0][:200]}"))
             continue
         d = v.summary.as_dict()
@@ -476,7 +477,7 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: 
                 ("worst fall", f"{st['worst_fall_pct']:.1f}%"), ("beat NIFTY", f"{st['years_beating_pct']:.0f}% of years"),
                 ("result", "PASSES" if d["passes"] else "FAILS"))
         note = " ".join([f"Why: {d['why_not']}." if d["why_not"] else "", lesson(v.review.get("lessons"))]).strip()
-        blocks.append(Block(f"{tag} - {v.title}{mark}", rows, note))
+        blocks.append(Block(marked(d["passes"], f"{tag} - {v.title}{mark}"), rows, note))
     if exam is not None:
         s, b = exam["strategy"], exam["baseline"]
         span = f" {s['start']} to {s['end']}" if s.get("start") and s.get("end") else ""
@@ -485,15 +486,52 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: 
             rows.append(("NIFTY 50", f"{s['bench_cagr_pct']:+.1f}%"))
         if s.get("worst_fall_pct") is not None:
             rows.append(("worst fall", f"{s['worst_fall_pct']:.1f}%"))
-        blocks.append(Block(f"Exam year{span}, opened once", tuple(rows)))
+        blocks.append(Block(marked(s["cagr_pct"] > b["cagr_pct"], f"Exam year{span}, opened once"), tuple(rows)))
     blocks.append(Block("How the day ended", (("stopped", STOPPED.get(outcome.stopped_because, outcome.stopped_because)),),
                         outcome.stop_detail[:200] if outcome.stop_detail else ""))
     return f"Stock momentum research {day.isoformat()}: {verdict.split(':')[0].split(';')[0]}"[:120], blocks
 
 
+PROMOTED = Path("research/paper/promoted.json")      # shared with the other research tracks
+MAX_PROMOTED = 6
+
+
+def promote(day: date, version: Any, exam: dict | None, root: Path | None = None) -> tuple[dict | None, str]:
+    """Add a version that passed training to the paper books - every one, whatever its exam
+    year said (owner, 18 Nov 2026). (the new entry or None, what happened in words)."""
+    import json
+    from dataclasses import asdict
+    path = (root or Path(".")) / PROMOTED
+    rows = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    variant = {k: v for k, v in asdict(version.checked.variant).items() if k != "name"}
+    mine = [r for r in rows if r.get("kind") == "rotation"]
+    from research.paper_books import BOOKS
+    by_hand = [{k: v for k, v in asdict(b.variant).items() if k != "name"} for b in BOOKS if b.kind == "rotation"]
+    if variant in by_hand or any({k: v for k, v in r["variant"].items() if k != "name"} == variant for r in mine):
+        return None, "this exact rule is already paper-traded"
+    if len(mine) >= MAX_PROMOTED:
+        return None, f"NOT paper-traded: {MAX_PROMOTED} rotation rules from this research are already running"
+    vs = version.summary.as_dict()
+    st, lead = vs["strategy"], vs["versus_baseline"]
+    start = day + timedelta(days=1)
+    entry = {"kind": "rotation", "key": f"rotation-{day:%Y%m%d}-{version.idea_no}-{version.version_no}",
+             "title": version.title, "day": day.isoformat(), "start": start.isoformat(),
+             "variant": asdict(version.checked.variant),
+             "training": (f"{lead['cagr_lead_pct']:+.2f}% a year over the paper-traded momentum rule on the same "
+                          f"stocks (luck test t = {lead['luck_t']}), worst fall {st['worst_fall_pct']:.0f}%; "
+                          + ("exam year not opened" if exam is None else
+                             f"exam year {exam['strategy']['cagr_pct']:+.1f}% against that rule's "
+                             f"{exam['baseline']['cagr_pct']:+.1f}%")
+                          + " - on today's stock list, so flattered by hindsight")}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((json.dumps([*rows, entry], indent=1, default=str) + "\n").encode("utf-8"))
+    return entry, f"now PAPER-TRADED from {start.isoformat()} (Paper books: {entry['key']})"
+
+
 def _commit(day: date) -> None:
     try:
-        subprocess.run(["git", "add", str(DIR)], check=True, capture_output=True, text=True)
+        paths = [str(DIR)] + ([str(PROMOTED)] if PROMOTED.exists() else [])
+        subprocess.run(["git", "add", *paths], check=True, capture_output=True, text=True)
         done = subprocess.run(["git", "-c", "user.name=research loop", "-c", "user.email=noreply@anthropic.com",
                                "commit", "-m", f"docs(research): rotation notes for {day}"],
                               capture_output=True, text=True)
@@ -536,8 +574,15 @@ def main(argv: list[str] | None = None) -> int:
     brain: Any = DryBrain() if args.dry_run else RotationBrain(Claude(), baseline=base)
     outcome, final, exam = run_day(brain=brain, lab=lab, day=day, max_versions=args.max_versions or MAX_VERSIONS,
                                    budget_seconds=args.budget_seconds, notes_=n, ideas=ideas)
-    from research.blocks import as_text, send
+    from research.blocks import Block, as_text, send
     subject, blocks = message(day, outcome, final, exam, dry_run=args.dry_run)
+    if not args.no_save and not args.dry_run:
+        said = []
+        for v in [v for v in outcome.versions if v.valid and v.summary.passes]:
+            _, words = promote(day, v, exam if final is not None and v is final[0] else None)
+            said.append(f"v{v.idea_no}.{v.version_no} {words}")
+        if said:
+            blocks.insert(1, Block("Paper trading", note="; ".join(said) + "."))
     print("\n" + as_text(blocks))
     if not args.no_save:
         _append(_path(LEDGER, None), version_rows(day, outcome.versions))

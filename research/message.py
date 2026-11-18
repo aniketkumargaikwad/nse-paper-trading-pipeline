@@ -321,7 +321,7 @@ def locked_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
 
     passed, beat = run.get("verdict_passed"), run.get("beat_holding")
     if trades < MIN_LOCKED_TRADES:
-        rows.append(("VERDICT", f"TOO FEW TRADES to judge - {trades} in {span}, "
+        rows.append(("VERDICT", f"🔴 TOO FEW TRADES to judge - {trades} in {span}, "
                                 f"needs {MIN_LOCKED_TRADES}+"))
         return rows
     if passed and beat:
@@ -332,7 +332,7 @@ def locked_rows(run: Mapping[str, Any]) -> list[tuple[str, str]]:
         verdict = "FAILED - made money, but holding made more"
     else:
         verdict = "FAILED - lost money; holding gained instead"
-    rows.append(("VERDICT", verdict))
+    rows.append(("VERDICT", ("🟢 " if passed and beat else "🔴 ") + verdict))
     return rows
 
 

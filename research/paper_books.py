@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -46,6 +46,7 @@ OUT = Path("research/journal/paper")
 WARMUP_SESSIONS = 420        # history fed before START so 250-session indicators exist
 SLOTS, NOTIONAL = 10, 100_000.0
 ROTATION_COST_PCT = 0.2
+FOREVER = datetime(9999, 12, 31, tzinfo=UTC)      # "still open", for the slot replay
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class Book:
     index: str | None = None          # index: the NSE index name
     plan: Any = None                  # alloc: a research.alloc.Plan
     start: date = START               # the day this book began trading forward
+    document: dict | None = None      # options promoted by the research: the rules inline
 
 
 BOOKS = (
@@ -116,6 +118,19 @@ def promoted_books(path: Path | None = None) -> tuple[Book, ...]:
         return ()
     books = []
     for row in json.loads(path.read_text(encoding="utf-8")):
+        if row.get("kind") == "rotation":
+            # Added by the stock momentum research (research/rotation_day.py) when a version passed.
+            books.append(Book(row["key"], "rotation", f"{row['title']} (AI, {row['day']})", 500_000.0,
+                              row["training"], variant=Variant(**row["variant"]),
+                              start=date.fromisoformat(row["start"])))
+            continue
+        if row.get("kind") == "options":
+            # Added by the options research day (fno/ai/day.py) when a version passed and beat
+            # holding in its exam year.
+            books.append(Book(row["key"], "options", f"{row['title']} (options AI, {row['day']})", 500_000.0,
+                              row["training"], underlying=row["underlying"], document=row["document"],
+                              start=date.fromisoformat(row["start"])))
+            continue
         try:
             plan = parse(row["document"], name=row["title"])
         except (PlanError, KeyError):
@@ -171,9 +186,11 @@ def _empty(book: Book, start: date, as_of: date | None, why: str) -> dict[str, A
             "nifty_hold": book.capital, "state": why, "equity": [], "open": [], "closed": []}
 
 
-def _nifty_hold(nifty: pd.Series, start: date, capital: float) -> tuple[float, pd.Series]:
+def _nifty_hold(nifty: pd.Series, start: date, capital: float, until: date | None = None) -> tuple[float, pd.Series]:
     s = nifty.dropna()
     s = s[s.index >= start]
+    if until is not None:
+        s = s[s.index <= until]
     curve = capital * s / s.iloc[0]
     return round(float(curve.iloc[-1]), 2), curve
 
@@ -205,7 +222,13 @@ def stock_book(book: Book, ohlcv: pd.DataFrame, *, start: date | None = None, sl
             if t.entry_fill_ts.astimezone(IST).date() >= start:
                 owner[id(t)] = symbol
                 trades.append(t)
-    taken = replay(trades, slots=SLOTS).taken
+    # A position still open on the last session is stamped as exiting on that session
+    # ("end_of_data"). Handed to the replay as it is, its slot looks free on that very day,
+    # and that day's new entries were taken on top of a full account - on 17 Nov 2026 the
+    # 10-slot book held 13 stocks. For the replay an open position never exits.
+    proxies = [replace(t, exit_fill_ts=FOREVER) if t.exit_reason == "end_of_data" else t for t in trades]
+    back = {id(p): t for p, t in zip(proxies, trades)}
+    taken = [back[id(p)] for p in replay(proxies, slots=SLOTS).taken]
     end = sessions[-1]
     closed = [t for t in taken if t.exit_reason != "end_of_data"]
     still = [t for t in taken if t.exit_reason == "end_of_data"]
@@ -214,9 +237,23 @@ def stock_book(book: Book, ohlcv: pd.DataFrame, *, start: date | None = None, sl
         realised[t.exit_fill_ts.astimezone(IST).date()] += t.net_pnl
     days = [d for d in sessions if d >= start]
     cum = realised.reindex(days).fillna(0.0).cumsum()
-    value = book.capital + float(cum.iloc[-1]) + sum(t.net_pnl for t in still)
+    # Every day, open positions at that day's close. Until 18 Nov 2026 the daily value counted
+    # a trade only once it was sold (open ones on the last day alone), so a book still holding
+    # its stocks showed a worst fall of 0.0% and month ends that ignored what it held.
+    marks = pd.Series(0.0, index=days)
+    close = window.xs("Close", axis=1, level=1).ffill()
+    for t in taken:
+        held_from = t.entry_fill_ts.astimezone(IST).date()
+        sold = None if t.exit_reason == "end_of_data" else t.exit_fill_ts.astimezone(IST).date()
+        sign = -1.0 if str(t.position_type).lower() == "short" else 1.0
+        px = close[f"{owner[id(t)]}.NS"]
+        for d in days:
+            if d >= held_from and (sold is None or d < sold) and d != end:
+                marks[d] += sign * t.quantity * (float(px[d]) - t.entry_price) - t.costs / 2
+    marks[end] = sum(t.net_pnl for t in still)     # the simulator's own figure: exit costs included
+    value = book.capital + float(cum.iloc[-1]) + float(marks[end])
     hold, curve = _nifty_hold(nifty, start, book.capital)
-    equity = [[d.isoformat(), round(book.capital + float(cum[d]) + (sum(t.net_pnl for t in still) if d == end else 0), 2),
+    equity = [[d.isoformat(), round(book.capital + float(cum[d]) + float(marks[d]), 2),
                round(float(curve.get(d, float("nan"))), 2)] for d in days]
     row = lambda t: {"stock": owner[id(t)], "entered": t.entry_fill_ts.astimezone(IST).date().isoformat(),   # noqa: E731
                      "entry_price": round(t.entry_price, 2), "quantity": t.quantity,
@@ -226,7 +263,12 @@ def stock_book(book: Book, ohlcv: pd.DataFrame, *, start: date | None = None, sl
             "value": round(value, 2), "nifty_hold": hold, "equity": equity,
             "open": [{k: v for k, v in row(t).items() if k not in ("exit", "why")} | {"pnl_if_sold_now": row(t)["pnl"]}
                      for t in still],
-            "closed": [row(t) for t in closed][-50:]}
+            "closed": [row(t) for t in closed][-50:],
+            "round_trips": [trip(owner[id(t)], t.entry_fill_ts.astimezone(IST).date(),
+                                 None if t.exit_reason == "end_of_data" else t.exit_fill_ts.astimezone(IST).date(),
+                                 100 * t.net_pnl / (t.entry_price * t.quantity), t.net_pnl,
+                                 bought_at=t.entry_price, last=t.exit_price)
+                            for t in taken]}
 
 
 def rotation_book(book: Book, closes: pd.DataFrame, *, start: date | None = None) -> dict[str, Any]:
@@ -239,6 +281,22 @@ def rotation_book(book: Book, closes: pd.DataFrame, *, start: date | None = None
                           capital=book.capital)
     hold, curve = _nifty_hold(nifty, start, book.capital)
     last = result.rebalances[-1] if result.rebalances else None
+    # A trade here is one stock from the month-end that bought it to the month-end that sold it.
+    prices = closes.sort_index().ffill()
+    trips, held = [], {}                         # stock -> (bought on, price, rupees in it)
+    for r in result.rebalances:
+        px, value = prices.loc[r.filled], float(result.equity[r.filled])
+        for s in [s for s in held if s not in r.holdings]:
+            day, entry, rupees = held.pop(s)
+            pct = 100 * (px[s] / entry - 1) - 2 * ROTATION_COST_PCT
+            trips.append(trip(s.removesuffix(".NS"), day, r.filled, pct, rupees * pct / 100,
+                              bought_at=entry, last=px[s]))
+        for s in r.holdings:
+            held.setdefault(s, (r.filled, float(px[s]), value / len(r.holdings)))
+    now = prices.loc[sessions[-1]]
+    for s, (day, entry, rupees) in held.items():
+        pct = 100 * (now[s] / entry - 1) - ROTATION_COST_PCT
+        trips.append(trip(s.removesuffix(".NS"), day, None, pct, rupees * pct / 100, bought_at=entry, last=now[s]))
     return {**_empty(book, start, sessions[-1], "running"), "complete_through": sessions[-1].isoformat(),
             "value": round(float(result.equity.iloc[-1]), 2), "nifty_hold": hold,
             "equity": [[d.isoformat(), round(v, 2), round(float(curve.get(d, float("nan"))), 2)]
@@ -247,36 +305,53 @@ def rotation_book(book: Book, closes: pd.DataFrame, *, start: date | None = None
             if last else [],
             "closed": [{"decided": r.decided.isoformat(), "filled": r.filled.isoformat(),
                         "holdings": len(r.holdings), "cost": round(r.cost, 2)} for r in result.rebalances][-24:],
+            "round_trips": trips,
             "state": "running" if last else "waiting for the first month-end"}
 
 
 def options_book(book: Book, root: Path, *, start: date | None = None) -> dict[str, Any]:
     start = start or book.start
     from fno import intraday, minute
+    from fno.engine import run as run_positional
     from fno.intraday_market import IntradayMarket
+    from fno.market import MarketData
     from fno.strategy import parse
     import yaml
 
-    ledger = minute.load_ledger(root)
-    fetched = sorted(e for (u, e), status in ledger.items() if u == book.underlying and status == "ok")
-    market = IntradayMarket.load(root, book.underlying)
-    sessions = market.daily.sessions_all
-    through = min(sessions[-1], fetched[-1]) if fetched and sessions else None
+    doc = {**(book.document or rules(book)["document"]), "underlying": book.underlying}
+    strategy = parse(yaml.safe_dump(doc, sort_keys=False))
+    if strategy.mode == "intraday":
+        ledger = minute.load_ledger(root)
+        fetched = sorted(e for (u, e), status in ledger.items() if u == book.underlying and status == "ok")
+        market = IntradayMarket.load(root, book.underlying)
+        daily = market.daily
+        sessions = daily.sessions_all
+        through = min(sessions[-1], fetched[-1]) if fetched and sessions else None
+        runner = intraday.run
+        waiting = f"waiting for option minutes: they arrive after each {book.underlying} expiry"
+    else:
+        # Positional strategies need only NSE's end-of-day option files (fno-daily, every evening).
+        market = daily = MarketData.load(root, book.underlying)
+        sessions = daily.sessions_all
+        through = sessions[-1] if sessions else None
+        runner = run_positional
+        waiting = "not started"
     if through is None or through < start:
-        return _empty(book, start, sessions[-1] if sessions else None,
-                      f"waiting for option minutes: they arrive after each {book.underlying} expiry")
-    doc = {**rules(book)["document"], "underlying": book.underlying}
-    result = intraday.run(parse(yaml.safe_dump(doc, sort_keys=False)), market, start=start, end=through,
-                          capital=book.capital)
-    closes = market.daily.closes()
+        return _empty(book, start, sessions[-1] if sessions else None, waiting)
+    result = runner(strategy, market, start=start, end=through, capital=book.capital)
+    closes = daily.closes()
     nifty = pd.Series(closes)          # holding the index itself, on the same rupees
-    hold, curve = _nifty_hold(nifty, start, book.capital)
+    # Up to the same day as the book: until 18 Nov 2026 the condor's value stopped at its last
+    # complete expiry while holding BANKNIFTY ran to today, so it was compared with a longer period.
+    hold, curve = _nifty_hold(nifty, start, book.capital, until=through)
     eq = result.equity.sort_index()
     return {**_empty(book, start, sessions[-1], "running"), "complete_through": through.isoformat(),
             "value": round(float(eq.iloc[-1]), 2), "nifty_hold": hold, "benchmark": book.underlying,
             "equity": [[d.isoformat(), round(v, 2), round(float(curve.get(d, float("nan"))), 2)] for d, v in eq.items()],
             "closed": [{"day": t.entered.isoformat(), "pnl": round(t.pnl, 2), "why": t.exit_reason}
-                       for t in result.trades][-50:],
+                       for t in result.trades if t.exited is not None][-50:],
+            "round_trips": [trip(f"{book.underlying} ({t.exit_reason})", t.entered, t.exited,
+                                 100 * t.pnl / book.capital, t.pnl) for t in result.trades if t.exited is not None],
             "skipped": {k: sum(1 for s in result.skips if s.kind == k) for k in {s.kind for s in result.skips}}}
 
 
@@ -293,13 +368,27 @@ def index_book(book: Book, tri: pd.DataFrame, *, start: date | None = None) -> d
     hold, curve = _nifty_hold(nifty, start, book.capital)
     held = [r for r in result.rebalances if r.filled <= sessions[-1]]
     invested = bool(held and held[-1].holdings)
+    level, trips, bought = tri[book.index], [], None
+    for r in held:
+        if r.holdings:
+            bought = (r.filled, float(level[r.filled]), float(result.equity[r.filled]))
+        elif bought:
+            pct = 100 * (level[r.filled] / bought[1] - 1) - 2 * ROTATION_COST_PCT
+            trips.append(trip(book.index, bought[0], r.filled, pct, bought[2] * pct / 100,
+                              bought_at=bought[1], last=level[r.filled]))
+            bought = None
+    if bought:
+        pct = 100 * (level[sessions[-1]] / bought[1] - 1) - ROTATION_COST_PCT
+        trips.append(trip(book.index, bought[0], None, pct, bought[2] * pct / 100,
+                          bought_at=bought[1], last=level[sessions[-1]]))
     return {**_empty(book, start, sessions[-1], "running"), "complete_through": sessions[-1].isoformat(),
             "value": round(float(result.equity.iloc[-1]), 2), "nifty_hold": hold,
             "equity": [[d.isoformat(), round(v, 2), round(float(curve.get(d, float("nan"))), 2)]
                        for d, v in result.equity.items()],
             "open": [{"holding": book.index if invested else "cash (6% a year)"}],
             "closed": [{"decided": r.decided.isoformat(), "filled": r.filled.isoformat(),
-                        "action": "buy the index" if r.holdings else "sell to cash"} for r in held]}
+                        "action": "buy the index" if r.holdings else "sell to cash"} for r in held],
+            "round_trips": trips}
 
 
 def alloc_book(book: Book, tri: pd.DataFrame, *, start: date | None = None) -> dict[str, Any]:
@@ -312,6 +401,23 @@ def alloc_book(book: Book, tri: pd.DataFrame, *, start: date | None = None) -> d
         return _empty(book, start, sessions[-1] if sessions else None, "not started")
     result = alloc.run(tri, book.plan, start=start, end=sessions[-1], capital=book.capital)
     hold, curve = _nifty_hold(nifty, start, book.capital)
+    # A trade here is one part of the account holding one index, from the switch that bought
+    # it to the switch that sold it all. A switch that only resizes it is not a new trade.
+    trips, owned = [], {}                        # (part, index) -> (bought on, level, rupees)
+    for sw in result.switches:
+        now = dict(sw.weights)
+        value = float(result.equity[sw.filled]) / max(result.parts, 1)
+        for key in [key for key in owned if key[0] == sw.part and now.get(key[1], 0.0) <= 0.0005]:
+            day, entry, rupees = owned.pop(key)
+            pct = 100 * (tri[key[1]][sw.filled] / entry - 1) - 2 * alloc.COST_PCT
+            trips.append(trip(key[1], day, sw.filled, pct, rupees * pct / 100,
+                              bought_at=entry, last=tri[key[1]][sw.filled]))
+        for k, w in now.items():
+            if w > 0.0005:
+                owned.setdefault((sw.part, k), (sw.filled, float(tri[k][sw.filled]), value * w))
+    for (_, k), (day, entry, rupees) in owned.items():
+        pct = 100 * (tri[k][sessions[-1]] / entry - 1) - alloc.COST_PCT
+        trips.append(trip(k, day, None, pct, rupees * pct / 100, bought_at=entry, last=tri[k][sessions[-1]]))
     share = lambda w: f"{100 * w:.0f}%"                                        # noqa: E731
     now = {k: w for k, w in sorted(result.holdings.items()) if w > 0.0005}
     return {**_empty(book, start, sessions[-1], "running"), "complete_through": sessions[-1].isoformat(),
@@ -325,7 +431,21 @@ def alloc_book(book: Book, tri: pd.DataFrame, *, start: date | None = None) -> d
             "closed": [{"decided": s.decided.isoformat(), "filled": s.filled.isoformat(),
                         "action": f"part {s.part + 1}: "
                                   + (", ".join(f"{k} {share(w)}" for k, w in s.weights) or "all to cash")}
-                       for s in result.switches][-40:]}
+                       for s in result.switches][-40:],
+            "round_trips": trips}
+
+
+def trip(what: str, opened: date, closed: date | None, return_pct: float, pnl: float, *,
+         bought_at: float | None = None, last: float | None = None) -> dict[str, Any]:
+    """One trade, the same shape for every kind of book (research.paper_weekly reads it).
+
+    `closed` is None while it is still held: then return and pnl are as if sold today, and
+    `last` is today's price. Prices are the book's own: adjusted stock prices, index levels."""
+    row = {"what": what, "opened": opened.isoformat(), "closed": closed.isoformat() if closed else None,
+           "return_pct": round(float(return_pct), 3), "pnl": round(float(pnl), 2)}
+    if bought_at is not None and last is not None:
+        row |= {"bought_at": round(float(bought_at), 2), "last": round(float(last), 2)}
+    return row
 
 
 def summary_line(b: Mapping[str, Any]) -> str:
@@ -422,9 +542,27 @@ def scorecard(b: Mapping[str, Any], *, today: date | None = None) -> dict[str, A
 def from_momentum(m: Mapping[str, Any]) -> dict[str, Any]:
     """The momentum account's own file (research/momentum_paper.py) in a book's shape."""
     running = m.get("state") in ("invested", "cash")
+    # Its equity rows carry "just holding Momentum 30" as the third figure: the index level, scaled.
+    level = {row[0]: row[2] for row in m.get("equity", []) if len(row) > 2}
+    value = {row[0]: row[1] for row in m.get("equity", [])}
+    trips, bought = [], None
+    for d in m.get("decisions", []):
+        if d["filled"] not in level:
+            continue
+        if d["action"].startswith("buy"):
+            bought = (d["filled"], level[d["filled"]], value[d["filled"]])
+        elif bought:
+            pct = 100 * (level[d["filled"]] / bought[1] - 1) - 2 * ROTATION_COST_PCT
+            trips.append(trip("NIFTY200 MOMENTUM 30", date.fromisoformat(bought[0]),
+                              date.fromisoformat(d["filled"]), pct, bought[2] * pct / 100))
+            bought = None
+    if bought:
+        pct = 100 * (level[max(level)] / bought[1] - 1) - ROTATION_COST_PCT
+        trips.append(trip("NIFTY200 MOMENTUM 30", date.fromisoformat(bought[0]), None, pct, bought[2] * pct / 100))
     return {"key": "momentum-30", "kind": "index", "title": "Momentum 30 + the cash rule",
             "training": "17.5% a year 2009-Oct 2025, worst fall 23%; NSE's real index",
             "start": m["start"], "as_of": m.get("as_of"), "complete_through": m.get("as_of") if running else None,
             "capital": m["capital"], "value": m["value"], "nifty_hold": m["nifty_hold"],
             "state": "running" if running else m.get("state", "not started"),
-            "equity": [[row[0], row[1]] for row in m.get("equity", [])], "open": [], "closed": []}
+            "equity": [[row[0], row[1]] for row in m.get("equity", [])], "open": [], "closed": [],
+            "round_trips": trips}

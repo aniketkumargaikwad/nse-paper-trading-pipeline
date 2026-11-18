@@ -207,10 +207,10 @@ def test_the_locked_block_names_the_gain_and_its_period():
 def test_the_locked_verdict_explains_itself():
     """With enough trades to judge; below that see the too-few-trades tests."""
     assert labelled(locked_rows(a_run(locked_trades=12)))["VERDICT"] == (
-        "FAILED - lost money; holding gained instead")
+        "🔴 FAILED - lost money; holding gained instead")
     assert labelled(locked_rows(a_run(locked_trades=12, verdict_passed=True,
                                       beat_holding=True)))["VERDICT"] == (
-        "PASSED - made money and beat holding")
+        "🟢 PASSED - made money and beat holding")
 
 
 def test_a_day_with_no_pick_still_carries_a_verdict():
@@ -373,12 +373,12 @@ def test_the_marker_survives_html_escaping():
 def test_one_trade_in_the_locked_year_is_not_a_verdict():
     """A single trade is a coin toss; calling it FAILED reads as evidence."""
     rows = labelled(locked_rows(a_run(locked_trades=1, win_rate_pct=0.0)))
-    assert rows["VERDICT"] == "TOO FEW TRADES to judge - 1 in 12 months, needs 10+"
+    assert rows["VERDICT"] == "🔴 TOO FEW TRADES to judge - 1 in 12 months, needs 10+"
 
 
 def test_enough_trades_gets_a_real_verdict():
     rows = labelled(locked_rows(a_run(locked_trades=12)))
-    assert rows["VERDICT"].startswith("FAILED")
+    assert rows["VERDICT"].startswith("🔴 FAILED")
 
 
 def test_too_few_trades_still_shows_what_happened():

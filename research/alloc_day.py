@@ -21,8 +21,8 @@ What this day does instead.
   be read as they stand.
 - The pass rule is the owner's own target and limit (PASS RULE below), plus
   four checks that a result is not luck or fitting.
-- A plan that passes, and does not fail its exam year, is PAPER-TRADED
-  AUTOMATICALLY from the next session (research/paper/promoted.json, picked up
+- EVERY plan that passes training is PAPER-TRADED AUTOMATICALLY from the next
+  session, whatever its exam year said (the owner's choice, 18 Nov 2026) (research/paper/promoted.json, picked up
   by research/paper_books.py).
 - Every message ends with the closest plans found so far, so a day on which
   nothing passes still says how far away a pass is.
@@ -665,8 +665,12 @@ def read_promoted(root: Path | None = None) -> list[dict]:
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
 
 
-def promote(day: date, version: Any, exam: dict, root: Path | None = None) -> tuple[dict | None, str]:
-    """Add a passed plan to the paper books. (the new entry or None, what happened in words)."""
+def promote(day: date, version: Any, exam: dict | None, root: Path | None = None) -> tuple[dict | None, str]:
+    """Add a passed plan to the paper books. (the new entry or None, what happened in words).
+
+    Since 18 Nov 2026 (the owner's choice) EVERY version that passes training is paper-traded,
+    whatever its exam year said - the exam is still run on the day's best and reported, and
+    the paper book is where it is judged. `exam` is None for a passer that was not examined."""
     rows = read_promoted(root)
     doc = {k: v for k, v in version.checked.document.items() if k != "name"}
     if any({k: v for k, v in r["document"].items() if k != "name"} == doc for r in rows):
@@ -676,6 +680,12 @@ def promote(day: date, version: Any, exam: dict, root: Path | None = None) -> tu
                       "- drop one first")
     s = version.summary.reading
     start = day + timedelta(days=1)
+    if exam is None:
+        exam_said = "exam year not opened (only the day's best passer is examined)"
+    else:
+        exam_said = (f"exam year {exam['strategy']['cagr_pct']:+.1f}% against NIFTY 50's "
+                     f"{exam['strategy']['bench_cagr_pct']:+.1f}%"
+                     + ("" if exam["ok"] else f" - FAILED: {exam['why_not']}"))
     entry = {
         "key": f"alloc-{day:%Y%m%d}-{len([r for r in rows if r['day'] == day.isoformat()]) + 1}",
         "title": version.title, "day": day.isoformat(), "start": start.isoformat(),
@@ -683,8 +693,7 @@ def promote(day: date, version: Any, exam: dict, root: Path | None = None) -> tu
         "training": (f"{s['avg_month_pct']:.2f}% a month ({s['cagr_pct']:.1f}% a year against NIFTY 50's "
                      f"{s['bench_cagr_pct']:.1f}%), worst fall {s['worst_fall_pct']:.0f}%, luck test t = "
                      f"{s['alpha_t']} - on NSE's own index histories {s['start']} to {s['end']}, 2008 included, "
-                     f"fund fee charged; exam year {exam['strategy']['cagr_pct']:+.1f}% against NIFTY 50's "
-                     f"{exam['strategy']['bench_cagr_pct']:+.1f}%"),
+                     f"fund fee charged; {exam_said}"),
     }
     path = (root or Path(".")) / PROMOTED
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -739,23 +748,24 @@ def run_day(*, brain: Any, lab: Lab, day: date, max_versions: int, budget_second
 def message(day: date, outcome: Any, final: Any, exam: dict | None, *, board: dict, promoted: str = "",
             dry_run: bool = False) -> tuple[str, list]:
     """(subject, blocks) in the morning message's layout (research.blocks). The verdict comes first."""
-    from research.blocks import Block, lesson
+    from research.blocks import Block, lesson, marked
     tested = [v for v in outcome.versions if v.valid]
     if exam is not None and exam["ok"]:
         verdict = f"A PLAN PASSED, exam year included. {promoted}".strip()
     elif exam is not None:
-        verdict = f"PASSED training but FAILED its exam year: {exam['why_not']}. Not paper-traded."
+        verdict = (f"PASSED training but FAILED its exam year: {exam['why_not']}. "
+                   + (f"Paper-traded anyway, as you asked: {promoted}" if promoted else "Not paper-traded."))
     elif not tested:
         verdict = "NOTHING TESTED: no plan got past the checker."
     else:
         verdict = (f"NOTHING PASSED: no plan reached {MIN_MONTH_PCT:g}% a month with a worst fall "
                    f"inside {MAX_FALL_PCT:.0f}% and cleared the luck checks.")
     blocks = [Block(f"📊 Index allocation research — {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
-                    note=f"Verdict: {verdict}")]
+                    note=marked(exam is not None and exam["ok"], f"Verdict: {verdict}"))]
     for v in outcome.versions:
         tag = f"v{v.idea_no}.{v.version_no}"
         if not v.valid:
-            blocks.append(Block(f"{tag} - {v.title or '(no title)'}",
+            blocks.append(Block(marked(False, f"{tag} - {v.title or '(no title)'}"),
                                 note=f"REJECTED by the checker: {(v.error or '').splitlines()[0][:200]}"))
             continue
         s = v.summary.reading
@@ -767,10 +777,10 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, board: di
                 ("result", "PASSES" if v.summary.passes else "FAILS"))
         failed = [c.detail for c in v.summary.checks if not c.ok]
         note = " ".join([f"Why: {'; '.join(failed)}." if failed else "", lesson(v.review.get("lessons"))]).strip()
-        blocks.append(Block(f"{tag} - {v.title}{mark}", rows, note))
+        blocks.append(Block(marked(v.summary.passes, f"{tag} - {v.title}{mark}"), rows, note))
     if exam is not None:
         s = exam["strategy"]
-        blocks.append(Block(f"Exam year {s['start']} to {s['end']}, opened once",
+        blocks.append(Block(marked(exam["ok"], f"Exam year {s['start']} to {s['end']}, opened once"),
                             (("this plan", f"{s['cagr_pct']:+.1f}%"), ("NIFTY 50", f"{s['bench_cagr_pct']:+.1f}%"),
                              ("worst fall", f"{s['worst_fall_pct']:.1f}%"),
                              ("result", "OK" if exam["ok"] else "FAILED")),
@@ -863,8 +873,12 @@ def main(argv: list[str] | None = None) -> int:
                                    budget_seconds=args.budget_seconds, notes_=notes(), ideas=ideas_tried(),
                                    seen=None if args.dry_run else tested_before(ledger, lab.menu))
     promoted = ""
-    if exam is not None and exam["ok"] and not args.no_save and not args.dry_run:
-        _, promoted = promote(day, final[0], exam)
+    if not args.no_save and not args.dry_run:
+        said = []
+        for v in [v for v in outcome.versions if v.valid and v.summary.passes]:
+            _, words = promote(day, v, exam if final is not None and v is final[0] else None)
+            said.append(f"v{v.idea_no}.{v.version_no} {words}")
+        promoted = "; ".join(said)
     from research.blocks import as_text, send
     board = closest(board_rows(reference, ledger, outcome.versions))
     subject, blocks = message(day, outcome, final, exam, board=board, promoted=promoted, dry_run=args.dry_run)

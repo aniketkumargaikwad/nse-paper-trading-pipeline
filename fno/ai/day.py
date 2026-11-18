@@ -30,7 +30,7 @@ from fno import atlas, report, rules, store
 from fno.ai import ledger, prompts
 from fno.ai.checker import check_proposal
 from fno.ai.summary import OptionsSummary, index_summary, one_line, score
-from research.blocks import Block, as_text, lesson, send
+from research.blocks import Block, as_text, lesson, marked, send
 from research.run_day import OpusBrain, choose_final, nothing_to_commit
 
 DRY_RUN_TITLE = "Dry run placeholder (no AI)"
@@ -195,33 +195,37 @@ def _index_rows(summary: Any) -> tuple[list[tuple[str, str]], list[str]]:
 
 
 def message(day: date, outcome: Any, final: Any, pick: Any, exam: dict[str, Any] | None,
-            *, dry_run: bool = False) -> tuple[str, list[Block]]:
+            *, dry_run: bool = False, promoted: str = "") -> tuple[str, list[Block]]:
     """(subject, blocks). The verdict comes first."""
     if exam is not None:
         verdict = (f"PASSED training on {pick['underlying']}; exam year "
                    f"{exam['avg_month_pct']:+.2f}%/month against holding's "
                    f"{exam['avg_holding_month_pct']:+.2f}% - "
-                   + ("it beat holding." if exam["beat_holding"] else "it did NOT beat holding."))
+                   + ("it beat holding." if exam["beat_holding"] else "it did NOT beat holding.")
+                   + (f" Paper-traded: {promoted}" if promoted else ""))
     elif not [v for v in outcome.versions if v.valid]:
         verdict = "NOTHING TESTED: no version got past the checker."
     else:
         verdict = "NOTHING PASSED: no version passes the rule on NIFTY or BANKNIFTY. Not usable."
+    passed = exam is not None and exam["beat_holding"]       # green only when the exam agrees
     blocks = [Block(f"📊 Options research — {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
-                    note=f"Verdict: {verdict}")]
+                    note=marked(passed, f"Verdict: {verdict}"))]
     for v in outcome.versions:
         tag = f"v{v.idea_no}.{v.version_no}"
         if not v.valid:
-            blocks.append(Block(f"{tag} - {v.title or '(no title)'}",
+            blocks.append(Block(marked(False, f"{tag} - {v.title or '(no title)'}"),
                                 note=f"REJECTED by the checker: {(v.error or '').splitlines()[0][:200]}"))
             continue
         mark = " (the day's final version)" if final is not None and v is final[0] else ""
         rows, why = _index_rows(v.summary)
         note = " ".join([*(f"{w}." for w in why), lesson(v.review.get("lessons"))]).strip()
         mode = "" if v.checked.mode in v.title.lower() else f" ({v.checked.mode})"
-        blocks.append(Block(f"{tag} - {v.title}{mode}{mark}", tuple(rows), note))
+        ok = any(s.get("passes") for s in v.summary.indexes)
+        blocks.append(Block(marked(ok, f"{tag} - {v.title}{mode}{mark}"), tuple(rows), note))
     end = [("stopped", STOPPED.get(outcome.stopped_because, outcome.stopped_because))]
     if exam is not None:
-        blocks.append(Block(f"Exam year {exam['start']} to {exam['end']} - {pick['underlying']}, opened once", (
+        blocks.append(Block(marked(exam["beat_holding"],
+                                   f"Exam year {exam['start']} to {exam['end']} - {pick['underlying']}, opened once"), (
             ("a month", f"{exam['avg_month_pct']:+.2f}%"), ("holding", f"{exam['avg_holding_month_pct']:+.2f}%"),
             ("trades", str(exam["trades"])), ("worst day", f"{exam['worst_day_pct']:+.1f}%"),
             ("worst fall", f"{exam['worst_fall_pct']:.1f}%"), ("Rs 5 lakh ->", f"Rs {exam['end_value']:,.0f}"))))
@@ -230,10 +234,50 @@ def message(day: date, outcome: Any, final: Any, pick: Any, exam: dict[str, Any]
     return subject[:120], blocks
 
 
+# --- promotion: a pass starts paper-trading by itself (owner, 18 Nov 2026) ------------------
+
+PROMOTED = Path("research/paper/promoted.json")      # shared with the index research (research/alloc_day.py)
+MAX_PROMOTED = 3                                      # options books this research may have running at once
+
+
+def promote(day: date, version: Any, pick: Any, exam: dict[str, Any] | None, root: Path | None = None
+            ) -> tuple[dict[str, Any] | None, str]:
+    """Add a version that passed training on `pick`'s index to the paper books - every one,
+    whatever its exam year said (owner, 18 Nov 2026). `exam` is None when it was not examined.
+
+    (the new entry or None, what happened in words). Paper-books (research/paper_books.py)
+    replays it from the next day on NSE's own option prices."""
+    import json
+    from datetime import timedelta
+    path = (root or Path(".")) / PROMOTED
+    rows = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    doc = {k: v for k, v in version.checked.document.items() if k != "name"}
+    mine = [r for r in rows if r.get("kind") == "options"]
+    if any(r["underlying"] == pick["underlying"] and {k: v for k, v in r["document"].items() if k != "name"} == doc
+           for r in mine):
+        return None, "this exact strategy is already paper-traded"
+    if len(mine) >= MAX_PROMOTED:
+        return None, f"NOT paper-traded: {MAX_PROMOTED} options strategies are already running - drop one first"
+    start = day + timedelta(days=1)
+    entry = {"kind": "options", "key": f"options-{day:%Y%m%d}-{pick['underlying'].lower()}",
+             "title": version.title, "day": day.isoformat(), "start": start.isoformat(),
+             "underlying": pick["underlying"], "document": version.checked.document,
+             "training": (f"{pick.get('avg_month_pct', 0):+.2f}% a month in training on {pick['underlying']}, "
+                          f"{pick.get('trades_per_month', 0):.1f} trades a month; "
+                          + ("exam year not opened (only the day's best passer is examined)" if exam is None else
+                             f"exam year {exam['avg_month_pct']:+.2f}% a month against holding's "
+                             f"{exam['avg_holding_month_pct']:+.2f}%, worst day {exam['worst_day_pct']:+.1f}%"
+                             + ("" if exam["beat_holding"] else " - did NOT beat holding")))}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((json.dumps([*rows, entry], indent=1, default=str) + "\n").encode("utf-8"))
+    return entry, f"now PAPER-TRADED from {start.isoformat()} (Paper books: {entry['key']})"
+
+
 def commit(day: date) -> None:
     """Commit the options notes, ledger and exams. A failure is reported, not fatal."""
     try:
-        subprocess.run(["git", "add", str(ledger.DIR)], check=True, capture_output=True, text=True)
+        paths = [str(ledger.DIR)] + ([str(PROMOTED)] if PROMOTED.exists() else [])
+        subprocess.run(["git", "add", *paths], check=True, capture_output=True, text=True)
         done = subprocess.run(["git", "-c", "user.name=research loop", "-c", "user.email=noreply@anthropic.com",
                                "commit", "-m", f"docs(research): options notes for {day}"],
                               capture_output=True, text=True)
@@ -295,7 +339,17 @@ def main(argv: list[str] | None = None) -> int:
     outcome, final, pick, exam = run_day(brain=brain, lab=lab, day=day,
                                          max_versions=args.max_versions or MAX_VERSIONS,
                                          budget_seconds=args.budget_seconds, notes=notes, ideas=ideas)
-    subject, blocks = message(day, outcome, final, pick, exam, dry_run=args.dry_run)
+    promoted = ""
+    if not args.no_save and not args.dry_run:
+        said = []
+        for v in [v for v in outcome.versions if v.valid and v.summary.pick() is not None]:
+            mine = exam if final is not None and v is final[0] else None
+            _, words = promote(day, v, v.summary.pick(), mine)
+            said.append(f"v{v.idea_no}.{v.version_no} {words}")
+        promoted = "; ".join(said)
+        if promoted:
+            print(f"paper      {promoted}")
+    subject, blocks = message(day, outcome, final, pick, exam, dry_run=args.dry_run, promoted=promoted)
     print("\n" + as_text(blocks))
     if not args.no_save:
         ledger.append_versions(ledger.version_rows(day, outcome.versions))

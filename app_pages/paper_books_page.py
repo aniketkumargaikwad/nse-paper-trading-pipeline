@@ -70,7 +70,8 @@ def render(ctx: AppContext) -> None:
     momentum = ROOT / "momentum" / "paper.json"
     if momentum.exists():
         books.append(from_momentum(json.loads(momentum.read_text(encoding="utf-8"))))
-    books += [json.loads(p.read_text(encoding="utf-8")) for p in sorted((ROOT / "paper").glob("*.json"))]
+    books += [json.loads(p.read_text(encoding="utf-8")) for p in sorted((ROOT / "paper").glob("*.json"))
+              if not p.name.startswith("_")]           # _price_check.json is the job's own note
     if not books:
         empty_state("No paper books yet", "They are written by `scripts/paper_books.py`.", "📒")
         return

@@ -1,5 +1,7 @@
 # The paper books (research/paper_books.py): every chosen strategy replayed forward
-# from a fixed day on fresh prices. NO real money.
+# from a fixed day on fresh prices, checked against NSE's official closing files
+# (research/nse_prices.py). NO real money. On Fridays it sends the weekly message
+# (research/paper_weekly.py) to the PAPER bot - docs/TELEGRAM_BOTS.md.
 #
 # Triggers are `schedule` and `workflow_dispatch` ONLY. Never add
 # pull_request or pull_request_target: this repository is public.
@@ -11,6 +13,11 @@ on:
     # fetched any option expiry that just ended.
     - cron: "17 15 * * 1-5"
   workflow_dispatch:
+    inputs:
+      send_weekly:
+        description: "Send the weekly paper-trading message now (it goes out by itself on Fridays)"
+        type: boolean
+        default: false
 
 concurrency:
   group: paper-books
@@ -47,10 +54,10 @@ jobs:
         run: python scripts/fno_features.py --only BANKNIFTY
 
       - name: Update the paper books
-        run: python scripts/paper_books.py --notify
+        run: python scripts/paper_books.py --notify ${{ inputs.send_weekly && '--weekly-now' || '' }}
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_PAPER_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_PAPER_CHAT_ID || secrets.TELEGRAM_CHAT_ID }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
@@ -69,5 +76,5 @@ jobs:
         if: failure()
         run: python scripts/alert_failure.py "paper books"
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_ALERTS_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_ALERTS_CHAT_ID || secrets.TELEGRAM_CHAT_ID }}

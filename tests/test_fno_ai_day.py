@@ -74,7 +74,7 @@ def test_a_passing_version_opens_its_own_index_exam_once_after_the_last_ai_call(
     assert exam["strategy_name"].startswith("O-20261021-calm-strangle") and exam["beat_holding"]
     subject, blocks = options_day.message(DAY, outcome, final, pick, exam)
     text = as_text(blocks)
-    assert text.splitlines()[1].startswith("Verdict: PASSED training on NIFTY")
+    assert text.splitlines()[1].startswith("🟢 Verdict: PASSED training on NIFTY")
     assert "<b>" in as_html(blocks) and "<pre>" in as_html(blocks)
 
 
@@ -85,7 +85,7 @@ def test_nothing_passing_opens_no_exam_and_says_so_first():
     assert all(c[0] == "train" for c in lab.calls)
     subject, blocks = options_day.message(DAY, outcome, final, pick, exam)
     text = as_text(blocks)
-    assert text.splitlines()[1] == ("Verdict: NOTHING PASSED: no version passes the rule on NIFTY or "
+    assert text.splitlines()[1] == ("🔴 Verdict: NOTHING PASSED: no version passes the rule on NIFTY or "
                                     "BANKNIFTY. Not usable.")
     assert "NOTHING PASSED" in subject
 
@@ -121,3 +121,19 @@ def test_the_whole_day_runs_through_to_the_message(monkeypatch, capsys):
     assert options_day.main(["--dry-run", "--no-save", "--notify"]) == 0
     assert "Verdict: NOTHING PASSED" in capsys.readouterr().out
     assert sent and sent[0][0].startswith("Options research")
+
+
+def test_a_pass_that_beats_holding_in_its_exam_is_paper_traded_once(tmp_path):
+    """Owner, 18 Nov 2026: anything that passes goes to paper trading by itself."""
+    import json
+    from research import paper_books as pb
+    lab = FakeLab(good={"NIFTY"})
+    outcome, final, pick, exam = run(lab, FakeBrain(lab, versions=2))
+    entry, said = options_day.promote(DAY, final[0], pick, exam, root=tmp_path)
+    assert entry["kind"] == "options" and entry["underlying"] == "NIFTY" and "PAPER-TRADED" in said
+    again, said = options_day.promote(DAY, final[0], pick, exam, root=tmp_path)
+    assert again is None and "already" in said
+    rows = json.loads((tmp_path / options_day.PROMOTED).read_text(encoding="utf-8"))
+    books = pb.promoted_books(tmp_path / options_day.PROMOTED)
+    assert len(rows) == 1 and [(b.kind, b.underlying, b.document is not None) for b in books] == [
+        ("options", "NIFTY", True)]

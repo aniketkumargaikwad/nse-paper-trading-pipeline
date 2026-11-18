@@ -1,0 +1,116 @@
+[
+ {
+  "key": "alloc-20261117-1",
+  "title": "Midcap150 Momentum 50, vol target 30% + own 150-day average, weekly",
+  "day": "2026-11-17",
+  "start": "2026-11-18",
+  "document": {
+   "decide": "weekly",
+   "filters": {
+    "above_own_average": 150
+   },
+   "hold": 1,
+   "name": "A-20261117-midcap150-momentum-50-vol-target-30-own--v1",
+   "rank": {
+    "by": "none"
+   },
+   "universe": [
+    "NIFTY MIDCAP150 MOMENTUM 50"
+   ],
+   "version": "alloc/1",
+   "volatility_target": {
+    "percent": 30,
+    "sessions": 60
+   },
+   "weighting": "equal"
+  },
+  "training": "1.64% a month (19.8% a year against NIFTY 50's 12.2%), worst fall 29%, luck test t = 3.03 - on NSE's own index histories 2006-04-10 to 2025-11-17, 2008 included, fund fee charged; exam year not opened (only the day's best passer is examined)"
+ },
+ {
+  "key": "alloc-20261117-2",
+  "title": "Midcap150 Momentum 50, vol target 30% + own 100-day average, weekly",
+  "day": "2026-11-17",
+  "start": "2026-11-18",
+  "document": {
+   "decide": "weekly",
+   "filters": {
+    "above_own_average": 100
+   },
+   "hold": 1,
+   "name": "A-20261117-midcap150-momentum-50-vol-target-30-own--v2",
+   "rank": {
+    "by": "none"
+   },
+   "universe": [
+    "NIFTY MIDCAP150 MOMENTUM 50"
+   ],
+   "version": "alloc/1",
+   "volatility_target": {
+    "percent": 30,
+    "sessions": 60
+   },
+   "weighting": "equal"
+  },
+  "training": "1.82% a month (22.5% a year against NIFTY 50's 12.2%), worst fall 27%, luck test t = 3.93 - on NSE's own index histories 2006-04-10 to 2025-11-17, 2008 included, fund fee charged; exam year -8.7% against NIFTY 50's -1.0% - FAILED: 7.7 points behind NIFTY 50 in the exam year (limit 5)"
+ },
+ {
+  "kind": "rotation",
+  "key": "rotation-20261110-2-1",
+  "title": "12-0 momentum, 20 stocks, own 200-day trend gate, NIFTY 200-day filter",
+  "day": "2026-11-10",
+  "start": "2026-11-11",
+  "variant": {
+   "name": "M-20261110-2-v1",
+   "lookback": 12,
+   "skip": 0,
+   "top": 20,
+   "trend": true,
+   "score": "return",
+   "above_sma": 200,
+   "max_volatility": null,
+   "weighting": "equal",
+   "trend_sessions": 200
+  },
+  "training": "+2.55% a year over the paper-traded momentum rule on the same stocks (luck test t = 1.76), worst fall 22%; exam year +2.9% against that rule's -1.6% - on today's stock list, so flattered by hindsight"
+ },
+ {
+  "kind": "rotation",
+  "key": "rotation-20261112-3-1",
+  "title": "12-0 momentum, 20 stocks, slower NIFTY 300-day cash filter",
+  "day": "2026-11-12",
+  "start": "2026-11-13",
+  "variant": {
+   "name": "M-20261112-3-v1",
+   "lookback": 12,
+   "skip": 0,
+   "top": 20,
+   "trend": true,
+   "score": "return",
+   "above_sma": null,
+   "max_volatility": null,
+   "weighting": "equal",
+   "trend_sessions": 300
+  },
+  "training": "+5.12% a year over the paper-traded momentum rule on the same stocks (luck test t = 1.87), worst fall 30%; exam year not opened - on today's stock list, so flattered by hindsight"
+ },
+ {
+  "kind": "rotation",
+  "key": "rotation-20261114-3-1",
+  "title": "12-0 momentum, 15 stocks, NIFTY 200-day filter (breadth monotonicity, tight end)",
+  "day": "2026-11-14",
+  "start": "2026-11-15",
+  "variant": {
+   "name": "M-20261114-3-v1",
+   "lookback": 12,
+   "skip": 0,
+   "top": 15,
+   "trend": true,
+   "score": "return",
+   "above_sma": null,
+   "max_volatility": null,
+   "weighting": "equal",
+   "trend_sessions": 200
+  },
+  "training": "+4.31% a year over the paper-traded momentum rule on the same stocks (luck test t = 3.07), worst fall 23%; exam year not opened - on today's stock list, so flattered by hindsight"
+ }
+]

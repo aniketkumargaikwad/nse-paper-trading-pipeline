@@ -2,11 +2,17 @@
 
     python scripts/paper_books.py                    # download prices, rebuild every book
     python scripts/paper_books.py --skip-download    # use the stored prices
-    python scripts/paper_books.py --notify           # ...and message on a new month's first session
+    python scripts/paper_books.py --notify           # ...and send the weekly message on Fridays
+    python scripts/paper_books.py --weekly-now       # ...send the weekly message now, any day
 
 Writes research/journal/paper/<book>.json, which the dashboard's Paper books
 page reads. Run every weekday evening by .github/workflows/paper-books.yml.
 The options book needs the F&O store (data/fno, pulled from R2 by the job).
+
+Yahoo's prices are checked against NSE's official end-of-day files for every
+session since the books began, and any price Yahoo has not published yet is
+filled from NSE (research/nse_prices.py) - so a book is complete through the
+day it runs, not a day behind.
 """
 
 from __future__ import annotations
@@ -14,7 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -31,9 +37,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--notify", action="store_true")
+    parser.add_argument("--weekly-now", action="store_true", help="send the weekly message whatever the day")
+    parser.add_argument("--today", default="", help=argparse.SUPPRESS)        # tests only
+    parser.add_argument("--no-nse-check", action="store_true", help="skip NSE's official price files")
     args = parser.parse_args(argv)
     from rotation_prices import closes_of
     ohlcv = _load(args)
+    check = None
+    if not args.no_nse_check:
+        ohlcv, check = _check_with_nse(ohlcv)
     closes = closes_of(ohlcv)
     from costs import HoldingCostModel
     from fno import store
@@ -65,25 +77,46 @@ def main(argv: list[str] | None = None) -> int:
         path.write_bytes((json.dumps(b, indent=1, default=str) + "\n").encode("utf-8"))
         books.append(b)
         print(pb.summary_line(b))
-    # Once a month: the first run whose prices reach a new month sends the summary, and
-    # MONTHLY_MARK remembers it (committed with the books). It replaced a "first session of
-    # the month" test that read Yahoo's NIFTY 50, which lags a day - so on 2 Nov 2026 the
-    # job saw October and sent nothing.
-    latest = max(closes.index)
-    month = f"{latest:%Y-%m}"
-    mark = pb.OUT / MONTHLY_MARK
+    if check is not None:
+        (pb.OUT / PRICE_CHECK).write_bytes((json.dumps(check.as_dict(), indent=1) + "\n").encode("utf-8"))
+    # Once a week, on Friday's run (the owner's choice, 18 Nov 2026; it replaced a monthly
+    # summary). WEEKLY_MARK remembers the week it went out, committed with the books, so a
+    # second run on the same Friday does not send it twice - and a failed delivery is not
+    # remembered, so a re-run sends it.
+    from config import IST
+    from research import paper_weekly as pw
+    today = date.fromisoformat(args.today) if args.today else datetime.now(IST).date()
+    mark = pb.OUT / WEEKLY_MARK
     sent_for = mark.read_text(encoding="utf-8").strip() if mark.exists() else ""
-    if args.notify and books and month != sent_for:
+    if books and (args.weekly_now or (args.notify and pw.due(today, sent_for))):
         from research.blocks import send
         momentum = Path("research/journal/momentum/paper.json")
         if momentum.exists():
             books = [pb.from_momentum(json.loads(momentum.read_text(encoding="utf-8"))), *books]
-        if send(f"Paper books {latest}", pb.message(books, latest), warn_token=False):
-            mark.write_text(month + "\n", encoding="utf-8")
+        latest = max(closes.index)
+        blocks = pw.message(books, latest, price_check=check.line() if check is not None else "")
+        if send(f"Paper trading, week to {latest}", blocks, warn_token=False, split=True):
+            mark.write_text(pw.week_of(today) + "\n", encoding="utf-8")
     return 1 if failed else 0
 
 
-MONTHLY_MARK = "_monthly_message.txt"
+WEEKLY_MARK = "_weekly_message.txt"
+PRICE_CHECK = "_price_check.json"
+
+
+def _check_with_nse(ohlcv: pd.DataFrame) -> tuple[pd.DataFrame, object]:
+    """Yahoo's prices completed from NSE's official files for every session since the books began."""
+    from research import nse_prices
+    first = min(b.start for b in pb.all_books()) - timedelta(days=7)
+    found, missing = nse_prices.fetch(nse_prices.weekdays(first, date.today()))
+    repaired, check = nse_prices.repair(ohlcv, found, no_file=missing)
+    print(check.line())
+    for t, d, apart in check.disagree:
+        print(f"  {t} {d}: Yahoo and NSE are {apart:+.2f}% apart (kept Yahoo's)")
+    if check.filled:
+        print(f"  filled from NSE: {', '.join(f'{t} {d}' for t, d in check.filled[:20])}"
+              + (" ..." if len(check.filled) > 20 else ""))
+    return repaired, check
 
 
 def _load(args: argparse.Namespace) -> pd.DataFrame:

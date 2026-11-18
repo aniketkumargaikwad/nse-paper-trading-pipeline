@@ -185,7 +185,7 @@ def test_the_locked_block_reports_the_average_month_against_the_target():
     assert rows["Traded on"] == "NIFTY200 basket (200 stocks), day bars"
     assert rows["Average month"].startswith("+1.70%") and "IN the 1.5-2% target" in rows["Average month"]
     assert rows["Months up"] == "75% · worst month -3.1%"
-    assert rows["VERDICT"].startswith("PASSED")
+    assert rows["VERDICT"].startswith("\U0001f7e2 PASSED")
 
 
 # --- the day's choices -------------------------------------------------------------
