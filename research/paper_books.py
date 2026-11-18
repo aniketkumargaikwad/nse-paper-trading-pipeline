@@ -118,6 +118,12 @@ def promoted_books(path: Path | None = None) -> tuple[Book, ...]:
         return ()
     books = []
     for row in json.loads(path.read_text(encoding="utf-8")):
+        if row.get("kind") == "rotation":
+            # Added by the stock momentum research (research/rotation_day.py) when a version passed.
+            books.append(Book(row["key"], "rotation", f"{row['title']} (AI, {row['day']})", 500_000.0,
+                              row["training"], variant=Variant(**row["variant"]),
+                              start=date.fromisoformat(row["start"])))
+            continue
         if row.get("kind") == "options":
             # Added by the options research day (fno/ai/day.py) when a version passed and beat
             # holding in its exam year.

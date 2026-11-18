@@ -145,3 +145,19 @@ def test_the_whole_day_runs_through_to_the_message(monkeypatch, tmp_path, capsys
     assert rd.main(["--dry-run", "--no-save", "--skip-download", "--notify"]) == 0
     assert "Verdict:" in capsys.readouterr().out
     assert sent and sent[0].startswith("Stock momentum research")
+
+
+def test_every_pass_is_paper_traded_once_and_the_books_read_it(tmp_path):
+    """Owner, 18 Nov 2026: every version that passes training is paper-traded, exam or not."""
+    from types import SimpleNamespace
+    from research import paper_books as pb
+    checked = rd.check_proposal("version: rotation/1\nlookback_months: 9\nskip_months: 0\nholdings: 17\n",
+                                idea="1", day=DAY, version=1)
+    summary = {"strategy": {"worst_fall_pct": 20.0}, "versus_baseline": {"cagr_lead_pct": 3.0, "luck_t": 2.1}}
+    version = SimpleNamespace(title="T", checked=checked, idea_no=1, version_no=1,
+                              summary=SimpleNamespace(as_dict=lambda: summary))
+    entry, said = rd.promote(DAY, version, None, root=tmp_path)
+    assert entry["kind"] == "rotation" and "PAPER-TRADED" in said
+    assert rd.promote(DAY, version, None, root=tmp_path)[0] is None
+    books = pb.promoted_books(tmp_path / rd.PROMOTED)
+    assert [(b.kind, b.variant.top, b.variant.lookback) for b in books] == [("rotation", 17, 9)]

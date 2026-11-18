@@ -20,8 +20,8 @@ had a single day**, so no result can bend it. It lives in code too
 
 | When | Job | What you get |
 |---|---|---|
-| Mon, Wed, Fri morning | `fno-research` | the options AI designs and tests; a version that passes and beats holding in its exam year starts paper-trading by itself (since 18 Nov 2026); message from the **options research** bot |
-| Tue, Thu, Sat morning | `research` | since 15 Nov 2026: the AI designs index allocation plans on NSE's own index histories (`docs/research/2026-11-15-index-allocation-research.md`); a plan that passes starts paper-trading by itself; message from the **index research** bot |
+| Mon, Wed, Fri morning | `fno-research` | the options AI designs and tests; every version that passes training starts paper-trading by itself, exam year or not (since 18 Nov 2026); message from the **options research** bot |
+| Tue, Thu, Sat morning | `research` | since 15 Nov 2026: the AI designs index allocation plans on NSE's own index histories (`docs/research/2026-11-15-index-allocation-research.md`); every plan that passes training starts paper-trading by itself, even if its exam year fails (since 18 Nov 2026); message from the **index research** bot |
 | Weekday evenings | `fno-daily` | option and index data saved |
 | Weekday evenings | `momentum-paper`, `paper-books` | every paper book recomputed, its prices checked against NSE's official closing files (missing ones filled from them); the dashboard updates |
 | Friday evening | `paper-books` | the weekly message from the **paper trading** bot: every book in its own box - return since added, average month, win rate, profit factor, reward : risk, trades a month, worst fall, what it holds at what price (it replaced the monthly message on 18 Nov 2026) |

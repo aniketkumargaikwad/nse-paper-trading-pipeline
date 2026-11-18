@@ -201,13 +201,13 @@ def message(day: date, outcome: Any, final: Any, pick: Any, exam: dict[str, Any]
         verdict = (f"PASSED training on {pick['underlying']}; exam year "
                    f"{exam['avg_month_pct']:+.2f}%/month against holding's "
                    f"{exam['avg_holding_month_pct']:+.2f}% - "
-                   + (f"it beat holding. {promoted}".strip() if exam["beat_holding"]
-                      else "it did NOT beat holding. Not paper-traded."))
+                   + ("it beat holding." if exam["beat_holding"] else "it did NOT beat holding.")
+                   + (f" Paper-traded: {promoted}" if promoted else ""))
     elif not [v for v in outcome.versions if v.valid]:
         verdict = "NOTHING TESTED: no version got past the checker."
     else:
         verdict = "NOTHING PASSED: no version passes the rule on NIFTY or BANKNIFTY. Not usable."
-    passed = exam is not None and exam["beat_holding"]
+    passed = exam is not None and exam["beat_holding"]       # green only when the exam agrees
     blocks = [Block(f"📊 Options research — {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
                     note=marked(passed, f"Verdict: {verdict}"))]
     for v in outcome.versions:
@@ -240,9 +240,10 @@ PROMOTED = Path("research/paper/promoted.json")      # shared with the index res
 MAX_PROMOTED = 3                                      # options books this research may have running at once
 
 
-def promote(day: date, version: Any, pick: Any, exam: dict[str, Any], root: Path | None = None
+def promote(day: date, version: Any, pick: Any, exam: dict[str, Any] | None, root: Path | None = None
             ) -> tuple[dict[str, Any] | None, str]:
-    """Add a version that passed AND beat holding in its exam year to the paper books.
+    """Add a version that passed training on `pick`'s index to the paper books - every one,
+    whatever its exam year said (owner, 18 Nov 2026). `exam` is None when it was not examined.
 
     (the new entry or None, what happened in words). Paper-books (research/paper_books.py)
     replays it from the next day on NSE's own option prices."""
@@ -262,9 +263,11 @@ def promote(day: date, version: Any, pick: Any, exam: dict[str, Any], root: Path
              "title": version.title, "day": day.isoformat(), "start": start.isoformat(),
              "underlying": pick["underlying"], "document": version.checked.document,
              "training": (f"{pick.get('avg_month_pct', 0):+.2f}% a month in training on {pick['underlying']}, "
-                          f"{pick.get('trades_per_month', 0):.1f} trades a month; exam year "
-                          f"{exam['avg_month_pct']:+.2f}% a month against holding's "
-                          f"{exam['avg_holding_month_pct']:+.2f}%, worst day {exam['worst_day_pct']:+.1f}%")}
+                          f"{pick.get('trades_per_month', 0):.1f} trades a month; "
+                          + ("exam year not opened (only the day's best passer is examined)" if exam is None else
+                             f"exam year {exam['avg_month_pct']:+.2f}% a month against holding's "
+                             f"{exam['avg_holding_month_pct']:+.2f}%, worst day {exam['worst_day_pct']:+.1f}%"
+                             + ("" if exam["beat_holding"] else " - did NOT beat holding")))}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes((json.dumps([*rows, entry], indent=1, default=str) + "\n").encode("utf-8"))
     return entry, f"now PAPER-TRADED from {start.isoformat()} (Paper books: {entry['key']})"
@@ -337,9 +340,15 @@ def main(argv: list[str] | None = None) -> int:
                                          max_versions=args.max_versions or MAX_VERSIONS,
                                          budget_seconds=args.budget_seconds, notes=notes, ideas=ideas)
     promoted = ""
-    if exam is not None and exam["beat_holding"] and not args.no_save and not args.dry_run:
-        _, promoted = promote(day, final[0], pick, exam)
-        print(f"paper      {promoted}")
+    if not args.no_save and not args.dry_run:
+        said = []
+        for v in [v for v in outcome.versions if v.valid and v.summary.pick() is not None]:
+            mine = exam if final is not None and v is final[0] else None
+            _, words = promote(day, v, v.summary.pick(), mine)
+            said.append(f"v{v.idea_no}.{v.version_no} {words}")
+        promoted = "; ".join(said)
+        if promoted:
+            print(f"paper      {promoted}")
     subject, blocks = message(day, outcome, final, pick, exam, dry_run=args.dry_run, promoted=promoted)
     print("\n" + as_text(blocks))
     if not args.no_save:

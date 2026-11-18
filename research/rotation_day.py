@@ -492,9 +492,46 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: 
     return f"Stock momentum research {day.isoformat()}: {verdict.split(':')[0].split(';')[0]}"[:120], blocks
 
 
+PROMOTED = Path("research/paper/promoted.json")      # shared with the other research tracks
+MAX_PROMOTED = 6
+
+
+def promote(day: date, version: Any, exam: dict | None, root: Path | None = None) -> tuple[dict | None, str]:
+    """Add a version that passed training to the paper books - every one, whatever its exam
+    year said (owner, 18 Nov 2026). (the new entry or None, what happened in words)."""
+    import json
+    from dataclasses import asdict
+    path = (root or Path(".")) / PROMOTED
+    rows = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    variant = {k: v for k, v in asdict(version.checked.variant).items() if k != "name"}
+    mine = [r for r in rows if r.get("kind") == "rotation"]
+    from research.paper_books import BOOKS
+    by_hand = [{k: v for k, v in asdict(b.variant).items() if k != "name"} for b in BOOKS if b.kind == "rotation"]
+    if variant in by_hand or any({k: v for k, v in r["variant"].items() if k != "name"} == variant for r in mine):
+        return None, "this exact rule is already paper-traded"
+    if len(mine) >= MAX_PROMOTED:
+        return None, f"NOT paper-traded: {MAX_PROMOTED} rotation rules from this research are already running"
+    vs = version.summary.as_dict()
+    st, lead = vs["strategy"], vs["versus_baseline"]
+    start = day + timedelta(days=1)
+    entry = {"kind": "rotation", "key": f"rotation-{day:%Y%m%d}-{version.idea_no}-{version.version_no}",
+             "title": version.title, "day": day.isoformat(), "start": start.isoformat(),
+             "variant": asdict(version.checked.variant),
+             "training": (f"{lead['cagr_lead_pct']:+.2f}% a year over the paper-traded momentum rule on the same "
+                          f"stocks (luck test t = {lead['luck_t']}), worst fall {st['worst_fall_pct']:.0f}%; "
+                          + ("exam year not opened" if exam is None else
+                             f"exam year {exam['strategy']['cagr_pct']:+.1f}% against that rule's "
+                             f"{exam['baseline']['cagr_pct']:+.1f}%")
+                          + " - on today's stock list, so flattered by hindsight")}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((json.dumps([*rows, entry], indent=1, default=str) + "\n").encode("utf-8"))
+    return entry, f"now PAPER-TRADED from {start.isoformat()} (Paper books: {entry['key']})"
+
+
 def _commit(day: date) -> None:
     try:
-        subprocess.run(["git", "add", str(DIR)], check=True, capture_output=True, text=True)
+        paths = [str(DIR)] + ([str(PROMOTED)] if PROMOTED.exists() else [])
+        subprocess.run(["git", "add", *paths], check=True, capture_output=True, text=True)
         done = subprocess.run(["git", "-c", "user.name=research loop", "-c", "user.email=noreply@anthropic.com",
                                "commit", "-m", f"docs(research): rotation notes for {day}"],
                               capture_output=True, text=True)
@@ -537,8 +574,15 @@ def main(argv: list[str] | None = None) -> int:
     brain: Any = DryBrain() if args.dry_run else RotationBrain(Claude(), baseline=base)
     outcome, final, exam = run_day(brain=brain, lab=lab, day=day, max_versions=args.max_versions or MAX_VERSIONS,
                                    budget_seconds=args.budget_seconds, notes_=n, ideas=ideas)
-    from research.blocks import as_text, send
+    from research.blocks import Block, as_text, send
     subject, blocks = message(day, outcome, final, exam, dry_run=args.dry_run)
+    if not args.no_save and not args.dry_run:
+        said = []
+        for v in [v for v in outcome.versions if v.valid and v.summary.passes]:
+            _, words = promote(day, v, exam if final is not None and v is final[0] else None)
+            said.append(f"v{v.idea_no}.{v.version_no} {words}")
+        if said:
+            blocks.insert(1, Block("Paper trading", note="; ".join(said) + "."))
     print("\n" + as_text(blocks))
     if not args.no_save:
         _append(_path(LEDGER, None), version_rows(day, outcome.versions))
