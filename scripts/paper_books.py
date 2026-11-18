@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pandas as pd  # noqa: E402
 
-from config import get_settings, use_utf8_stdout  # noqa: E402
+from config import IST, get_settings, use_utf8_stdout  # noqa: E402
 from research import paper_books as pb  # noqa: E402
 
 
@@ -43,6 +43,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     from rotation_prices import closes_of
     ohlcv = _load(args)
+    # A run started by hand while the market is open gets today's unfinished candle from
+    # Yahoo (18 Nov 2026, 12:56 IST). Only finished sessions count: before 16:00 IST, today
+    # is left out.
+    now = datetime.now(IST)
+    if now.time() < time(16, 0) and not args.today:
+        ohlcv = ohlcv[[d < now.date() for d in ohlcv.index]]
     check = None
     if not args.no_nse_check:
         ohlcv, check = _check_with_nse(ohlcv)
@@ -83,7 +89,6 @@ def main(argv: list[str] | None = None) -> int:
     # summary). WEEKLY_MARK remembers the week it went out, committed with the books, so a
     # second run on the same Friday does not send it twice - and a failed delivery is not
     # remembered, so a re-run sends it.
-    from config import IST
     from research import paper_weekly as pw
     today = date.fromisoformat(args.today) if args.today else datetime.now(IST).date()
     mark = pb.OUT / WEEKLY_MARK
