@@ -7,8 +7,8 @@
  "as_of": "2026-11-18",
  "complete_through": "2026-11-18",
  "capital": 500000.0,
- "value": 507264.62,
- "nifty_hold": 551134.64,
+ "value": 508119.53,
+ "nifty_hold": 552969.26,
  "state": "running",
  "equity": [
   [
@@ -108,8 +108,8 @@
   ],
   [
    "2026-11-18",
-   507264.62,
-   551134.64
+   508119.53,
+   552969.26
   ]
  ],
  "open": [
@@ -167,91 +167,91 @@
    "what": "LAURUSLABS",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -1.282,
-   "pnl": -639.82,
+   "return_pct": -1.244,
+   "pnl": -620.68,
    "bought_at": 2347.0,
-   "last": 2321.6
+   "last": 2322.5
   },
   {
    "what": "MCX",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 12.345,
-   "pnl": 6160.36,
+   "return_pct": 11.188,
+   "pnl": 5582.87,
    "bought_at": 3249.0,
-   "last": 3656.6
+   "last": 3619.0
   },
   {
    "what": "POWERINDIA",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 7.207,
-   "pnl": 3596.5,
+   "return_pct": 9.629,
+   "pnl": 4804.9,
    "bought_at": 28080.0,
-   "last": 30160.0
+   "last": 30840.0
   },
   {
    "what": "BHEL",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 5.763,
-   "pnl": 2875.63,
+   "return_pct": 6.573,
+   "pnl": 3279.93,
    "bought_at": 394.95,
-   "last": 418.5
+   "last": 421.7
   },
   {
    "what": "MOTHERSON",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -1.238,
-   "pnl": -617.63,
+   "return_pct": -1.307,
+   "pnl": -652.15,
    "bought_at": 159.0,
-   "last": 157.35
+   "last": 157.24
   },
   {
    "what": "AUROPHARMA",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 7.631,
-   "pnl": 3807.63,
+   "return_pct": 6.885,
+   "pnl": 3435.78,
    "bought_at": 1677.45,
-   "last": 1808.8
+   "last": 1796.3
   },
   {
    "what": "IDEA",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -1.833,
-   "pnl": -914.49,
+   "return_pct": -1.424,
+   "pnl": -710.82,
    "bought_at": 12.25,
-   "last": 12.05
+   "last": 12.1
   },
   {
    "what": "NATIONALUM",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -5.158,
-   "pnl": -2573.78,
+   "return_pct": -4.972,
+   "pnl": -2481.25,
    "bought_at": 323.54,
-   "last": 307.5
+   "last": 308.1
   },
   {
    "what": "BHARATFORG",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -4.141,
-   "pnl": -2066.32,
+   "return_pct": -4.13,
+   "pnl": -2060.63,
    "bought_at": 1753.4,
-   "last": 1684.3
+   "last": 1684.5
   },
   {
    "what": "SOLARINDS",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -4.732,
-   "pnl": -2361.45,
+   "return_pct": -4.923,
+   "pnl": -2456.43,
    "bought_at": 19438.0,
-   "last": 18557.0
+   "last": 18520.0
   }
  ]
 }
