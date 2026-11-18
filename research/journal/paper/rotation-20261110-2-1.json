@@ -1,0 +1,48 @@
+{
+ "key": "rotation-20261110-2-1",
+ "kind": "rotation",
+ "title": "12-0 momentum, 20 stocks, own 200-day trend gate, NIFTY 200-day filter (AI, 2026-11-10)",
+ "training": "+2.55% a year over the paper-traded momentum rule on the same stocks (luck test t = 1.76), worst fall 22%; exam year +2.9% against that rule's -1.6% - on today's stock list, so flattered by hindsight",
+ "start": "2026-11-11",
+ "as_of": "2026-11-18",
+ "complete_through": "2026-11-18",
+ "capital": 500000.0,
+ "value": 500000.0,
+ "nifty_hold": 497806.36,
+ "state": "waiting for the first month-end",
+ "equity": [
+  [
+   "2026-11-11",
+   500000.0,
+   500000.0
+  ],
+  [
+   "2026-11-12",
+   500000.0,
+   500877.03
+  ],
+  [
+   "2026-11-13",
+   500000.0,
+   497807.37
+  ],
+  [
+   "2026-11-16",
+   500000.0,
+   500713.7
+  ],
+  [
+   "2026-11-17",
+   500000.0,
+   502620.26
+  ],
+  [
+   "2026-11-18",
+   500000.0,
+   497806.36
+  ]
+ ],
+ "open": [],
+ "closed": [],
+ "round_trips": []
+}

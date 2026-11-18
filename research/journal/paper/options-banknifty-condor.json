@@ -8,7 +8,7 @@
  "complete_through": "2026-10-27",
  "capital": 500000.0,
  "value": 501612.37,
- "nifty_hold": 560016.12,
+ "nifty_hold": 490887.08,
  "state": "running",
  "equity": [
   [
@@ -46,5 +46,14 @@
   }
  ],
  "benchmark": "BANKNIFTY",
+ "round_trips": [
+  {
+   "what": "BANKNIFTY (target)",
+   "opened": "2026-10-27",
+   "closed": "2026-10-27",
+   "return_pct": 0.322,
+   "pnl": 1612.37
+  }
+ ],
  "skipped": {}
 }

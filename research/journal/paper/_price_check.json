@@ -1,0 +1,26 @@
+{
+ "sessions": 23,
+ "first": "2026-10-14",
+ "last": "2026-11-17",
+ "no_file": [
+  "2026-10-20",
+  "2026-11-10",
+  "2026-11-18"
+ ],
+ "added_sessions": [],
+ "filled": 33,
+ "filled_examples": [
+  "ALKEM.NS 2026-11-17",
+  "APOLLOHOSP.NS 2026-11-17",
+  "ASTRAL.NS 2026-11-17",
+  "ATGL.NS 2026-11-17",
+  "BAJAJHLDNG.NS 2026-11-17",
+  "BOSCHLTD.NS 2026-11-17",
+  "BRITANNIA.NS 2026-11-17",
+  "CHOLAFIN.NS 2026-11-17",
+  "DMART.NS 2026-11-17",
+  "DRREDDY.NS 2026-11-17"
+ ],
+ "compared": 4613,
+ "disagree": []
+}
