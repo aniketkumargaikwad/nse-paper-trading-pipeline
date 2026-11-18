@@ -451,7 +451,7 @@ def run_day(*, brain: Any, lab: Lab, day: date, max_versions: int, budget_second
 
 def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: bool = False) -> tuple[str, list]:
     """(subject, blocks) in the morning message's layout (research.blocks). The verdict comes first."""
-    from research.blocks import Block, lesson
+    from research.blocks import Block, lesson, marked
     if exam is not None:
         s, b = exam["strategy"], exam["baseline"]
         verdict = (f"PASSED training; exam year {s['cagr_pct']:+.1f}% against the paper rule's "
@@ -462,11 +462,12 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: 
     else:
         verdict = "NOTHING PASSED: no version beats the paper-traded momentum rule by more than luck."
     blocks = [Block(f"📊 Stock momentum research — {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
-                    note=f"Verdict: {verdict}")]
+                    note=marked(exam is not None and exam["strategy"]["cagr_pct"] > exam["baseline"]["cagr_pct"],
+                                f"Verdict: {verdict}"))]
     for v in outcome.versions:
         tag = f"v{v.idea_no}.{v.version_no}"
         if not v.valid:
-            blocks.append(Block(f"{tag} - {v.title or '(no title)'}",
+            blocks.append(Block(marked(False, f"{tag} - {v.title or '(no title)'}"),
                                 note=f"REJECTED by the checker: {(v.error or '').splitlines()[0][:200]}"))
             continue
         d = v.summary.as_dict()
@@ -476,7 +477,7 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: 
                 ("worst fall", f"{st['worst_fall_pct']:.1f}%"), ("beat NIFTY", f"{st['years_beating_pct']:.0f}% of years"),
                 ("result", "PASSES" if d["passes"] else "FAILS"))
         note = " ".join([f"Why: {d['why_not']}." if d["why_not"] else "", lesson(v.review.get("lessons"))]).strip()
-        blocks.append(Block(f"{tag} - {v.title}{mark}", rows, note))
+        blocks.append(Block(marked(d["passes"], f"{tag} - {v.title}{mark}"), rows, note))
     if exam is not None:
         s, b = exam["strategy"], exam["baseline"]
         span = f" {s['start']} to {s['end']}" if s.get("start") and s.get("end") else ""
@@ -485,7 +486,7 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, dry_run: 
             rows.append(("NIFTY 50", f"{s['bench_cagr_pct']:+.1f}%"))
         if s.get("worst_fall_pct") is not None:
             rows.append(("worst fall", f"{s['worst_fall_pct']:.1f}%"))
-        blocks.append(Block(f"Exam year{span}, opened once", tuple(rows)))
+        blocks.append(Block(marked(s["cagr_pct"] > b["cagr_pct"], f"Exam year{span}, opened once"), tuple(rows)))
     blocks.append(Block("How the day ended", (("stopped", STOPPED.get(outcome.stopped_because, outcome.stopped_because)),),
                         outcome.stop_detail[:200] if outcome.stop_detail else ""))
     return f"Stock momentum research {day.isoformat()}: {verdict.split(':')[0].split(';')[0]}"[:120], blocks

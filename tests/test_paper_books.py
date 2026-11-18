@@ -138,7 +138,7 @@ def test_a_book_added_later_starts_on_its_own_day():
     assert pb.rotation_book(late, closes)["start"] == closes.index[500].isoformat()
 
 
-def test_the_monthly_summary_is_sent_once_per_month_and_only_marked_when_delivered(tmp_path, monkeypatch):
+def test_the_weekly_message_goes_out_on_fridays_once_and_only_marked_when_delivered(tmp_path, monkeypatch):
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "paper_books_script", Path(__file__).resolve().parent.parent / "scripts" / "paper_books.py")
@@ -159,12 +159,17 @@ def test_the_monthly_summary_is_sent_once_per_month_and_only_marked_when_deliver
     monkeypatch.setattr(spb, "_load", lambda args: data)
     monkeypatch.setattr(pb, "BOOKS", (pb.Book("t-rot", "rotation", "t", 500_000.0, "t",
                                               variant=Variant("t", 6, 0, 2, False), start=data.index[500]),))
-    spb.main(["--skip-download", "--notify"])            # Telegram fails: nothing remembered
-    assert len(calls) == 1 and not (tmp_path / spb.MONTHLY_MARK).exists()
+    run = ["--skip-download", "--no-nse-check", "--notify"]
+    spb.main([*run, "--today", "2026-11-19"])            # a Thursday: nothing
+    assert calls == []
+    spb.main([*run, "--today", "2026-11-20"])            # Friday, Telegram fails: nothing remembered
+    assert len(calls) == 1 and not (tmp_path / spb.WEEKLY_MARK).exists()
     deliver["ok"] = True
-    spb.main(["--skip-download", "--notify"])            # delivered: remembered
-    spb.main(["--skip-download", "--notify"])            # same month: not sent again
-    assert len(calls) == 2 and (tmp_path / spb.MONTHLY_MARK).read_text().strip() == f"{data.index[-1]:%Y-%m}"
+    spb.main([*run, "--today", "2026-11-20"])            # delivered: remembered
+    spb.main([*run, "--today", "2026-11-20"])            # same week: not sent again
+    assert len(calls) == 2 and (tmp_path / spb.WEEKLY_MARK).read_text().strip() == "2026-W47"
+    spb.main(["--skip-download", "--no-nse-check", "--weekly-now", "--today", "2026-11-23"])  # by hand, a Monday
+    assert len(calls) == 3
 
 
 
@@ -247,7 +252,56 @@ def test_the_job_updates_a_promoted_book_from_nse_levels(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "BOOKS", ())
     monkeypatch.setattr(pb, "OUT", tmp_path / "out")
     monkeypatch.setattr(spb, "_load", lambda args: ohlcv())
-    assert spb.main(["--skip-download"]) == 0
+    assert spb.main(["--skip-download", "--no-nse-check"]) == 0
     assert asked == {"indexes": ["NIFTY 50", "NIFTY200 MOMENTUM 30"], "first_year": pb.START.year - 2}
     saved = json.loads((tmp_path / "out" / "alloc-x.json").read_text(encoding="utf-8"))
     assert saved["kind"] == "alloc" and saved["state"] == "running" and saved["open"][0]["share"] == "100%"
+
+
+def test_a_ten_slot_stock_book_never_holds_more_than_ten(monkeypatch):
+    """17 Nov 2026: open positions looked closed on the last session and the book held 13."""
+    from datetime import datetime, time
+    from backtest_types import SimTrade
+    from config import IST
+    data = ohlcv(days=40)
+    days = list(data.index)
+    stamp = lambda d: datetime.combine(d, time(0), IST)          # noqa: E731
+
+    def trade(i, last):
+        return SimTrade(stamp(days[i]), stamp(days[i]), stamp(last), stamp(last), "long", 1, 100.0, 100.0,
+                        100.0, 100.0, "end_of_data", 0.0, 0.0, 0.0)
+
+    import backtest
+    import strategy.v3
+    trades = {"AAA": [trade(30 + k, days[-1]) for k in range(9)],      # nine held to the end
+              "BBB": [trade(35, days[-1])],                            # the tenth
+              "CCC": [trade(len(days) - 1, days[-1])]}                 # wants in on the last day: no slot
+    monkeypatch.setattr(backtest, "simulate_any", lambda frame, *a, **k: type("R", (), {
+        "trades": trades[next(s for s in trades if abs(frame["close"].iloc[0] - data[(s + ".NS", "Close")].iloc[0]) < 1e-9)]})())
+    monkeypatch.setattr(strategy.v3, "is_v3_document", lambda doc: True)
+    monkeypatch.setattr(strategy.v3, "parse_machine", lambda doc: None)
+    monkeypatch.setattr(pb, "rules", lambda book: {"document": {}})
+    book = pb.Book("t", "stock", "t", pb.SLOTS * pb.NOTIONAL, "t", start=days[20])
+    b = pb.stock_book(book, data, slippage_pct=0.0, cost_model=None)
+    assert len(b["open"]) == 10 and "CCC" not in {o["stock"] for o in b["open"]}
+
+
+def test_every_book_writes_its_trades_in_one_shape(ema_rules):
+    data = ohlcv()
+    b = pb.stock_book(ema_rules, data, start=data.index[400], slippage_pct=0.0, cost_model=HoldingCostModel())
+    assert b["round_trips"] and {"what", "opened", "closed", "return_pct", "pnl"} <= set(b["round_trips"][0])
+    closes = data.xs("Close", axis=1, level=1)
+    r = pb.rotation_book(pb.Book("t", "rotation", "t", 500_000.0, "t", variant=Variant("t", 6, 0, 2, False),
+                                 start=closes.index[400]), closes)
+    closed = [t for t in r["round_trips"] if t["closed"]]
+    held = [t for t in r["round_trips"] if not t["closed"]]
+    assert closed and len(held) == 2 and all("bought_at" in t and "last" in t for t in held)
+
+
+def test_a_stock_book_values_what_it_holds_every_day(ema_rules):
+    """Until 18 Nov 2026 only sold trades moved the daily value: a fall in a held stock never showed."""
+    data = ohlcv()
+    b = pb.stock_book(ema_rules, data, start=data.index[400], slippage_pct=0.0, cost_model=HoldingCostModel())
+    values = [row[1] for row in b["equity"]]
+    assert len(set(round(v) for v in values)) > len(b["closed"]) + 2
+    assert values[-1] == b["value"]

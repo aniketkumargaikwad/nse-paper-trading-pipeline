@@ -19,6 +19,20 @@ from research.message import LABEL_WIDTH, TELEGRAM_LIMIT, first_sentence
 
 LESSON_CHARS = 200
 
+# Telegram cannot colour text (its HTML allows bold, italic, code and links - no colours), so
+# the owner's "red when it fails, green when it passes" (18 Nov 2026) is a coloured circle
+# at the start of the line. Email gets the same characters.
+GREEN, RED, WHITE = "\U0001f7e2", "\U0001f534", "⚪"
+
+
+def mark(ok: bool | None) -> str:
+    """🟢 for a pass, 🔴 for a fail, ⚪ when there is no verdict yet."""
+    return WHITE if ok is None else (GREEN if ok else RED)
+
+
+def marked(ok: bool | None, text: str) -> str:
+    return f"{mark(ok)} {text}"
+
 
 @dataclass(frozen=True)
 class Block:
@@ -71,11 +85,29 @@ def as_html(blocks: Sequence[Block]) -> str:
     return render(blocks, as_html=True)
 
 
-def send(subject: str, blocks: Sequence[Block], *, warn_token: bool = True) -> bool:
+def pack(blocks: Sequence[Block]) -> list[list[Block]]:
+    """Whole blocks grouped into as few Telegram messages as fit, in order - nothing cut.
+
+    A single block too long for one message is still sent alone (and cut by render)."""
+    groups: list[list[Block]] = []
+    for b in blocks:
+        if groups and len(_render([*groups[-1], b], as_html=True)) <= TELEGRAM_LIMIT:
+            groups[-1].append(b)
+        else:
+            groups.append([b])
+    return groups
+
+
+def send(subject: str, blocks: Sequence[Block], *, warn_token: bool = True, split: bool = False) -> bool:
     """Telegram (HTML) and email (plain text), each channel's failure kept to itself.
 
+    Which bot receives it is the workflow's choice: each job hands this the
+    TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID of its own bot (docs/TELEGRAM_BOTS.md).
+    With `split`, a long message goes to Telegram as several, each block whole,
+    instead of losing its last notes; email always gets it in one piece.
+
     Returns whether any channel confirmed delivery."""
-    from research.notify import send_all, token_warning
+    from research.notify import send_all, send_telegram, token_warning
 
     def pair(*names: str) -> tuple[str, ...] | None:
         values = tuple((os.environ.get(n) or "").strip() for n in names)
@@ -85,9 +117,18 @@ def send(subject: str, blocks: Sequence[Block], *, warn_token: bool = True) -> b
     warning = token_warning(os.environ.get("CLAUDE_TOKEN_CREATED", "")) if warn_token else ""
     if warning:
         blocks.append(Block("Claude token", note=warning))
-    results = send_all(as_html(blocks), subject, as_text(blocks),
-                       telegram=pair("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
+    telegram = pair("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
+    groups = pack(blocks) if split else [blocks]
+    body = _render(blocks, as_html=False) if split else as_text(blocks)    # email has no length limit
+    results = send_all(as_html(groups[0]), subject, body,
+                       telegram=telegram,
                        email=pair("GMAIL_USER", "GMAIL_APP_PASSWORD", "NOTIFY_EMAIL"))
+    if telegram and results["telegram"].sent:
+        for group in groups[1:]:
+            more = send_telegram(telegram[0], telegram[1], as_html(group))
+            if not more.sent:
+                results["telegram"] = more
+                break
     for channel, result in results.items():
         print(f"{channel:9s} {'sent' if result.sent else result.detail}")
     return any(r.sent for r in results.values())

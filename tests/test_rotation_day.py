@@ -89,7 +89,7 @@ def test_the_exam_opens_once_and_only_on_a_pass(passes):
     assert lab.calls == (["train", "exam"] if passes else ["train"])
     from research.blocks import as_html, as_text
     _, blocks = rd.message(DAY, outcome, final, exam)
-    assert as_text(blocks).splitlines()[1].startswith("Verdict: PASSED" if passes else "Verdict: NOTHING PASSED")
+    assert as_text(blocks).splitlines()[1].startswith("🟢 Verdict: PASSED" if passes else "🔴 Verdict: NOTHING PASSED")
     assert "<pre>" in as_html(blocks)
 
 

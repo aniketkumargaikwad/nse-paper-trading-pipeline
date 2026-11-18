@@ -739,7 +739,7 @@ def run_day(*, brain: Any, lab: Lab, day: date, max_versions: int, budget_second
 def message(day: date, outcome: Any, final: Any, exam: dict | None, *, board: dict, promoted: str = "",
             dry_run: bool = False) -> tuple[str, list]:
     """(subject, blocks) in the morning message's layout (research.blocks). The verdict comes first."""
-    from research.blocks import Block, lesson
+    from research.blocks import Block, lesson, marked
     tested = [v for v in outcome.versions if v.valid]
     if exam is not None and exam["ok"]:
         verdict = f"A PLAN PASSED, exam year included. {promoted}".strip()
@@ -751,11 +751,11 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, board: di
         verdict = (f"NOTHING PASSED: no plan reached {MIN_MONTH_PCT:g}% a month with a worst fall "
                    f"inside {MAX_FALL_PCT:.0f}% and cleared the luck checks.")
     blocks = [Block(f"📊 Index allocation research — {day.isoformat()}" + (" (dry run, no AI)" if dry_run else ""),
-                    note=f"Verdict: {verdict}")]
+                    note=marked(exam is not None and exam["ok"], f"Verdict: {verdict}"))]
     for v in outcome.versions:
         tag = f"v{v.idea_no}.{v.version_no}"
         if not v.valid:
-            blocks.append(Block(f"{tag} - {v.title or '(no title)'}",
+            blocks.append(Block(marked(False, f"{tag} - {v.title or '(no title)'}"),
                                 note=f"REJECTED by the checker: {(v.error or '').splitlines()[0][:200]}"))
             continue
         s = v.summary.reading
@@ -767,10 +767,10 @@ def message(day: date, outcome: Any, final: Any, exam: dict | None, *, board: di
                 ("result", "PASSES" if v.summary.passes else "FAILS"))
         failed = [c.detail for c in v.summary.checks if not c.ok]
         note = " ".join([f"Why: {'; '.join(failed)}." if failed else "", lesson(v.review.get("lessons"))]).strip()
-        blocks.append(Block(f"{tag} - {v.title}{mark}", rows, note))
+        blocks.append(Block(marked(v.summary.passes, f"{tag} - {v.title}{mark}"), rows, note))
     if exam is not None:
         s = exam["strategy"]
-        blocks.append(Block(f"Exam year {s['start']} to {s['end']}, opened once",
+        blocks.append(Block(marked(exam["ok"], f"Exam year {s['start']} to {s['end']}, opened once"),
                             (("this plan", f"{s['cagr_pct']:+.1f}%"), ("NIFTY 50", f"{s['bench_cagr_pct']:+.1f}%"),
                              ("worst fall", f"{s['worst_fall_pct']:.1f}%"),
                              ("result", "OK" if exam["ok"] else "FAILED")),
