@@ -1,13 +1,13 @@
 {
- "as_of": "2026-11-17",
+ "as_of": "2026-11-18",
  "start": "2026-10-20",
  "capital": 500000.0,
  "state": "cash",
- "value": 502158.32,
- "momentum_hold": 537809.98,
- "nifty_hold": 556790.41,
- "nifty_close": 38607.68,
- "nifty_average": 36303.26,
+ "value": 502238.44,
+ "momentum_hold": 528599.97,
+ "nifty_hold": 553292.56,
+ "nifty_close": 38365.14,
+ "nifty_average": 36304.22,
  "signal_now": "above",
  "decisions": [],
  "equity": [
@@ -130,6 +130,12 @@
    502158.32,
    537809.98,
    556790.41
+  ],
+  [
+   "2026-11-18",
+   502238.44,
+   528599.97,
+   553292.56
   ]
  ]
 }
