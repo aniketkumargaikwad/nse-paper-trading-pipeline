@@ -1,7 +1,7 @@
 {
- "sessions": 24,
+ "sessions": 25,
  "first": "2026-10-14",
- "last": "2026-11-18",
+ "last": "2026-11-19",
  "no_file": [
   "2026-10-20",
   "2026-11-10"
@@ -9,17 +9,17 @@
  "added_sessions": [],
  "filled": 202,
  "filled_examples": [
-  "360ONE.NS 2026-11-18",
-  "ABB.NS 2026-11-18",
-  "ABCAPITAL.NS 2026-11-18",
-  "ADANIENSOL.NS 2026-11-18",
-  "ADANIENT.NS 2026-11-18",
-  "ADANIGREEN.NS 2026-11-18",
-  "ADANIPORTS.NS 2026-11-18",
-  "ADANIPOWER.NS 2026-11-18",
-  "ALKEM.NS 2026-11-18",
-  "AMBUJACEM.NS 2026-11-18"
+  "360ONE.NS 2026-11-19",
+  "ABB.NS 2026-11-19",
+  "ABCAPITAL.NS 2026-11-19",
+  "ADANIENSOL.NS 2026-11-19",
+  "ADANIENT.NS 2026-11-19",
+  "ADANIGREEN.NS 2026-11-19",
+  "ADANIPORTS.NS 2026-11-19",
+  "ADANIPOWER.NS 2026-11-19",
+  "ALKEM.NS 2026-11-19",
+  "AMBUJACEM.NS 2026-11-19"
  ],
- "compared": 4646,
+ "compared": 4848,
  "disagree": []
 }
