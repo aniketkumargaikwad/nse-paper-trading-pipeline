@@ -4,11 +4,11 @@
  "title": "12-0 momentum, 15 stocks, NIFTY 200-day filter (breadth monotonicity, tight end) (AI, 2026-11-14)",
  "training": "+4.31% a year over the paper-traded momentum rule on the same stocks (luck test t = 3.07), worst fall 23%; exam year not opened - on today's stock list, so flattered by hindsight",
  "start": "2026-11-15",
- "as_of": "2026-11-19",
- "complete_through": "2026-11-19",
+ "as_of": "2026-11-20",
+ "complete_through": "2026-11-20",
  "capital": 500000.0,
  "value": 500000.0,
- "nifty_hold": 504412.61,
+ "nifty_hold": 510072.74,
  "state": "waiting for the first month-end",
  "equity": [
   [
@@ -29,7 +29,12 @@
   [
    "2026-11-19",
    500000.0,
-   504412.61
+   504412.64
+  ],
+  [
+   "2026-11-20",
+   500000.0,
+   510072.74
   ]
  ],
  "open": [],

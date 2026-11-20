@@ -4,11 +4,11 @@
  "title": "Midcap150 Momentum 50, vol target 30% + own 100-day average, weekly (AI, 2026-11-17)",
  "training": "1.82% a month (22.5% a year against NIFTY 50's 12.2%), worst fall 27%, luck test t = 3.93 - on NSE's own index histories 2006-04-10 to 2025-11-17, 2008 included, fund fee charged; exam year -8.7% against NIFTY 50's -1.0% - FAILED: 7.7 points behind NIFTY 50 in the exam year (limit 5)",
  "start": "2026-11-18",
- "as_of": "2026-11-19",
- "complete_through": "2026-11-19",
+ "as_of": "2026-11-20",
+ "complete_through": "2026-11-20",
  "capital": 500000.0,
- "value": 501827.88,
- "nifty_hold": 505675.86,
+ "value": 502235.42,
+ "nifty_hold": 511350.15,
  "state": "running",
  "equity": [
   [
@@ -20,6 +20,11 @@
    "2026-11-19",
    501827.88,
    505675.86
+  ],
+  [
+   "2026-11-20",
+   502235.42,
+   511350.15
   ]
  ],
  "open": [
@@ -64,46 +69,46 @@
    "what": "NIFTY MIDCAP150 MOMENTUM 50",
    "opened": "2026-11-18",
    "closed": null,
-   "return_pct": 0.369,
-   "pnl": 368.04,
+   "return_pct": 0.453,
+   "pnl": 451.63,
    "bought_at": 77087.61,
-   "last": 77526.07
+   "last": 77590.63
   },
   {
    "what": "NIFTY MIDCAP150 MOMENTUM 50",
    "opened": "2026-11-18",
    "closed": null,
-   "return_pct": 0.369,
-   "pnl": 368.04,
+   "return_pct": 0.453,
+   "pnl": 451.63,
    "bought_at": 77087.61,
-   "last": 77526.07
+   "last": 77590.63
   },
   {
    "what": "NIFTY MIDCAP150 MOMENTUM 50",
    "opened": "2026-11-18",
    "closed": null,
-   "return_pct": 0.369,
-   "pnl": 368.04,
+   "return_pct": 0.453,
+   "pnl": 451.63,
    "bought_at": 77087.61,
-   "last": 77526.07
+   "last": 77590.63
   },
   {
    "what": "NIFTY MIDCAP150 MOMENTUM 50",
    "opened": "2026-11-18",
    "closed": null,
-   "return_pct": 0.369,
-   "pnl": 368.04,
+   "return_pct": 0.453,
+   "pnl": 451.63,
    "bought_at": 77087.61,
-   "last": 77526.07
+   "last": 77590.63
   },
   {
    "what": "NIFTY MIDCAP150 MOMENTUM 50",
    "opened": "2026-11-18",
    "closed": null,
-   "return_pct": 0.369,
-   "pnl": 368.04,
+   "return_pct": 0.453,
+   "pnl": 451.63,
    "bought_at": 77087.61,
-   "last": 77526.07
+   "last": 77590.63
   }
  ]
 }
