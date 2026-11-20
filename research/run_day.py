@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from config import IST, UTC, get_settings, use_utf8_stdout
-from research.brain import MODEL, BrainError, BrainStopped
+from research.brain import BrainError, BrainStopped, brain_description, make_brain
 from research.evaluate import (
     _PENDING,
     _rupees,
@@ -302,9 +302,16 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     args = parser.parse_args(argv)
     started_at = datetime.now(UTC)
 
+    # Built here, used 60 lines down: a mistyped MODEL_* setting should cost a
+    # second, not the twenty minutes of candle loading that come first.
+    try:
+        client = None if args.dry_run else make_brain()
+    except BrainStopped as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
     from costs import HoldingCostModel
     from db import SupabaseStore
-    from research.brain import Claude
     from research.journal import entries_from_versions, note_rows, write_journal
     from research.loop import DEFAULT_BUDGET_SECONDS, MAX_VERSIONS, run_versions
     from research.checker import check_proposal
@@ -370,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
     print(f"training   before {windows.locked_from}")
     print(f"locked     {windows.locked_from} -> {data_end}  (opened once, at the end)")
     print(f"universe   NIFTY200 as of {as_of} ({len(stocks)} stocks)")
-    print(f"brain      {'dry run - no AI is asked' if args.dry_run else f'claude -p, model {MODEL}, no tools'}")
+    print(f"brain      {'dry run - no AI is asked' if args.dry_run else brain_description()}")
     print(f"versions   up to {max_versions}, budget {budget_seconds / 3600:.1f} h, "
           f"{args.workers} worker(s)")
 
@@ -383,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:        # noqa: PLR0915 - one day
           f"{len(atlas)} baseline(s) in the atlas")
 
     brain: Any = (DryBrain() if args.dry_run
-                  else OpusBrain(Claude(), format_documents(), atlas=atlas))
+                  else OpusBrain(client, format_documents(), atlas=atlas))
 
     # The sweep of each valid version, in the order the loop tested them. The
     # loop's own valid versions come out in that same order, so the two zip
