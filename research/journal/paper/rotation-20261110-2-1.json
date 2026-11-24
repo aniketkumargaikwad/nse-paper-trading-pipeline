@@ -4,11 +4,11 @@
  "title": "12-0 momentum, 20 stocks, own 200-day trend gate, NIFTY 200-day filter (AI, 2026-11-10)",
  "training": "+2.55% a year over the paper-traded momentum rule on the same stocks (luck test t = 1.76), worst fall 22%; exam year +2.9% against that rule's -1.6% - on today's stock list, so flattered by hindsight",
  "start": "2026-11-11",
- "as_of": "2026-11-20",
- "complete_through": "2026-11-20",
+ "as_of": "2026-11-23",
+ "complete_through": "2026-11-23",
  "capital": 500000.0,
  "value": 500000.0,
- "nifty_hold": 510800.81,
+ "nifty_hold": 501872.87,
  "state": "waiting for the first month-end",
  "equity": [
   [
@@ -49,7 +49,12 @@
   [
    "2026-11-20",
    500000.0,
-   510800.81
+   510800.79
+  ],
+  [
+   "2026-11-23",
+   500000.0,
+   501872.87
   ]
  ],
  "open": [],
