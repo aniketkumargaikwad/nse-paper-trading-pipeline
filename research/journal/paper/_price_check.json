@@ -8,19 +8,8 @@
   "2026-11-24"
  ],
  "added_sessions": [],
- "filled": 43,
- "filled_examples": [
-  "ABCAPITAL.NS 2026-11-23",
-  "ASTRAL.NS 2026-11-23",
-  "AUBANK.NS 2026-11-23",
-  "AUROPHARMA.NS 2026-11-23",
-  "BAJAJHLDNG.NS 2026-11-23",
-  "BHARATFORG.NS 2026-11-23",
-  "BHARTIARTL.NS 2026-11-23",
-  "BLUESTARCO.NS 2026-11-23",
-  "BPCL.NS 2026-11-23",
-  "CIPLA.NS 2026-11-23"
- ],
- "compared": 5411,
+ "filled": 0,
+ "filled_examples": [],
+ "compared": 5454,
  "disagree": []
 }

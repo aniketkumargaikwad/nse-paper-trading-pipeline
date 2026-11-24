@@ -152,8 +152,8 @@
    "entry_price": 2028.01,
    "quantity": 49,
    "exit_price": 2275.06,
-   "pnl": 11856.98,
-   "pnl_if_sold_now": 11856.98
+   "pnl": 11856.97,
+   "pnl_if_sold_now": 11856.97
   },
   {
    "stock": "GAIL",
@@ -264,7 +264,7 @@
    "opened": "2026-11-03",
    "closed": null,
    "return_pct": 11.932,
-   "pnl": 11856.98,
+   "pnl": 11856.97,
    "bought_at": 2028.01,
    "last": 2275.06
   },
