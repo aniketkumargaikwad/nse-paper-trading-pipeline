@@ -8,7 +8,7 @@
  "complete_through": "2026-11-23",
  "capital": 500000.0,
  "value": 500000.0,
- "nifty_hold": 501872.87,
+ "nifty_hold": 501872.88,
  "state": "waiting for the first month-end",
  "equity": [
   [
@@ -54,7 +54,7 @@
   [
    "2026-11-23",
    500000.0,
-   501872.87
+   501872.88
   ]
  ],
  "open": [],
