@@ -208,6 +208,18 @@ def week_of(day: date) -> str:
     return f"{y}-W{w:02d}"
 
 
+def week_due(today: date) -> str:
+    """The latest week whose message should be out by `today` (IST): this week from Friday on,
+    the week before on Monday to Thursday."""
+    from datetime import timedelta
+    return week_of(today if today.weekday() >= 4 else today - timedelta(days=7))
+
+
 def due(today: date, sent_for: str) -> bool:
-    """Friday's evening run sends it, once per week."""
-    return today.weekday() == 4 and sent_for != week_of(today)
+    """Whether a run on `today` should send a weekly message not yet sent.
+
+    Friday's run sends it. GitHub starts scheduled runs hours late: on 20 Nov 2026 Friday's
+    run began at 03:44 IST on Saturday, a Friday-only rule sent nothing, and that week's
+    message was lost. Now a run on Saturday sends it, and a Monday run catches up a week
+    whose message never went out."""
+    return sent_for < week_due(today)

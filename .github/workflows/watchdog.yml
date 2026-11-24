@@ -1,0 +1,44 @@
+# Watchdog (scripts/watchdog.py): every scheduled job must actually run.
+#
+# GitHub's schedule is best-effort: jobs start hours late and can be skipped. Every two
+# hours this checks each job's last two days: a skipped day is started, a failed run is
+# re-run once, a schedule GitHub switched off is switched back on - and the alerts bot
+# says so. No real money, no research of its own.
+#
+# Triggers are `schedule` and `workflow_dispatch` ONLY. Never add
+# pull_request or pull_request_target: this repository is public.
+name: watchdog
+
+on:
+  schedule:
+    - cron: "41 */2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+permissions:
+  actions: write          # start a skipped job, re-run a failed one, re-enable a schedule
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check every scheduled job
+        run: python3 scripts/watchdog.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_ALERTS_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_ALERTS_CHAT_ID || secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Say so on Telegram if the watchdog itself failed
+        if: failure()
+        run: python3 scripts/alert_failure.py "watchdog"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_ALERTS_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_ALERTS_CHAT_ID || secrets.TELEGRAM_CHAT_ID }}

@@ -29,3 +29,22 @@ def test_a_missing_recent_file_is_not_yet_proof_of_no_session():
     today = date(2026, 10, 3)
     assert not fno_daily.settled(date(2026, 10, 1), today)
     assert fno_daily.settled(date(2026, 9, 29), today)
+
+
+def test_a_recent_day_nse_answers_with_a_web_page_does_not_fail_the_job(monkeypatch, tmp_path):
+    """20 Nov 2026: Friday's run started after midnight IST and asked NSE for Saturday."""
+    from fno import nse_files, store
+    today = fno_daily.datetime.now(fno_daily.IST).date()
+    monkeypatch.setattr(store, "root_dir", lambda: tmp_path)
+    monkeypatch.setattr(store, "load_ledger", lambda root: {})
+
+    def blocked(day, session):
+        raise nse_files.NseFileError(f"{day}: HTTP 200, 19607 bytes, not a zip")
+
+    monkeypatch.setattr(nse_files, "download", blocked)
+    monkeypatch.setattr(fno_daily, "PAUSE_SECONDS", 0)
+    monkeypatch.setattr(fno_daily, "RETRIES", 1)
+    monkeypatch.setattr(store, "write_days", lambda root, pending: None)
+    assert fno_daily.main(["--from", today.isoformat(), "--skip-participants", "--skip-vix"]) == 0
+    old = date(2020, 1, 6)
+    assert fno_daily.main(["--from", old.isoformat(), "--to", old.isoformat(), "--skip-participants", "--skip-vix"]) == 1

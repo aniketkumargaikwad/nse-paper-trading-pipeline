@@ -85,6 +85,23 @@ def as_html(blocks: Sequence[Block]) -> str:
     return render(blocks, as_html=True)
 
 
+def promote_each(versions, promote_one) -> str:
+    """Run `promote_one(version)` -> (entry, words) for each version; one line for the message.
+
+    A failure is written into that line, never raised: on 19 Nov 2026 a KeyError here
+    crashed the index research AFTER its research, so a plan that passed was neither
+    saved nor paper-traded, and no message went out."""
+    said = []
+    for v in versions:
+        try:
+            _, words = promote_one(v)
+        except Exception as exc:        # noqa: BLE001 - the day's message matters more
+            words = f"could NOT be added to paper trading ({type(exc).__name__}: {exc}) - see the job log"
+            print(f"WARNING: v{v.idea_no}.{v.version_no}: {words}")
+        said.append(f"v{v.idea_no}.{v.version_no} {words}")
+    return "; ".join(said)
+
+
 def pack(blocks: Sequence[Block]) -> list[list[Block]]:
     """Whole blocks grouped into as few Telegram messages as fit, in order - nothing cut.
 

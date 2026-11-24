@@ -10,7 +10,7 @@ tells you what a message is about.
 | **Index research** | The AI's index-plan research results, 🟢 pass / 🔴 fail | Tue, Thu, Sat mornings | `TELEGRAM_RESEARCH_BOT_TOKEN` |
 | **Options research** | The AI's options research results, 🟢 / 🔴 | Mon, Wed, Fri mornings | `TELEGRAM_OPTIONS_BOT_TOKEN` |
 | **Paper trading** | The weekly paper-trading update, every strategy in its own box | Friday evenings | `TELEGRAM_PAPER_BOT_TOKEN` |
-| **Alerts** | "A job FAILED" warnings only | Only when something breaks | `TELEGRAM_ALERTS_BOT_TOKEN` |
+| **Alerts** | "A job FAILED" warnings, and the watchdog's notes (a job GitHub skipped and it started, a failed job it re-ran) | Only when something goes wrong | `TELEGRAM_ALERTS_BOT_TOKEN` |
 
 Until you add a bot, its messages keep coming from your current bot
 (`TELEGRAM_BOT_TOKEN`), so nothing stops working while you set them up.

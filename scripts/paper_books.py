@@ -101,7 +101,10 @@ def main(argv: list[str] | None = None) -> int:
         latest = max(closes.index)
         blocks = pw.message(books, latest, price_check=check.line() if check is not None else "")
         if send(f"Paper trading, week to {latest}", blocks, warn_token=False, split=True):
-            mark.write_text(pw.week_of(today) + "\n", encoding="utf-8")
+            mark.write_text(max(pw.week_due(today), sent_for) + "\n", encoding="utf-8")
+        else:
+            print("ERROR: the weekly message reached no channel; the next run tries again", file=sys.stderr)
+            failed = True       # the job fails, so the alert step says so
     return 1 if failed else 0
 
 

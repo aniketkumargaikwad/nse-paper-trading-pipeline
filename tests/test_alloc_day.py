@@ -347,3 +347,34 @@ def test_main_with_a_pass_starts_a_paper_book(tmp_path, monkeypatch, capsys):
     assert "A PLAN PASSED" in out and "PAPER-TRADED from" in out
     assert len(json.loads((tmp_path / ad.PROMOTED).read_text(encoding="utf-8"))) == 1
     assert len((tmp_path / ad.DIR / ad.EXAMS).read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_a_pass_is_added_even_when_other_research_tracks_share_the_file(tmp_path):
+    """19 Nov 2026: a rotation row (no plan document) in promoted.json crashed the day after its research."""
+    import json
+    from types import SimpleNamespace
+    from research import alloc_day as ad
+    path = tmp_path / ad.PROMOTED
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps([{"kind": "rotation", "key": "r", "variant": {}, "day": "2026-11-10"}]),
+                    encoding="utf-8")
+    reading = {"avg_month_pct": 1.6, "cagr_pct": 20.0, "bench_cagr_pct": 12.0, "worst_fall_pct": 27.0,
+               "alpha_t": 3.2, "start": "2006-04-10", "end": "2025-11-18"}
+    version = SimpleNamespace(title="P", checked=SimpleNamespace(document={"version": "alloc/1", "name": "x"}),
+                              summary=SimpleNamespace(reading=reading))
+    entry, said = ad.promote(DAY, version, None, root=tmp_path)
+    assert entry is not None and "PAPER-TRADED" in said
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    assert [r.get("kind", "alloc") for r in rows] == ["rotation", "alloc"]
+    assert [r["key"] for r in ad.read_promoted(tmp_path)] == [entry["key"]]
+
+
+def test_a_failure_while_paper_trading_a_pass_is_reported_not_raised():
+    from types import SimpleNamespace
+    from research.blocks import promote_each
+
+    def boom(v):
+        raise KeyError("document")
+
+    said = promote_each([SimpleNamespace(idea_no=1, version_no=1)], boom)
+    assert said.startswith("v1.1 could NOT be added to paper trading")

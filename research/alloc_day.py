@@ -660,9 +660,14 @@ def write_note(day: date, versions: Sequence[Any], root: Path | None = None) -> 
 
 # --- promotion: a pass starts paper-trading by itself ----------------------------------
 
-def read_promoted(root: Path | None = None) -> list[dict]:
+def read_promoted(root: Path | None = None, *, everything: bool = False) -> list[dict]:
+    """This research's own rows (index plans), or with `everything` every track's.
+
+    The file is shared: rows with a "kind" (rotation, options) belong to the other research
+    tracks and have no plan document - reading them as plans crashed the day on 19 Nov 2026."""
     p = (root or Path(".")) / PROMOTED
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+    rows = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+    return rows if everything else [r for r in rows if r.get("kind", "alloc") == "alloc"]
 
 
 def promote(day: date, version: Any, exam: dict | None, root: Path | None = None) -> tuple[dict | None, str]:
@@ -671,7 +676,8 @@ def promote(day: date, version: Any, exam: dict | None, root: Path | None = None
     Since 18 Nov 2026 (the owner's choice) EVERY version that passes training is paper-traded,
     whatever its exam year said - the exam is still run on the day's best and reported, and
     the paper book is where it is judged. `exam` is None for a passer that was not examined."""
-    rows = read_promoted(root)
+    every = read_promoted(root, everything=True)
+    rows = [r for r in every if r.get("kind", "alloc") == "alloc"]
     doc = {k: v for k, v in version.checked.document.items() if k != "name"}
     if any({k: v for k, v in r["document"].items() if k != "name"} == doc for r in rows):
         return None, "this exact plan is already paper-traded"
@@ -697,7 +703,7 @@ def promote(day: date, version: Any, exam: dict | None, root: Path | None = None
     }
     path = (root or Path(".")) / PROMOTED
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes((json.dumps([*rows, entry], indent=1, default=str) + "\n").encode("utf-8"))
+    path.write_bytes((json.dumps([*every, entry], indent=1, default=str) + "\n").encode("utf-8"))
     return entry, f"now PAPER-TRADED from {start.isoformat()} (Paper books: {entry['key']})"
 
 
@@ -872,26 +878,32 @@ def main(argv: list[str] | None = None) -> int:
     outcome, final, exam = run_day(brain=brain, lab=lab, day=day, max_versions=args.max_versions or MAX_VERSIONS,
                                    budget_seconds=args.budget_seconds, notes_=notes(), ideas=ideas_tried(),
                                    seen=None if args.dry_run else tested_before(ledger, lab.menu))
-    promoted = ""
-    if not args.no_save and not args.dry_run:
-        said = []
-        for v in [v for v in outcome.versions if v.valid and v.summary.passes]:
-            _, words = promote(day, v, exam if final is not None and v is final[0] else None)
-            said.append(f"v{v.idea_no}.{v.version_no} {words}")
-        promoted = "; ".join(said)
-    from research.blocks import as_text, send
-    board = closest(board_rows(reference, ledger, outcome.versions))
-    subject, blocks = message(day, outcome, final, exam, board=board, promoted=promoted, dry_run=args.dry_run)
-    print("\n" + as_text(blocks))
+    from research.blocks import Block, as_text, promote_each, send
+    # The day's results are written FIRST: the ledger keeps every version's full plan, so
+    # whatever fails after this, nothing the research found is lost (19 Nov 2026 lost one).
     if not args.no_save:
         _append(_path(LEDGER, None), version_rows(day, outcome.versions))
         print(f"\njournal    {write_note(day, outcome.versions)}")
         if exam is not None:
             _append(_path(EXAMS, None), [exam])
-        if args.commit_journal:
-            _commit(day)
-    if args.notify:
-        send(subject, blocks)
+    promoted = ""
+    if not args.no_save and not args.dry_run:
+        promoted = promote_each([v for v in outcome.versions if v.valid and v.summary.passes],
+                                lambda v: promote(day, v, exam if final is not None and v is final[0] else None))
+    try:
+        board = closest(board_rows(reference, ledger, outcome.versions))
+        subject, blocks = message(day, outcome, final, exam, board=board, promoted=promoted, dry_run=args.dry_run)
+    except Exception as exc:        # noqa: BLE001 - a plain message beats none
+        subject = f"Index allocation research {day.isoformat()}"
+        blocks = [Block(f"📊 Index allocation research — {day.isoformat()}",
+                        note=f"The day ran, but its message could not be built ({type(exc).__name__}: {exc}). "
+                             f"Paper trading: {promoted or 'nothing passed'}. The notes are in the journal.")]
+    print("\n" + as_text(blocks))
+    if not args.no_save and args.commit_journal:
+        _commit(day)
+    if args.notify and not send(subject, blocks):
+        print("ERROR: the message reached no channel", file=sys.stderr)
+        return 1                    # the job fails, so the alert step says so
     return 0
 
 

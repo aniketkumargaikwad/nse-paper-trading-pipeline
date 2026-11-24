@@ -30,7 +30,7 @@ from fno import atlas, report, rules, store
 from fno.ai import ledger, prompts
 from fno.ai.checker import check_proposal
 from fno.ai.summary import OptionsSummary, index_summary, one_line, score
-from research.blocks import Block, as_text, lesson, marked, send
+from research.blocks import Block, as_text, lesson, marked, promote_each, send
 from research.run_day import OpusBrain, choose_final, nothing_to_commit
 
 DRY_RUN_TITLE = "Dry run placeholder (no AI)"
@@ -339,27 +339,32 @@ def main(argv: list[str] | None = None) -> int:
     outcome, final, pick, exam = run_day(brain=brain, lab=lab, day=day,
                                          max_versions=args.max_versions or MAX_VERSIONS,
                                          budget_seconds=args.budget_seconds, notes=notes, ideas=ideas)
-    promoted = ""
-    if not args.no_save and not args.dry_run:
-        said = []
-        for v in [v for v in outcome.versions if v.valid and v.summary.pick() is not None]:
-            mine = exam if final is not None and v is final[0] else None
-            _, words = promote(day, v, v.summary.pick(), mine)
-            said.append(f"v{v.idea_no}.{v.version_no} {words}")
-        promoted = "; ".join(said)
-        if promoted:
-            print(f"paper      {promoted}")
-    subject, blocks = message(day, outcome, final, pick, exam, dry_run=args.dry_run, promoted=promoted)
-    print("\n" + as_text(blocks))
+    # The day's results first (see research/alloc_day.py: 19 Nov 2026 lost a day after its research).
     if not args.no_save:
         ledger.append_versions(ledger.version_rows(day, outcome.versions))
         print(f"\njournal    {ledger.write_note(day, outcome.versions)}")
         if exam is not None:
             ledger.append_exam(exam)
-        if args.commit_journal:
-            commit(day)
-    if args.notify:
-        send(subject, blocks)
+    promoted = ""
+    if not args.no_save and not args.dry_run:
+        promoted = promote_each(
+            [v for v in outcome.versions if v.valid and v.summary.pick() is not None],
+            lambda v: promote(day, v, v.summary.pick(), exam if final is not None and v is final[0] else None))
+        if promoted:
+            print(f"paper      {promoted}")
+    try:
+        subject, blocks = message(day, outcome, final, pick, exam, dry_run=args.dry_run, promoted=promoted)
+    except Exception as exc:        # noqa: BLE001 - a plain message beats none
+        subject = f"Options research {day.isoformat()}"
+        blocks = [Block(f"📊 Options research — {day.isoformat()}",
+                        note=f"The day ran, but its message could not be built ({type(exc).__name__}: {exc}). "
+                             f"Paper trading: {promoted or 'nothing passed'}. The notes are in the journal.")]
+    print("\n" + as_text(blocks))
+    if not args.no_save and args.commit_journal:
+        commit(day)
+    if args.notify and not send(subject, blocks):
+        print("ERROR: the message reached no channel", file=sys.stderr)
+        return 1                    # the job fails, so the alert step says so
     return 0
 
 

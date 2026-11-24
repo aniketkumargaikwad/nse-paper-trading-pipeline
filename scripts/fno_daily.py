@@ -104,6 +104,16 @@ def main(argv: list[str] | None = None) -> int:
             pending.append((day, frame))
             if len(pending) >= BATCH:
                 flush()
+        except nse_files.NseFileError as exc:
+            # 20 Nov 2026: GitHub started Friday's run after midnight IST, the job asked NSE
+            # for Saturday, NSE answered with a web page instead of "no file", and the run
+            # failed. A recent day NSE has not published is not an error: the next run asks
+            # again, and only a day older than LATE_DAYS stops the job.
+            if not settled(day, today):
+                print(f"  {day}: not published yet ({exc}) - asked again next run", flush=True)
+                continue
+            print(f"STOPPED at {day}: {exc}\nRun again to resume from there.", file=sys.stderr)
+            return 1
         except Exception as exc:                       # noqa: BLE001 - report and stop
             print(f"STOPPED at {day}: {exc}\nRun again to resume from there.", file=sys.stderr)
             return 1

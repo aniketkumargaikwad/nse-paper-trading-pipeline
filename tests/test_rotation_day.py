@@ -141,7 +141,7 @@ def test_the_whole_day_runs_through_to_the_message(monkeypatch, tmp_path, capsys
     monkeypatch.setattr(rd, "CLOSES", path)
     monkeypatch.setattr(rd, "notes", lambda *a, **k: [])
     monkeypatch.setattr(rd, "ideas_tried", lambda *a, **k: [])
-    monkeypatch.setattr(research.blocks, "send", lambda subject, blocks, **k: sent.append(subject))
+    monkeypatch.setattr(research.blocks, "send", lambda subject, blocks, **k: sent.append(subject) or True)
     assert rd.main(["--dry-run", "--no-save", "--skip-download", "--notify"]) == 0
     assert "Verdict:" in capsys.readouterr().out
     assert sent and sent[0].startswith("Stock momentum research")

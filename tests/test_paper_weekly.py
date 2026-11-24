@@ -70,8 +70,16 @@ def test_rupees_use_indian_grouping():
 
 
 def test_it_is_due_on_friday_once_a_week():
-    assert pw.due(date(2026, 11, 20), "") and not pw.due(date(2026, 11, 20), "2026-W47")
-    assert not pw.due(date(2026, 11, 19), "")
+    assert pw.due(date(2026, 11, 20), "2026-W46") and not pw.due(date(2026, 11, 20), "2026-W47")
+    assert not pw.due(date(2026, 11, 19), "2026-W46")
+
+
+def test_a_late_friday_run_or_a_missed_week_still_sends():
+    """20 Nov 2026: Friday's run started on Saturday at 03:44 IST and nothing was sent."""
+    assert pw.due(date(2026, 11, 21), "2026-W46")              # Friday's run, started on Saturday
+    assert pw.due(date(2026, 11, 23), "2026-W46")              # Friday missed: Monday catches up
+    assert not pw.due(date(2026, 11, 23), "2026-W47")          # sent on Friday: Monday sends nothing
+    assert pw.week_due(date(2026, 11, 23)) == "2026-W47"
 
 
 def test_a_long_message_is_split_into_whole_blocks():

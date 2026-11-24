@@ -574,25 +574,26 @@ def main(argv: list[str] | None = None) -> int:
     brain: Any = DryBrain() if args.dry_run else RotationBrain(Claude(), baseline=base)
     outcome, final, exam = run_day(brain=brain, lab=lab, day=day, max_versions=args.max_versions or MAX_VERSIONS,
                                    budget_seconds=args.budget_seconds, notes_=n, ideas=ideas)
-    from research.blocks import Block, as_text, send
-    subject, blocks = message(day, outcome, final, exam, dry_run=args.dry_run)
-    if not args.no_save and not args.dry_run:
-        said = []
-        for v in [v for v in outcome.versions if v.valid and v.summary.passes]:
-            _, words = promote(day, v, exam if final is not None and v is final[0] else None)
-            said.append(f"v{v.idea_no}.{v.version_no} {words}")
-        if said:
-            blocks.insert(1, Block("Paper trading", note="; ".join(said) + "."))
-    print("\n" + as_text(blocks))
+    from research.blocks import Block, as_text, promote_each, send
+    # The day's results first (see research/alloc_day.py: 19 Nov 2026 lost a day after its research).
     if not args.no_save:
         _append(_path(LEDGER, None), version_rows(day, outcome.versions))
         print(f"\njournal    {write_note(day, outcome.versions)}")
         if exam is not None:
             _append(_path(EXAMS, None), [exam])
-        if args.commit_journal:
-            _commit(day)
-    if args.notify:
-        send(subject, blocks)
+    said = ""
+    if not args.no_save and not args.dry_run:
+        said = promote_each([v for v in outcome.versions if v.valid and v.summary.passes],
+                            lambda v: promote(day, v, exam if final is not None and v is final[0] else None))
+    subject, blocks = message(day, outcome, final, exam, dry_run=args.dry_run)
+    if said:
+        blocks.insert(1, Block("Paper trading", note=said + "."))
+    print("\n" + as_text(blocks))
+    if not args.no_save and args.commit_journal:
+        _commit(day)
+    if args.notify and not send(subject, blocks):
+        print("ERROR: the message reached no channel", file=sys.stderr)
+        return 1
     return 0
 
 

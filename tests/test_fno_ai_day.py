@@ -117,7 +117,7 @@ def test_the_whole_day_runs_through_to_the_message(monkeypatch, capsys):
     monkeypatch.setattr(options_day.ledger, "notes", lambda **k: [])
     monkeypatch.setattr(options_day.ledger, "ideas_tried", lambda **k: [])
     monkeypatch.setattr(options_day.prompts, "atlas_lines", lambda root: [])
-    monkeypatch.setattr(options_day, "send", lambda subject, blocks: sent.append((subject, blocks)))
+    monkeypatch.setattr(options_day, "send", lambda subject, blocks: sent.append((subject, blocks)) or True)
     assert options_day.main(["--dry-run", "--no-save", "--notify"]) == 0
     assert "Verdict: NOTHING PASSED" in capsys.readouterr().out
     assert sent and sent[0][0].startswith("Options research")

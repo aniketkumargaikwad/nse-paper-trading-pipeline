@@ -26,6 +26,11 @@ had a single day**, so no result can bend it. It lives in code too
 | Weekday evenings | `momentum-paper`, `paper-books` | every paper book recomputed, its prices checked against NSE's official closing files (missing ones filled from them); the dashboard updates |
 | Friday evening | `paper-books` | the weekly message from the **paper trading** bot: every book in its own box - return since added, average month, win rate, profit factor, reward : risk, trades a month, worst fall, what it holds at what price (it replaced the monthly message on 18 Nov 2026) |
 
+Every two hours the `watchdog` job (since 24 Nov 2026, `scripts/watchdog.py`) checks that each job above
+actually ran on its day: GitHub starts scheduled jobs hours late and can skip them. A skipped day is
+started, a failed run is re-run once, and the alerts bot says so. A research day or the weekly message
+that cannot reach Telegram now fails its job, so it is never silent.
+
 Since 15 Nov 2026 a job that crashes sends a Telegram message the same hour
 (`scripts/alert_failure.py`), from the **alerts** bot. Which bot sends what: `docs/TELEGRAM_BOTS.md`. GitHub starts these late, often by 4-5 hours. Email messages need the
 `GMAIL_USER`, `GMAIL_APP_PASSWORD` and `NOTIFY_EMAIL` secrets, which are empty;

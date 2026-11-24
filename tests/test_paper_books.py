@@ -160,13 +160,14 @@ def test_the_weekly_message_goes_out_on_fridays_once_and_only_marked_when_delive
     monkeypatch.setattr(pb, "BOOKS", (pb.Book("t-rot", "rotation", "t", 500_000.0, "t",
                                               variant=Variant("t", 6, 0, 2, False), start=data.index[500]),))
     run = ["--skip-download", "--no-nse-check", "--notify"]
+    (tmp_path / spb.WEEKLY_MARK).write_text("2026-W46\n", encoding="utf-8")     # last week's went out
     spb.main([*run, "--today", "2026-11-19"])            # a Thursday: nothing
     assert calls == []
-    spb.main([*run, "--today", "2026-11-20"])            # Friday, Telegram fails: nothing remembered
-    assert len(calls) == 1 and not (tmp_path / spb.WEEKLY_MARK).exists()
+    assert spb.main([*run, "--today", "2026-11-20"]) == 1   # Friday, Telegram fails: the job fails
+    assert len(calls) == 1 and (tmp_path / spb.WEEKLY_MARK).read_text().strip() == "2026-W46"
     deliver["ok"] = True
-    spb.main([*run, "--today", "2026-11-20"])            # delivered: remembered
-    spb.main([*run, "--today", "2026-11-20"])            # same week: not sent again
+    spb.main([*run, "--today", "2026-11-21"])            # the next run (late, on Saturday) delivers it
+    spb.main([*run, "--today", "2026-11-23"])            # same week already sent: Monday sends nothing
     assert len(calls) == 2 and (tmp_path / spb.WEEKLY_MARK).read_text().strip() == "2026-W47"
     spb.main(["--skip-download", "--no-nse-check", "--weekly-now", "--today", "2026-11-23"])  # by hand, a Monday
     assert len(calls) == 3
