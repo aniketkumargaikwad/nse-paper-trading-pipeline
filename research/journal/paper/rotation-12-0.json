@@ -4,11 +4,11 @@
  "title": "Momentum rotation, 20 stocks, no skip month (AI, 12 Nov)",
  "training": "+2.8% a year over the paper-traded momentum rule on the same stocks (luck test t = 2.04), worst fall 22%; exam year +1.8% against that rule's -1.6% - on today's stock list, so flattered by hindsight",
  "start": "2026-11-16",
- "as_of": "2026-11-23",
- "complete_through": "2026-11-23",
+ "as_of": "2026-11-25",
+ "complete_through": "2026-11-25",
  "capital": 500000.0,
  "value": 500000.0,
- "nifty_hold": 501157.54,
+ "nifty_hold": 510441.44,
  "state": "waiting for the first month-end",
  "equity": [
   [
@@ -40,6 +40,11 @@
    "2026-11-23",
    500000.0,
    501157.54
+  ],
+  [
+   "2026-11-25",
+   500000.0,
+   510441.44
   ]
  ],
  "open": [],

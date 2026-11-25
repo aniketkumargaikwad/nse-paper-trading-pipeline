@@ -4,11 +4,11 @@
  "title": "Momentum rotation, 20 stocks (R1)",
  "training": "3.1% a month in training, worst fall 43% - on today's stock list, about 1% a month of it hindsight",
  "start": "2026-10-21",
- "as_of": "2026-11-23",
- "complete_through": "2026-11-23",
+ "as_of": "2026-11-25",
+ "complete_through": "2026-11-25",
  "capital": 500000.0,
- "value": 518130.64,
- "nifty_hold": 555636.8,
+ "value": 517480.52,
+ "nifty_hold": 565929.92,
  "state": "running",
  "equity": [
   [
@@ -125,6 +125,11 @@
    "2026-11-23",
    518130.64,
    555636.8
+  ],
+  [
+   "2026-11-25",
+   517480.52,
+   565929.92
   ]
  ],
  "open": [
@@ -222,181 +227,181 @@
    "what": "LAURUSLABS",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 0.81,
-   "pnl": 202.05,
+   "return_pct": 4.615,
+   "pnl": 1151.36,
    "bought_at": 2347.0,
-   "last": 2370.7
+   "last": 2460.0
   },
   {
    "what": "MCX",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 10.037,
-   "pnl": 2504.23,
+   "return_pct": 9.526,
+   "pnl": 2376.76,
    "bought_at": 3249.0,
-   "last": 3581.6
+   "last": 3565.0
   },
   {
    "what": "POWERINDIA",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 7.492,
-   "pnl": 1869.33,
+   "return_pct": 5.819,
+   "pnl": 1451.72,
    "bought_at": 28080.0,
-   "last": 30240.0
+   "last": 29770.0
   },
   {
    "what": "BHEL",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 5.054,
-   "pnl": 1260.93,
+   "return_pct": 4.497,
+   "pnl": 1121.95,
    "bought_at": 394.95,
-   "last": 415.7
+   "last": 413.5
   },
   {
    "what": "MOTHERSON",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 4.052,
-   "pnl": 1010.87,
+   "return_pct": 4.366,
+   "pnl": 1089.33,
    "bought_at": 159.0,
-   "last": 165.76
+   "last": 166.26
   },
   {
    "what": "AUROPHARMA",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 6.897,
-   "pnl": 1720.87,
+   "return_pct": 9.669,
+   "pnl": 2412.5,
    "bought_at": 1677.45,
-   "last": 1796.5
+   "last": 1843.0
   },
   {
    "what": "IDEA",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -2.976,
-   "pnl": -742.39,
+   "return_pct": -4.771,
+   "pnl": -1190.47,
    "bought_at": 12.25,
-   "last": 11.91
+   "last": 11.69
   },
   {
    "what": "NATIONALUM",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -7.893,
-   "pnl": -1969.36,
+   "return_pct": -11.247,
+   "pnl": -2806.07,
    "bought_at": 323.54,
-   "last": 298.65
+   "last": 287.8
   },
   {
    "what": "BHARATFORG",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -1.991,
-   "pnl": -496.71,
+   "return_pct": -1.215,
+   "pnl": -303.19,
    "bought_at": 1753.4,
-   "last": 1722.0
+   "last": 1735.6
   },
   {
    "what": "SOLARINDS",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -6.682,
-   "pnl": -1667.2,
+   "return_pct": -7.145,
+   "pnl": -1782.72,
    "bought_at": 19438.0,
-   "last": 18178.0
+   "last": 18088.0
   },
   {
    "what": "DIVISLAB",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 12.444,
-   "pnl": 3104.76,
+   "return_pct": 17.607,
+   "pnl": 4392.96,
    "bought_at": 9945.5,
-   "last": 11203.0
+   "last": 11716.5
   },
   {
    "what": "RADICO",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 12.885,
-   "pnl": 3214.9,
+   "return_pct": 14.41,
+   "pnl": 3595.23,
    "bought_at": 4100.0,
-   "last": 4636.5
+   "last": 4699.0
   },
   {
    "what": "GVT&D",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 0.267,
-   "pnl": 66.62,
+   "return_pct": -2.727,
+   "pnl": -680.3,
    "bought_at": 4175.5,
-   "last": 4195.0
+   "last": 4070.0
   },
   {
    "what": "ADANIENSOL",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 6.484,
-   "pnl": 1617.78,
+   "return_pct": 1.984,
+   "pnl": 495.13,
    "bought_at": 1377.9,
-   "last": 1470.0
+   "last": 1408.0
   },
   {
    "what": "FEDERALBNK",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 6.407,
-   "pnl": 1598.65,
+   "return_pct": 5.341,
+   "pnl": 1332.51,
    "bought_at": 337.5,
-   "last": 359.8
+   "last": 356.2
   },
   {
    "what": "SHRIRAMFIN",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 15.153,
-   "pnl": 3780.67,
+   "return_pct": 14.464,
+   "pnl": 3608.72,
    "bought_at": 863.35,
-   "last": 995.9
+   "last": 989.95
   },
   {
    "what": "TORNTPHARM",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 3.471,
-   "pnl": 866.11,
+   "return_pct": 6.34,
+   "pnl": 1581.76,
    "bought_at": 4595.0,
-   "last": 4763.7
+   "last": 4895.5
   },
   {
    "what": "SAIL",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -2.196,
-   "pnl": -547.99,
+   "return_pct": -2.741,
+   "pnl": -683.84,
    "bought_at": 165.3,
-   "last": 162.0
+   "last": 161.1
   },
   {
    "what": "ABB",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 3.868,
-   "pnl": 965.11,
+   "return_pct": 6.292,
+   "pnl": 1569.96,
    "bought_at": 6600.0,
-   "last": 6868.5
+   "last": 7028.5
   },
   {
    "what": "OFSS",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": -0.908,
-   "pnl": -226.58,
+   "return_pct": -5.013,
+   "pnl": -1250.8,
    "bought_at": 9744.0,
-   "last": 9675.0
+   "last": 9275.0
   }
  ]
 }

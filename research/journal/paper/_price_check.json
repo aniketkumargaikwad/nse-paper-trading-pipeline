@@ -1,15 +1,26 @@
 {
- "sessions": 27,
+ "sessions": 28,
  "first": "2026-10-14",
- "last": "2026-11-23",
+ "last": "2026-11-25",
  "no_file": [
   "2026-10-20",
   "2026-11-10",
   "2026-11-24"
  ],
  "added_sessions": [],
- "filled": 0,
- "filled_examples": [],
+ "filled": 202,
+ "filled_examples": [
+  "360ONE.NS 2026-11-25",
+  "ABB.NS 2026-11-25",
+  "ABCAPITAL.NS 2026-11-25",
+  "ADANIENSOL.NS 2026-11-25",
+  "ADANIENT.NS 2026-11-25",
+  "ADANIGREEN.NS 2026-11-25",
+  "ADANIPORTS.NS 2026-11-25",
+  "ADANIPOWER.NS 2026-11-25",
+  "ALKEM.NS 2026-11-25",
+  "AMBUJACEM.NS 2026-11-25"
+ ],
  "compared": 5454,
  "disagree": []
 }
