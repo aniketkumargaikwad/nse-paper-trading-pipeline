@@ -1,0 +1,16 @@
+{
+ "key": "alloc-20261126-1",
+ "kind": "alloc",
+ "title": "Midcap150 Momentum 50, falling back to Alpha Low-Vol 30, own 100-day, vol 30% (AI, 2026-11-26)",
+ "training": "1.84% a month (22.7% a year against NIFTY 50's 12.2%), worst fall 27%, luck test t = 3.96 - on NSE's own index histories 2006-04-10 to 2025-11-26, 2008 included, fund fee charged; exam year -14.6% against NIFTY 50's -0.2% - FAILED: 14.3 points behind NIFTY 50 in the exam year (limit 5)",
+ "start": "2026-11-27",
+ "as_of": "2026-11-26",
+ "complete_through": null,
+ "capital": 500000.0,
+ "value": 500000.0,
+ "nifty_hold": 500000.0,
+ "state": "not started",
+ "equity": [],
+ "open": [],
+ "closed": []
+}

@@ -4,11 +4,11 @@
  "title": "Midcap150 Momentum 50, vol target 30% + own 150-day average, weekly (AI, 2026-11-17)",
  "training": "1.64% a month (19.8% a year against NIFTY 50's 12.2%), worst fall 29%, luck test t = 3.03 - on NSE's own index histories 2006-04-10 to 2025-11-17, 2008 included, fund fee charged; exam year not opened (only the day's best passer is examined)",
  "start": "2026-11-18",
- "as_of": "2026-11-25",
- "complete_through": "2026-11-25",
+ "as_of": "2026-11-26",
+ "complete_through": "2026-11-26",
  "capital": 500000.0,
- "value": 496022.84,
- "nifty_hold": 511719.1,
+ "value": 499683.11,
+ "nifty_hold": 513012.59,
  "state": "running",
  "equity": [
   [
@@ -35,16 +35,21 @@
    "2026-11-25",
    496022.84,
    511719.1
+  ],
+  [
+   "2026-11-26",
+   499683.11,
+   513012.59
   ]
  ],
  "open": [
   {
    "holding": "NIFTY MIDCAP150 MOMENTUM 50",
-   "share": "80%"
+   "share": "60%"
   },
   {
    "holding": "cash (6% a year)",
-   "share": "20%"
+   "share": "40%"
   }
  ],
  "closed": [
@@ -77,6 +82,11 @@
    "decided": "2026-11-23",
    "filled": "2026-11-25",
    "action": "part 2: all to cash"
+  },
+  {
+   "decided": "2026-11-25",
+   "filled": "2026-11-26",
+   "action": "part 3: all to cash"
   }
  ],
  "round_trips": [
@@ -92,38 +102,38 @@
   {
    "what": "NIFTY MIDCAP150 MOMENTUM 50",
    "opened": "2026-11-18",
-   "closed": null,
-   "return_pct": -0.742,
-   "pnl": -741.01,
+   "closed": "2026-11-26",
+   "return_pct": 0.023,
+   "pnl": 22.81,
    "bought_at": 77087.61,
-   "last": 76669.41
+   "last": 77413.58
   },
   {
    "what": "NIFTY MIDCAP150 MOMENTUM 50",
    "opened": "2026-11-18",
    "closed": null,
-   "return_pct": -0.742,
-   "pnl": -741.01,
+   "return_pct": 0.223,
+   "pnl": 222.41,
    "bought_at": 77087.61,
-   "last": 76669.41
+   "last": 77413.58
   },
   {
    "what": "NIFTY MIDCAP150 MOMENTUM 50",
    "opened": "2026-11-18",
    "closed": null,
-   "return_pct": -0.742,
-   "pnl": -741.01,
+   "return_pct": 0.223,
+   "pnl": 222.41,
    "bought_at": 77087.61,
-   "last": 76669.41
+   "last": 77413.58
   },
   {
    "what": "NIFTY MIDCAP150 MOMENTUM 50",
    "opened": "2026-11-18",
    "closed": null,
-   "return_pct": -0.742,
-   "pnl": -741.01,
+   "return_pct": 0.223,
+   "pnl": 222.41,
    "bought_at": 77087.61,
-   "last": 76669.41
+   "last": 77413.58
   }
  ]
 }
