@@ -167,5 +167,33 @@
    "name": "A-20261124-midcap150-momentum-50-vol-target-25-own--v1"
   },
   "training": "1.77% a month (21.9% a year against NIFTY 50's 12.2%), worst fall 22%, luck test t = 3.94 - on NSE's own index histories 2006-04-10 to 2025-11-21, 2008 included, fund fee charged; exam year -9.8% against NIFTY 50's -1.4% - FAILED: 8.4 points behind NIFTY 50 in the exam year (limit 5)"
+ },
+ {
+  "key": "alloc-20261126-1",
+  "title": "Midcap150 Momentum 50, falling back to Alpha Low-Vol 30, own 100-day, vol 30%",
+  "day": "2026-11-26",
+  "start": "2026-11-27",
+  "document": {
+   "version": "alloc/1",
+   "universe": [
+    "NIFTY MIDCAP150 MOMENTUM 50",
+    "NIFTY ALPHA LOW-VOLATILITY 30"
+   ],
+   "hold": 1,
+   "rank": {
+    "by": "none"
+   },
+   "weighting": "equal",
+   "filters": {
+    "above_own_average": 100
+   },
+   "volatility_target": {
+    "percent": 30,
+    "sessions": 60
+   },
+   "decide": "weekly",
+   "name": "A-20261126-midcap150-momentum-50-falling-back-to-al-v1"
+  },
+  "training": "1.84% a month (22.7% a year against NIFTY 50's 12.2%), worst fall 27%, luck test t = 3.96 - on NSE's own index histories 2006-04-10 to 2025-11-26, 2008 included, fund fee charged; exam year -14.6% against NIFTY 50's -0.2% - FAILED: 14.3 points behind NIFTY 50 in the exam year (limit 5)"
  }
 ]
