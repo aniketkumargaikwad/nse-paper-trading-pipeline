@@ -4,11 +4,11 @@
  "title": "12-0 momentum, 20 stocks, slower NIFTY 300-day cash filter (AI, 2026-11-12)",
  "training": "+5.12% a year over the paper-traded momentum rule on the same stocks (luck test t = 1.87), worst fall 30%; exam year not opened - on today's stock list, so flattered by hindsight",
  "start": "2026-11-13",
- "as_of": "2026-11-26",
- "complete_through": "2026-11-26",
+ "as_of": "2026-11-27",
+ "complete_through": "2026-11-27",
  "capital": 500000.0,
  "value": 500000.0,
- "nifty_hold": 514719.03,
+ "nifty_hold": 509204.85,
  "state": "waiting for the first month-end",
  "equity": [
   [
@@ -55,6 +55,11 @@
    "2026-11-26",
    500000.0,
    514719.03
+  ],
+  [
+   "2026-11-27",
+   500000.0,
+   509204.85
   ]
  ],
  "open": [],

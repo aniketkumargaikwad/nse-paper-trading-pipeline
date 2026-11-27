@@ -4,11 +4,11 @@
  "title": "Leader buy-and-hold (stock research, 20 Sep)",
  "training": "4.4% a month in training as a 10-slot account, 2009-2025 - on today's stock list, so flattered by hindsight; rejected then for trading 1.4 times a month",
  "start": "2026-10-21",
- "as_of": "2026-11-26",
- "complete_through": "2026-11-26",
+ "as_of": "2026-11-27",
+ "complete_through": "2026-11-27",
  "capital": 1000000.0,
- "value": 1041744.62,
- "nifty_hold": 1134720.24,
+ "value": 1042055.29,
+ "nifty_hold": 1122564.01,
  "state": "running",
  "equity": [
   [
@@ -53,88 +53,93 @@
   ],
   [
    "2026-11-02",
-   999826.74,
+   999827.38,
    1027593.77
   ],
   [
    "2026-11-03",
-   1005259.3,
+   1005262.38,
    1043815.91
   ],
   [
    "2026-11-04",
-   1006845.2,
+   1006848.75,
    1050380.62
   ],
   [
    "2026-11-05",
-   1018218.7,
+   1018220.34,
    1075631.21
   ],
   [
    "2026-11-06",
-   1035087.33,
+   1035088.92,
    1097276.14
   ],
   [
    "2026-11-09",
-   1041753.64,
+   1041753.53,
    1097903.05
   ],
   [
    "2026-11-11",
-   1045793.12,
+   1045793.01,
    1107126.55
   ],
   [
    "2026-11-12",
-   1063557.8,
+   1063557.69,
    1109068.51
   ],
   [
    "2026-11-13",
-   1057021.38,
+   1057021.27,
    1102271.51
   ],
   [
    "2026-11-16",
-   1057124.53,
+   1057124.42,
    1108706.85
   ],
   [
    "2026-11-17",
-   1054863.23,
+   1054863.12,
    1112928.47
   ],
   [
    "2026-11-18",
-   1041612.29,
+   1041612.18,
    1105938.48
   ],
   [
    "2026-11-19",
-   1048648.63,
+   1048648.52,
    1118491.51
   ],
   [
    "2026-11-20",
-   1052515.21,
+   1052515.1,
    1131042.22
   ],
   [
    "2026-11-23",
-   1042866.23,
+   1042866.07,
    1111273.59
   ],
   [
    "2026-11-25",
-   1051760.43,
+   1051760.27,
    1131859.82
   ],
   [
    "2026-11-26",
-   1041744.62,
+   1043468.11,
    1134720.24
+  ],
+  [
+   "2026-11-27",
+   1042055.29,
+   1122564.01
   ]
  ],
  "open": [
@@ -143,90 +148,90 @@
    "entered": "2026-11-02",
    "entry_price": 1398.9,
    "quantity": 71,
-   "exit_price": 1610.19,
-   "pnl": 14750.69,
-   "pnl_if_sold_now": 14750.69
+   "exit_price": 1592.6,
+   "pnl": 13503.01,
+   "pnl_if_sold_now": 13503.01
   },
   {
    "stock": "BHARTIARTL",
    "entered": "2026-11-03",
    "entry_price": 2001.0,
    "quantity": 49,
-   "exit_price": 2101.45,
-   "pnl": 4683.98,
-   "pnl_if_sold_now": 4683.98
+   "exit_price": 2066.87,
+   "pnl": 2991.18,
+   "pnl_if_sold_now": 2991.18
   },
   {
    "stock": "PHOENIXLTD",
    "entered": "2026-11-03",
    "entry_price": 2028.01,
    "quantity": 49,
-   "exit_price": 2289.85,
-   "pnl": 12581.06,
-   "pnl_if_sold_now": 12581.06
+   "exit_price": 2228.59,
+   "pnl": 9581.98,
+   "pnl_if_sold_now": 9581.98
   },
   {
    "stock": "GAIL",
    "entered": "2026-11-04",
    "entry_price": 181.19,
    "quantity": 551,
-   "exit_price": 187.91,
-   "pnl": 3459.49,
-   "pnl_if_sold_now": 3459.49
+   "exit_price": 184.91,
+   "pnl": 1809.03,
+   "pnl_if_sold_now": 1809.03
   },
   {
    "stock": "LGEINDIA",
    "entered": "2026-11-04",
    "entry_price": 1691.15,
    "quantity": 59,
-   "exit_price": 1757.22,
-   "pnl": 3657.68,
-   "pnl_if_sold_now": 3657.68
+   "exit_price": 1770.01,
+   "pnl": 4411.72,
+   "pnl_if_sold_now": 4411.72
   },
   {
    "stock": "GLENMARK",
    "entered": "2026-11-05",
    "entry_price": 2539.27,
    "quantity": 39,
-   "exit_price": 2738.83,
-   "pnl": 7539.72,
-   "pnl_if_sold_now": 7539.72
+   "exit_price": 2833.48,
+   "pnl": 11227.34,
+   "pnl_if_sold_now": 11227.34
   },
   {
    "stock": "ABCAPITAL",
    "entered": "2026-11-06",
    "entry_price": 394.25,
    "quantity": 253,
-   "exit_price": 413.29,
-   "pnl": 4577.03,
-   "pnl_if_sold_now": 4577.03
+   "exit_price": 410.09,
+   "pnl": 3768.67,
+   "pnl_if_sold_now": 3768.67
   },
   {
    "stock": "TITAN",
    "entered": "2026-11-06",
    "entry_price": 4802.3,
    "quantity": 20,
-   "exit_price": 4628.78,
-   "pnl": -3695.17,
-   "pnl_if_sold_now": -3695.17
+   "exit_price": 4672.96,
+   "pnl": -2812.53,
+   "pnl_if_sold_now": -2812.53
   },
   {
    "stock": "KALYANKJIL",
    "entered": "2026-11-09",
    "entry_price": 595.3,
    "quantity": 167,
-   "exit_price": 639.48,
-   "pnl": 7134.9,
-   "pnl_if_sold_now": 7134.9
+   "exit_price": 659.17,
+   "pnl": 10419.75,
+   "pnl_if_sold_now": 10419.75
   },
   {
    "stock": "BANKBARODA",
    "entered": "2026-11-23",
    "entry_price": 289.04,
    "quantity": 345,
-   "exit_price": 274.47,
-   "pnl": -5258.67,
-   "pnl_if_sold_now": -5258.67
+   "exit_price": 274.76,
+   "pnl": -5158.78,
+   "pnl_if_sold_now": -5158.78
   }
  ],
  "closed": [
@@ -255,91 +260,91 @@
    "what": "ICICIBANK",
    "opened": "2026-11-02",
    "closed": null,
-   "return_pct": 14.851,
-   "pnl": 14750.69,
+   "return_pct": 13.595,
+   "pnl": 13503.01,
    "bought_at": 1398.9,
-   "last": 1610.19
+   "last": 1592.6
   },
   {
    "what": "BHARTIARTL",
    "opened": "2026-11-03",
    "closed": null,
-   "return_pct": 4.777,
-   "pnl": 4683.98,
+   "return_pct": 3.051,
+   "pnl": 2991.18,
    "bought_at": 2001.0,
-   "last": 2101.45
+   "last": 2066.87
   },
   {
    "what": "PHOENIXLTD",
    "opened": "2026-11-03",
    "closed": null,
-   "return_pct": 12.66,
-   "pnl": 12581.06,
+   "return_pct": 9.642,
+   "pnl": 9581.98,
    "bought_at": 2028.01,
-   "last": 2289.85
+   "last": 2228.59
   },
   {
    "what": "GAIL",
    "opened": "2026-11-04",
    "closed": null,
-   "return_pct": 3.465,
-   "pnl": 3459.49,
+   "return_pct": 1.812,
+   "pnl": 1809.03,
    "bought_at": 181.19,
-   "last": 187.91
+   "last": 184.91
   },
   {
    "what": "LGEINDIA",
    "opened": "2026-11-04",
    "closed": null,
-   "return_pct": 3.666,
-   "pnl": 3657.68,
+   "return_pct": 4.422,
+   "pnl": 4411.72,
    "bought_at": 1691.15,
-   "last": 1757.22
+   "last": 1770.01
   },
   {
    "what": "GLENMARK",
    "opened": "2026-11-05",
    "closed": null,
-   "return_pct": 7.613,
-   "pnl": 7539.72,
+   "return_pct": 11.337,
+   "pnl": 11227.34,
    "bought_at": 2539.27,
-   "last": 2738.83
+   "last": 2833.48
   },
   {
    "what": "ABCAPITAL",
    "opened": "2026-11-06",
    "closed": null,
-   "return_pct": 4.589,
-   "pnl": 4577.03,
+   "return_pct": 3.778,
+   "pnl": 3768.67,
    "bought_at": 394.25,
-   "last": 413.29
+   "last": 410.09
   },
   {
    "what": "TITAN",
    "opened": "2026-11-06",
    "closed": null,
-   "return_pct": -3.847,
-   "pnl": -3695.17,
+   "return_pct": -2.928,
+   "pnl": -2812.53,
    "bought_at": 4802.3,
-   "last": 4628.78
+   "last": 4672.96
   },
   {
    "what": "KALYANKJIL",
    "opened": "2026-11-09",
    "closed": null,
-   "return_pct": 7.177,
-   "pnl": 7134.9,
+   "return_pct": 10.481,
+   "pnl": 10419.75,
    "bought_at": 595.3,
-   "last": 639.48
+   "last": 659.17
   },
   {
    "what": "BANKBARODA",
    "opened": "2026-11-23",
    "closed": null,
-   "return_pct": -5.273,
-   "pnl": -5258.67,
+   "return_pct": -5.173,
+   "pnl": -5158.78,
    "bought_at": 289.04,
-   "last": 274.47
+   "last": 274.76
   }
  ]
 }
